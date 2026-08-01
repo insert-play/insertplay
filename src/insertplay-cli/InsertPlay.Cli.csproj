@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>InsertPlay.Cli</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="assets/**/*" Exclude="assets/examples/**;assets/runtime/insertplay-service.sh">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <!-- insertplay-service.sh is linked to the output root so install.sh can locate it at $INSTALL_HOME/insertplay-service.sh -->
+    <Content Include="assets/runtime/insertplay-service.sh" Link="insertplay-service.sh">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

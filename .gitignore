@@ -1,0 +1,6 @@
+**/bin
+**/obj
+**/examples
+dist
+publish
+docs/drafts
