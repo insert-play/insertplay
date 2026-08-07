@@ -7,7 +7,7 @@
       "command": "dotnet",
       "args": [
         "build",
-        "${workspaceFolder}/src/insertplay-cli/InsertPlay.Cli.csproj"
+        "src/insertplay-cli/InsertPlay.Cli.csproj"
       ],
       "problemMatcher": "$msCompile",
       "group": {
@@ -21,7 +21,7 @@
       "command": "dotnet",
       "args": [
         "publish",
-        "${workspaceFolder}/src/insertplay-cli/InsertPlay.Cli.csproj",
+        "src/insertplay-cli/InsertPlay.Cli.csproj",
         "-c",
         "Release",
         "-p:PublishSingleFile=true",
@@ -29,7 +29,7 @@
         "-r",
         "linux-x64",
         "-o",
-        "${workspaceFolder}/publish"
+        "publish"
       ],
       "problemMatcher": "$msCompile",
       "group": {
