@@ -3,10 +3,13 @@ set -euo pipefail
 
 APP_TITLE="InsertPlay"
 TARGET_SCRIPT="insertplay-start.sh"
+INSTALL_SCRIPT="install-shortcut.sh"
 STEAM_BLUE="#66c0f4"
 STEAM_TEXT="#c7d5e0"
 DISPLAY_SECONDS=3
 OVERLAY_BORDERS=120
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+RUNTIME_SHORTCUTS_DIR="$XDG_CONFIG_HOME/insertplay/shortcuts"
 
 get_screen_size() {
   local size
@@ -98,6 +101,71 @@ show_graphic_error() {
   sleep "$DISPLAY_SECONDS"
 }
 
+is_guid() {
+  [[ "$1" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+}
+
+extract_guid_from_identity() {
+  local identity_file="$1"
+  grep -Eo '"guid"[[:space:]]*:[[:space:]]*"[^"]+"' "$identity_file" 2>/dev/null | head -n 1 | sed -E 's/.*"([^"]+)"/\1/' || true
+}
+
+resolve_identity_file() {
+  local media_root="$1"
+
+  if [[ -f "$media_root/shortcut-identity.json" ]]; then
+    printf '%s\n' "$media_root/shortcut-identity.json"
+    return 0
+  fi
+
+  if [[ -f "$media_root/insertplay/shortcut-identity.json" ]]; then
+    printf '%s\n' "$media_root/insertplay/shortcut-identity.json"
+    return 0
+  fi
+
+  return 1
+}
+
+shortcut_mapping_exists() {
+  local media_root="$1"
+  local identity_file=""
+  local shortcut_guid=""
+
+  if ! identity_file="$(resolve_identity_file "$media_root")"; then
+    return 1
+  fi
+
+  shortcut_guid="$(extract_guid_from_identity "$identity_file")"
+  if [[ -z "$shortcut_guid" ]] || ! is_guid "$shortcut_guid"; then
+    return 1
+  fi
+
+  shortcut_guid="$(printf '%s' "$shortcut_guid" | tr '[:upper:]' '[:lower:]')"
+  [[ -f "$RUNTIME_SHORTCUTS_DIR/$shortcut_guid.env" ]]
+}
+
+ensure_shortcut_installed() {
+  local media_root="$1"
+  local installer_path="$media_root/$INSTALL_SCRIPT"
+
+  if [[ ! -f "$installer_path" ]]; then
+    return 0
+  fi
+
+  if shortcut_mapping_exists "$media_root"; then
+    return 0
+  fi
+
+  chmod +x "$installer_path" 2>/dev/null || true
+  if bash "$installer_path"; then
+    show_graphic_error "Shortcut installed." "Returning to Game Selection..."
+    return 10
+  fi
+
+  show_graphic_error "Shortcut install failed." "Launching current game..."
+  return 0
+}
+
 find_target_script() {
   local roots=(
     "/run/media/${USER:-}"
@@ -125,6 +193,15 @@ main() {
   if ! target="$(find_target_script)"; then
     show_graphic_error "No InsertPlay media detected." "Returning to Game Selection..."
     exit 1
+  fi
+
+  local media_root
+  media_root="$(dirname "$target")"
+
+  ensure_shortcut_installed "$media_root"
+  local ensure_rc=$?
+  if [[ $ensure_rc -eq 10 ]]; then
+    exit 0
   fi
 
   exec /bin/bash "$target"
