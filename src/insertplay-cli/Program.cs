@@ -1,9 +1,12 @@
+using System.Text.Json;
+using System.Diagnostics;
 using InsertPlay.Cli.Config;
 using InsertPlay.Cli.Models;
 using InsertPlay.Cli.Steam;
 
 var configService = new ConfigService();
 var shortcutService = new ShortcutService();
+var shortcutIdentityService = new ShortcutIdentityService();
 const string StartSdAppName = "SD CARD";
 const string StartSdExePath = "/bin/bash";
 
@@ -19,6 +22,8 @@ return args[0] switch
     "users" => RunUsers(configService),
     "configure" => RunConfigure(args, configService),
     "shortcut" => RunShortcut(args, configService, shortcutService),
+    "steam" => RunSteam(args, configService),
+    "runtime" => RunRuntime(args, configService, shortcutService, shortcutIdentityService),
     "help" or "--help" or "-h" => PrintAndExit(0),
     _ => PrintAndExit(1)
 };
@@ -281,6 +286,332 @@ int RunShortcut(string[] argv, ConfigService configSvc, ShortcutService service)
     };
 }
 
+int RunRuntime(string[] argv, ConfigService configSvc, ShortcutService service, ShortcutIdentityService identityService)
+{
+    if (argv.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: insertplay runtime install-shortcut --sd-root <path> [--restart-steam]");
+        return 1;
+    }
+
+    return argv[1] switch
+    {
+        "install-shortcut" => RuntimeInstallShortcut(argv, configSvc, service, identityService),
+        _ => 1
+    };
+}
+
+int RunSteam(string[] argv, ConfigService configSvc)
+{
+    if (argv.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: insertplay steam restart");
+        return 1;
+    }
+
+    return argv[1] switch
+    {
+        "restart" => SteamRestart(configSvc),
+        _ => 1
+    };
+}
+
+int SteamRestart(ConfigService configSvc)
+{
+    var cfg = configSvc.TryLoad();
+    var steamPath = cfg?.SteamPath;
+
+    if (string.IsNullOrWhiteSpace(steamPath) || !Directory.Exists(steamPath))
+        steamPath = SteamPaths.FindSteamRoot();
+
+    if (string.IsNullOrWhiteSpace(steamPath) || !Directory.Exists(steamPath))
+    {
+        Console.Error.WriteLine("Steam path not found. Run 'insertplay setup' first or ensure Steam is installed.");
+        return 2;
+    }
+
+    if (!TryRestartSteam(steamPath, out var message))
+    {
+        Console.Error.WriteLine($"Steam restart failed: {message}");
+        return 20;
+    }
+
+    Console.WriteLine(message);
+    return 0;
+}
+
+int RuntimeInstallShortcut(string[] argv, ConfigService configSvc, ShortcutService service, ShortcutIdentityService identityService)
+{
+    try
+    {
+        var cfg = configSvc.TryLoad();
+        if (!configSvc.IsValid(cfg, out _))
+        {
+            Console.Error.WriteLine("InsertPlay runtime configuration not found. Run 'insertplay setup' first.");
+            return 10;
+        }
+
+        var sdRootRaw = GetOption(argv, "--sd-root");
+        var restartSteam = HasFlag(argv, "--restart-steam");
+        if (string.IsNullOrWhiteSpace(sdRootRaw))
+        {
+            Console.Error.WriteLine("Usage: insertplay runtime install-shortcut --sd-root <path> [--restart-steam]");
+            return 1;
+        }
+
+        var sdRoot = Path.GetFullPath(sdRootRaw);
+        if (!Directory.Exists(sdRoot))
+        {
+            Console.Error.WriteLine($"SD root not found: {sdRoot}");
+            return 1;
+        }
+
+        var manifestPath = ResolveManifestPath(sdRoot);
+        if (string.IsNullOrWhiteSpace(manifestPath))
+        {
+            Console.Error.WriteLine($"Manifest not found. Expected one of: {Path.Combine(sdRoot, "steam-shortcut.json")} or {Path.Combine(sdRoot, "insertplay", "steam-shortcut.json")}");
+            return 11;
+        }
+
+        if (!TryReadManifest(manifestPath, out var manifest, out var manifestError))
+        {
+            Console.Error.WriteLine(manifestError);
+            return 12;
+        }
+
+        var shortcut = manifest!.Shortcut!;
+        var launch = shortcut.Launch!;
+        var verification = shortcut.LaunchVerification!;
+
+        var appName = shortcut.AppName.Trim();
+        var exe = ResolveSdPlaceholder(launch.Exe, sdRoot);
+        var argsResolved = ResolveSdPlaceholder(launch.Args, sdRoot);
+        var startDir = ResolveSdPlaceholder(launch.StartDir, sdRoot);
+
+        if (!identityService.TryGetOrCreate(sdRoot, appName, shortcut.Guid, out var shortcutGuid, out var identityError))
+        {
+            Console.Error.WriteLine(identityError);
+            return 12;
+        }
+
+        var iconPath = ResolveArtworkPath(
+            sdRoot,
+            shortcut.Artwork?.Icon,
+            "steam-artwork/icon.png",
+            "insertplay/steam-artwork/icon.png");
+
+        var ok = service.AddOrUpdate(
+            cfg!.SteamPath,
+            cfg.SteamUserId,
+            appName,
+            exe,
+            startDir,
+            argsResolved,
+            iconPath,
+            isHidden: true,
+            out var message);
+
+        if (!ok)
+        {
+            Console.Error.WriteLine(message);
+            return 13;
+        }
+
+        var appId = AppIdCalculator.Calculate(exe, appName);
+        var gameId = GameIdCalculator.Calculate(appId);
+
+        ApplyShortcutArtwork(
+            cfg,
+            appId,
+            ResolveArtworkPath(sdRoot, shortcut.Artwork?.Capsule, "steam-artwork/capsule.png", "insertplay/steam-artwork/capsule.png"),
+            ResolveArtworkPath(sdRoot, shortcut.Artwork?.Horizontal, "steam-artwork/horizontal.png", "insertplay/steam-artwork/horizontal.png"),
+            ResolveArtworkPath(sdRoot, shortcut.Artwork?.Hero, "steam-artwork/hero.png", "insertplay/steam-artwork/hero.png"),
+            ResolveArtworkPath(sdRoot, shortcut.Artwork?.Logo, "steam-artwork/logo.png", "insertplay/steam-artwork/logo.png"));
+
+        var runtimeShortcutEnvPath = configSvc.SaveRuntimeShortcutEnvironment(shortcutGuid, new Dictionary<string, string>
+        {
+            ["INSERTPLAY_SHORTCUT_GUID"] = shortcutGuid,
+            ["INSERTPLAY_SPECIFIC_GAME_ID"] = gameId.ToString(),
+            ["INSERTPLAY_SPECIFIC_PROCESS_NAME"] = verification.ProcessName.Trim(),
+            ["INSERTPLAY_SPECIFIC_TIMEOUT_SECONDS"] = verification.TimeoutSeconds.ToString()
+        });
+
+        Console.WriteLine($"Specific shortcut installed with GUID {shortcutGuid}, AppId {appId} and GameId {gameId}.");
+        Console.WriteLine($"Runtime shortcut environment saved to {runtimeShortcutEnvPath}");
+
+        if (restartSteam)
+        {
+            if (TryRestartSteam(cfg.SteamPath, out var restartMessage))
+                Console.WriteLine(restartMessage);
+            else
+                Console.Error.WriteLine($"Steam restart failed: {restartMessage}");
+        }
+
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Unexpected runtime failure: {ex.Message}");
+        return 15;
+    }
+}
+
+bool TryReadManifest(string manifestPath, out SteamShortcutManifest? manifest, out string error)
+{
+    manifest = null;
+    error = string.Empty;
+
+    try
+    {
+        var json = File.ReadAllText(manifestPath);
+        manifest = JsonSerializer.Deserialize<SteamShortcutManifest>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        });
+    }
+    catch (Exception ex)
+    {
+        error = $"Failed to parse manifest: {ex.Message}";
+        return false;
+    }
+
+    if (manifest is null)
+    {
+        error = "Manifest is empty.";
+        return false;
+    }
+
+    if (manifest.SchemaVersion != 1)
+    {
+        error = $"Unsupported manifest schemaVersion: {manifest.SchemaVersion}";
+        return false;
+    }
+
+    if (manifest.Shortcut is null)
+    {
+        error = "Manifest field 'shortcut' is required.";
+        return false;
+    }
+
+    if (string.IsNullOrWhiteSpace(manifest.Shortcut.AppName))
+    {
+        error = "Manifest field 'shortcut.appName' is required.";
+        return false;
+    }
+
+    if (!string.IsNullOrWhiteSpace(manifest.Shortcut.Guid)
+        && !Guid.TryParse(manifest.Shortcut.Guid, out _))
+    {
+        error = "Manifest field 'shortcut.guid' must be a valid UUID/GUID when provided.";
+        return false;
+    }
+
+    if (manifest.Shortcut.Launch is null)
+    {
+        error = "Manifest field 'shortcut.launch' is required.";
+        return false;
+    }
+
+    if (string.IsNullOrWhiteSpace(manifest.Shortcut.Launch.Exe))
+    {
+        error = "Manifest field 'shortcut.launch.exe' is required.";
+        return false;
+    }
+
+    if (string.IsNullOrWhiteSpace(manifest.Shortcut.Launch.Args))
+    {
+        error = "Manifest field 'shortcut.launch.args' is required.";
+        return false;
+    }
+
+    if (string.IsNullOrWhiteSpace(manifest.Shortcut.Launch.StartDir))
+    {
+        error = "Manifest field 'shortcut.launch.startDir' is required.";
+        return false;
+    }
+
+    if (manifest.Shortcut.LaunchVerification is null)
+    {
+        error = "Manifest field 'shortcut.launchVerification' is required.";
+        return false;
+    }
+
+    if (string.IsNullOrWhiteSpace(manifest.Shortcut.LaunchVerification.ProcessName))
+    {
+        error = "Manifest field 'shortcut.launchVerification.processName' is required.";
+        return false;
+    }
+
+    if (manifest.Shortcut.LaunchVerification.TimeoutSeconds <= 0)
+    {
+        error = "Manifest field 'shortcut.launchVerification.timeoutSeconds' must be a positive integer.";
+        return false;
+    }
+
+    return true;
+}
+
+void ApplyShortcutArtwork(AppConfig cfg, uint appId, string? capsuleSrc, string? horizontalSrc, string? heroSrc, string? logoSrc)
+{
+    var gridDir = Path.Combine(cfg.SteamPath, "userdata", cfg.SteamUserId, "config", "grid");
+    Directory.CreateDirectory(gridDir);
+
+    var copied = 0;
+    copied += CopyIfExists(capsuleSrc, Path.Combine(gridDir, $"{appId}p.png"));
+    copied += CopyIfExists(horizontalSrc, Path.Combine(gridDir, $"{appId}.png"));
+    copied += CopyIfExists(heroSrc, Path.Combine(gridDir, $"{appId}_hero.png"));
+    copied += CopyIfExists(logoSrc, Path.Combine(gridDir, $"{appId}_logo.png"));
+
+    if (copied > 0)
+        Console.WriteLine($"Specific shortcut artwork updated in Steam grid with AppId {appId}.");
+    else
+        Console.WriteLine("Specific shortcut artwork: no files found to copy.");
+}
+
+string ResolveSdPlaceholder(string value, string sdRoot)
+{
+    return value.Replace("{SD_ROOT}", sdRoot, StringComparison.Ordinal);
+}
+
+string? ResolveManifestPath(string sdRoot)
+{
+    var rootPath = Path.Combine(sdRoot, "steam-shortcut.json");
+    if (File.Exists(rootPath))
+        return rootPath;
+
+    var legacyPath = Path.Combine(sdRoot, "insertplay", "steam-shortcut.json");
+    if (File.Exists(legacyPath))
+        return legacyPath;
+
+    return null;
+}
+
+string ResolveArtworkPath(string sdRoot, string? value, params string[] fallbackRelativePaths)
+{
+    if (!string.IsNullOrWhiteSpace(value))
+    {
+        var replaced = ResolveSdPlaceholder(value, sdRoot).Trim();
+        var absolute = Path.IsPathRooted(replaced)
+            ? replaced
+            : Path.GetFullPath(Path.Combine(sdRoot, replaced));
+
+        if (File.Exists(absolute))
+            return absolute;
+    }
+
+    foreach (var fallbackRelativePath in fallbackRelativePaths)
+    {
+        if (string.IsNullOrWhiteSpace(fallbackRelativePath))
+            continue;
+
+        var absolute = Path.GetFullPath(Path.Combine(sdRoot, fallbackRelativePath));
+        if (File.Exists(absolute))
+            return absolute;
+    }
+
+    return string.Empty;
+}
+
 int ShortcutUpsert(string[] argv, AppConfig cfg, ShortcutService service)
 {
     var name = GetOption(argv, "--name");
@@ -360,6 +691,155 @@ string? GetOption(string[] argv, string key)
     return null;
 }
 
+bool HasFlag(string[] argv, string key)
+{
+    return argv.Any(arg => arg.Equals(key, StringComparison.OrdinalIgnoreCase));
+}
+
+bool TryRestartSteam(string steamPath, out string message)
+{
+    if (OperatingSystem.IsLinux())
+    {
+        TryRunProcess("steam", "-shutdown", waitForExit: true, timeoutMs: 10000);
+        WaitForSteamToStop(timeoutMs: 15000);
+
+        var steamSh = Path.Combine(steamPath, "steam.sh");
+        if (File.Exists(steamSh) && TryLaunchSteamLinux($"\"{steamSh}\""))
+        {
+            message = "Steam restart requested (steam.sh).";
+            return true;
+        }
+
+        if (TryLaunchSteamLinux("steam"))
+        {
+            message = "Steam restart requested (steam command).";
+            return true;
+        }
+
+        if (TryLaunchSteamLinux("flatpak run com.valvesoftware.Steam"))
+        {
+            message = "Steam restart requested (flatpak).";
+            return true;
+        }
+
+        if (TryLaunchSteamLinux("xdg-open steam://open/main"))
+        {
+            message = "Steam restart requested (steam URI).";
+            return true;
+        }
+
+        message = "Could not start Steam process automatically.";
+        return false;
+    }
+
+    if (OperatingSystem.IsWindows())
+    {
+        TryRunProcess("steam", "-shutdown", waitForExit: true, timeoutMs: 10000);
+        Thread.Sleep(1500);
+
+        var steamExe = Path.Combine(steamPath, "steam.exe");
+        if (File.Exists(steamExe) && TryRunProcess(steamExe, string.Empty, waitForExit: false, timeoutMs: 0))
+        {
+            message = "Steam restart requested (steam.exe).";
+            return true;
+        }
+
+        if (TryRunProcess("steam", string.Empty, waitForExit: false, timeoutMs: 0))
+        {
+            message = "Steam restart requested (steam command).";
+            return true;
+        }
+
+        message = "Could not start Steam process automatically.";
+        return false;
+    }
+
+    message = "Steam restart is not supported on this operating system.";
+    return false;
+}
+
+bool TryRunProcess(string fileName, string arguments, bool waitForExit, int timeoutMs)
+{
+    try
+    {
+        var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = arguments,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        });
+
+        if (process is null)
+            return false;
+
+        if (waitForExit)
+        {
+            if (!process.WaitForExit(timeoutMs))
+                return false;
+        }
+
+        return true;
+    }
+    catch
+    {
+        return false;
+    }
+}
+
+bool TryLaunchSteamLinux(string launchCommand)
+{
+    var escapedCommand = launchCommand.Replace("\"", "\\\"");
+    var shellArgs = $"-lc \"nohup {escapedCommand} >/dev/null 2>&1 &\"";
+
+    if (!TryRunProcess("/bin/bash", shellArgs, waitForExit: true, timeoutMs: 5000))
+        return false;
+
+    return WaitForSteamToStart(timeoutMs: 15000);
+}
+
+bool WaitForSteamToStart(int timeoutMs)
+{
+    var startedAt = Environment.TickCount64;
+    while (Environment.TickCount64 - startedAt < timeoutMs)
+    {
+        if (IsSteamProcessRunning())
+            return true;
+
+        Thread.Sleep(500);
+    }
+
+    return false;
+}
+
+bool WaitForSteamToStop(int timeoutMs)
+{
+    var startedAt = Environment.TickCount64;
+    while (Environment.TickCount64 - startedAt < timeoutMs)
+    {
+        if (!IsSteamProcessRunning())
+            return true;
+
+        Thread.Sleep(500);
+    }
+
+    return false;
+}
+
+bool IsSteamProcessRunning()
+{
+    try
+    {
+        return Process.GetProcessesByName("steam").Length > 0;
+    }
+    catch
+    {
+        return false;
+    }
+}
+
 void PrintHelp()
 {
     Console.WriteLine("InsertPlay CLI (MVP)");
@@ -371,6 +851,8 @@ void PrintHelp()
     Console.WriteLine("  shortcut update --name <name> --exe <path> [--startdir <dir>] [--args <args>] [--icon <path>] [--hidden <true|false>]");
     Console.WriteLine("  shortcut remove --name <name>");
     Console.WriteLine("  shortcut list");
+    Console.WriteLine("  steam restart");
+    Console.WriteLine("  runtime install-shortcut --sd-root <path> [--restart-steam]");
 }
 
 int PrintAndExit(int code)
