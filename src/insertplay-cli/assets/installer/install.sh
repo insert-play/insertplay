@@ -93,9 +93,33 @@ EOF
   echo "Service $SERVICE_NAME installed and started."
 }
 
+restart_system_service_if_active() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "systemctl not found. Skipping service restart after update."
+    return
+  fi
+
+  if ! systemctl cat "$SERVICE_NAME" >/dev/null 2>&1; then
+    echo "Service $SERVICE_NAME is not installed. Skipping restart."
+    return
+  fi
+
+  if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+    echo "Service $SERVICE_NAME is installed but not active. Skipping restart."
+    return
+  fi
+
+  if run_privileged systemctl restart "$SERVICE_NAME"; then
+    echo "Service $SERVICE_NAME restarted to use the updated runtime."
+  else
+    echo "Warning: failed to restart $SERVICE_NAME after update." >&2
+  fi
+}
+
+IS_UPDATE=0
 if [ -x "$LAUNCHER" ] && "$LAUNCHER" help >/dev/null 2>&1; then
-  echo "InsertPlay is already installed."
-  exit 0
+  IS_UPDATE=1
+  echo "Existing InsertPlay installation detected. Running update..."
 fi
 
 PAYLOAD=""
@@ -105,6 +129,12 @@ elif [ -d "$SCRIPT_DIR/insertplay-cli" ]; then
   PAYLOAD="$SCRIPT_DIR/insertplay-cli"
 elif [ -f "$SCRIPT_DIR/InsertPlay.Cli" ]; then
   PAYLOAD="$SCRIPT_DIR"
+elif [ -f "$SCRIPT_DIR/../../InsertPlay.Cli" ]; then
+  PAYLOAD="$(cd "$SCRIPT_DIR/../.." && pwd)"
+elif [ -d "$SCRIPT_DIR/../../insertplay-cli-runtime" ]; then
+  PAYLOAD="$(cd "$SCRIPT_DIR/../.." && pwd)/insertplay-cli-runtime"
+elif [ -d "$SCRIPT_DIR/../../insertplay-cli" ]; then
+  PAYLOAD="$(cd "$SCRIPT_DIR/../.." && pwd)/insertplay-cli"
 fi
 
 if [ -z "$PAYLOAD" ]; then
@@ -137,11 +167,17 @@ fi
 
 chmod +x "$LAUNCHER"
 
-echo "Installation complete. Running setup..."
-"$LAUNCHER" setup
-
-if prompt_install_service; then
-  install_system_service
+if [ "$IS_UPDATE" -eq 1 ]; then
+  restart_system_service_if_active
+  echo "Update complete. Existing configuration was preserved."
+  echo "Tip: run 'insertplay setup' only if you want to reconfigure Steam user/paths."
 else
-  echo "Service installation skipped."
+  echo "Installation complete. Running setup..."
+  "$LAUNCHER" setup
+
+  if prompt_install_service; then
+    install_system_service
+  else
+    echo "Service installation skipped."
+  fi
 fi
