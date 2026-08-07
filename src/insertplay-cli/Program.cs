@@ -290,13 +290,15 @@ int RunRuntime(string[] argv, ConfigService configSvc, ShortcutService service, 
 {
     if (argv.Length < 2)
     {
-        Console.Error.WriteLine("Usage: insertplay runtime install-shortcut --sd-root <path> [--restart-steam]");
+        Console.Error.WriteLine("Usage: insertplay runtime <install-shortcut|autorun-launch|ensure-identity> [options]");
         return 1;
     }
 
     return argv[1] switch
     {
         "install-shortcut" => RuntimeInstallShortcut(argv, configSvc, service, identityService),
+        "autorun-launch" => RuntimeAutorunLaunch(argv, configSvc, service),
+        "ensure-identity" => RuntimeEnsureIdentity(argv, identityService),
         _ => 1
     };
 }
@@ -456,6 +458,140 @@ int RuntimeInstallShortcut(string[] argv, ConfigService configSvc, ShortcutServi
     }
 }
 
+int RuntimeAutorunLaunch(string[] argv, ConfigService configSvc, ShortcutService service)
+{
+    var sdRootRaw = GetOption(argv, "--sd-root");
+    if (string.IsNullOrWhiteSpace(sdRootRaw))
+    {
+        Console.Error.WriteLine("Usage: insertplay runtime autorun-launch --sd-root <path> [--guid <guid>]");
+        return 1;
+    }
+
+    var sdRoot = Path.GetFullPath(sdRootRaw);
+    if (!Directory.Exists(sdRoot))
+    {
+        Console.Error.WriteLine($"SD root not found: {sdRoot}");
+        return 1;
+    }
+
+    var genericRuntimeEnvPath = configSvc.GetRuntimeEnvPath();
+    if (!TryReadEnvironmentFile(genericRuntimeEnvPath, out var runtimeVars, out var runtimeEnvError))
+    {
+        Console.Error.WriteLine(runtimeEnvError);
+        return 10;
+    }
+
+    var genericGameId = GetEnvValue(runtimeVars, "INSERTPLAY_SD_GAME_ID");
+    if (string.IsNullOrWhiteSpace(genericGameId))
+    {
+        Console.Error.WriteLine("InsertPlay runtime configuration not found. Run 'insertplay setup' first.");
+        return 10;
+    }
+
+    var explicitGuid = GetOption(argv, "--guid");
+    var shortcutGuid = ResolveShortcutGuid(explicitGuid, sdRoot, out var shortcutGuidMessage);
+    if (!string.IsNullOrWhiteSpace(shortcutGuidMessage))
+        Console.WriteLine($"[insertplay runtime] {shortcutGuidMessage}");
+
+    var cfg = configSvc.TryLoad();
+    var hasValidConfig = configSvc.IsValid(cfg, out _);
+    var specificLaunchError = string.Empty;
+
+    if (!string.IsNullOrWhiteSpace(shortcutGuid)
+        && TryReadSpecificRuntimeLaunch(
+            configSvc,
+            shortcutGuid,
+            out var specificGameId,
+            out var specificProcessName,
+            out var specificTimeoutSeconds,
+            out specificLaunchError))
+    {
+        var specificExists = true;
+        if (hasValidConfig)
+            specificExists = SpecificShortcutExistsInSteam(cfg!, service, specificGameId);
+
+        if (!specificExists)
+        {
+            Console.WriteLine($"[insertplay runtime] Specific shortcut guid={shortcutGuid} not found in Steam shortcuts. Falling back to generic shortcut.");
+        }
+        else
+        {
+            Console.WriteLine($"[insertplay runtime] Trying specific shortcut guid={shortcutGuid} gameId={specificGameId}");
+            if (TryLaunchSteamGame(specificGameId, out var specificLaunchMessage))
+            {
+                if (WaitForProcessPattern(specificProcessName, specificTimeoutSeconds))
+                {
+                    Console.WriteLine("[insertplay runtime] Specific launch succeeded.");
+                    return 0;
+                }
+
+                Console.WriteLine("[insertplay runtime] Specific process was not detected in time. Falling back to generic shortcut.");
+            }
+            else
+            {
+                Console.WriteLine($"[insertplay runtime] Failed to request specific launch: {specificLaunchMessage}. Falling back to generic shortcut.");
+            }
+        }
+    }
+    else if (!string.IsNullOrWhiteSpace(specificLaunchError))
+    {
+        Console.WriteLine($"[insertplay runtime] {specificLaunchError} Falling back to generic shortcut.");
+    }
+    else
+    {
+        Console.WriteLine("[insertplay runtime] Specific runtime shortcut env not available. Falling back to generic shortcut.");
+    }
+
+    Console.WriteLine($"[insertplay runtime] Starting generic shortcut gameId={genericGameId}");
+    if (TryLaunchSteamGame(genericGameId, out var genericLaunchMessage))
+        return 0;
+
+    Console.Error.WriteLine($"Failed to launch generic shortcut: {genericLaunchMessage}");
+    return 16;
+}
+
+int RuntimeEnsureIdentity(string[] argv, ShortcutIdentityService identityService)
+{
+    var sdRootRaw = GetOption(argv, "--sd-root");
+    if (string.IsNullOrWhiteSpace(sdRootRaw))
+    {
+        Console.Error.WriteLine("Usage: insertplay runtime ensure-identity --sd-root <path>");
+        return 1;
+    }
+
+    var sdRoot = Path.GetFullPath(sdRootRaw);
+    if (!Directory.Exists(sdRoot))
+    {
+        Console.Error.WriteLine($"SD root not found: {sdRoot}");
+        return 1;
+    }
+
+    var appName = "InsertPlay Game";
+    string? manifestGuid = null;
+    var manifestPath = ResolveManifestPath(sdRoot);
+    if (!string.IsNullOrWhiteSpace(manifestPath)
+        && TryReadManifest(manifestPath, out var manifest, out _)
+        && manifest?.Shortcut is not null)
+    {
+        appName = string.IsNullOrWhiteSpace(manifest.Shortcut.AppName)
+            ? appName
+            : manifest.Shortcut.AppName.Trim();
+        manifestGuid = string.IsNullOrWhiteSpace(manifest.Shortcut.Guid)
+            ? null
+            : manifest.Shortcut.Guid.Trim();
+    }
+
+    if (!identityService.TryGetOrCreate(sdRoot, appName, manifestGuid, out var shortcutGuid, out var identityError))
+    {
+        Console.Error.WriteLine(identityError);
+        return 12;
+    }
+
+    var identityPath = Path.Combine(sdRoot, "shortcut-identity.json");
+    Console.WriteLine($"Shortcut identity ensured with GUID {shortcutGuid} at {identityPath}");
+    return 0;
+}
+
 bool TryReadManifest(string manifestPath, out SteamShortcutManifest? manifest, out string error)
 {
     manifest = null;
@@ -610,6 +746,276 @@ string ResolveArtworkPath(string sdRoot, string? value, params string[] fallback
     }
 
     return string.Empty;
+}
+
+string? ResolveShortcutGuid(string? explicitGuid, string sdRoot, out string message)
+{
+    message = string.Empty;
+
+    if (!string.IsNullOrWhiteSpace(explicitGuid))
+    {
+        if (Guid.TryParse(explicitGuid, out var parsedGuid))
+            return parsedGuid.ToString("D");
+
+        message = $"Provided shortcut GUID is invalid: {explicitGuid}.";
+        return null;
+    }
+
+    var identityPaths = new[]
+    {
+        Path.Combine(sdRoot, "shortcut-identity.json"),
+        Path.Combine(sdRoot, "insertplay", "shortcut-identity.json")
+    };
+
+    foreach (var identityPath in identityPaths)
+    {
+        if (!File.Exists(identityPath))
+            continue;
+
+        if (!TryReadShortcutGuidFromIdentity(identityPath, out var identityGuid, out var identityError))
+        {
+            message = $"Failed to read shortcut identity file '{identityPath}': {identityError}";
+            return null;
+        }
+
+        return identityGuid;
+    }
+
+    return null;
+}
+
+bool TryReadShortcutGuidFromIdentity(string identityPath, out string shortcutGuid, out string error)
+{
+    shortcutGuid = string.Empty;
+    error = string.Empty;
+
+    try
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(identityPath));
+        if (!document.RootElement.TryGetProperty("guid", out var guidElement))
+        {
+            error = "guid field is missing.";
+            return false;
+        }
+
+        var rawGuid = guidElement.GetString();
+        if (string.IsNullOrWhiteSpace(rawGuid) || !Guid.TryParse(rawGuid, out var parsedGuid))
+        {
+            error = "guid field is invalid.";
+            return false;
+        }
+
+        shortcutGuid = parsedGuid.ToString("D");
+        return true;
+    }
+    catch (Exception ex)
+    {
+        error = ex.Message;
+        return false;
+    }
+}
+
+bool TryReadSpecificRuntimeLaunch(
+    ConfigService configSvc,
+    string shortcutGuid,
+    out string gameId,
+    out string processName,
+    out int timeoutSeconds,
+    out string error)
+{
+    gameId = string.Empty;
+    processName = string.Empty;
+    timeoutSeconds = 0;
+    error = string.Empty;
+
+    string path;
+    try
+    {
+        path = configSvc.GetRuntimeShortcutEnvPath(shortcutGuid);
+    }
+    catch (ArgumentException ex)
+    {
+        error = ex.Message;
+        return false;
+    }
+
+    if (!TryReadEnvironmentFile(path, out var values, out var envError))
+    {
+        error = envError;
+        return false;
+    }
+
+    gameId = GetEnvValue(values, "INSERTPLAY_SPECIFIC_GAME_ID");
+    processName = GetEnvValue(values, "INSERTPLAY_SPECIFIC_PROCESS_NAME");
+    var timeoutRaw = GetEnvValue(values, "INSERTPLAY_SPECIFIC_TIMEOUT_SECONDS");
+
+    if (string.IsNullOrWhiteSpace(gameId)
+        || string.IsNullOrWhiteSpace(processName)
+        || !int.TryParse(timeoutRaw, out timeoutSeconds)
+        || timeoutSeconds <= 0)
+    {
+        error = $"Specific runtime shortcut data is incomplete for guid={shortcutGuid}.";
+        return false;
+    }
+
+    return true;
+}
+
+bool SpecificShortcutExistsInSteam(AppConfig cfg, ShortcutService service, string specificGameId)
+{
+    if (!ulong.TryParse(specificGameId, out var parsedGameId))
+        return false;
+
+    var appId = (uint)(parsedGameId >> 32);
+    var items = service.List(cfg.SteamPath, cfg.SteamUserId);
+    return items.Any(item => item.AppId == appId);
+}
+
+bool TryLaunchSteamGame(string gameId, out string message)
+{
+    if (!ulong.TryParse(gameId, out _))
+    {
+        message = "Game ID is invalid.";
+        return false;
+    }
+
+    var uri = $"steam://rungameid/{gameId}";
+    if (TryRunProcess("steam", uri, waitForExit: false, timeoutMs: 0))
+    {
+        message = "launch requested via steam command";
+        return true;
+    }
+
+    if (TryRunProcess("xdg-open", uri, waitForExit: false, timeoutMs: 0))
+    {
+        message = "launch requested via xdg-open";
+        return true;
+    }
+
+    message = "steam command and xdg-open both failed";
+    return false;
+}
+
+bool WaitForProcessPattern(string processPattern, int timeoutSeconds)
+{
+    for (var i = 0; i < timeoutSeconds; i++)
+    {
+        if (IsProcessRunningPattern(processPattern))
+            return true;
+
+        Thread.Sleep(1000);
+    }
+
+    return false;
+}
+
+bool IsProcessRunningPattern(string processPattern)
+{
+    if (string.IsNullOrWhiteSpace(processPattern))
+        return false;
+
+    var escapedPattern = processPattern.Replace("'", "'\"'\"'");
+    var shellCommand = $"pgrep -f -- '{escapedPattern}' >/dev/null 2>&1";
+    var shellArgs = $"-lc \"{shellCommand}\"";
+
+    if (!TryRunProcessAndGetExitCode("/bin/bash", shellArgs, timeoutMs: 3000, out var exitCode))
+        return false;
+
+    return exitCode == 0;
+}
+
+bool TryRunProcessAndGetExitCode(string fileName, string arguments, int timeoutMs, out int exitCode)
+{
+    exitCode = -1;
+
+    try
+    {
+        var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = arguments,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        });
+
+        if (process is null)
+            return false;
+
+        if (!process.WaitForExit(timeoutMs))
+            return false;
+
+        exitCode = process.ExitCode;
+        return true;
+    }
+    catch
+    {
+        return false;
+    }
+}
+
+bool TryReadEnvironmentFile(string path, out Dictionary<string, string> variables, out string error)
+{
+    variables = new Dictionary<string, string>(StringComparer.Ordinal);
+    error = string.Empty;
+
+    if (!File.Exists(path))
+    {
+        error = $"Environment file not found: {path}";
+        return false;
+    }
+
+    try
+    {
+        foreach (var rawLine in File.ReadAllLines(path))
+        {
+            var line = rawLine.Trim();
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#'))
+                continue;
+
+            if (line.StartsWith("export ", StringComparison.Ordinal))
+                line = line[7..].Trim();
+
+            var separator = line.IndexOf('=');
+            if (separator <= 0)
+                continue;
+
+            var key = line[..separator].Trim();
+            var value = line[(separator + 1)..].Trim();
+
+            variables[key] = ParseEnvironmentValue(value);
+        }
+
+        return true;
+    }
+    catch (Exception ex)
+    {
+        error = $"Failed to read environment file '{path}': {ex.Message}";
+        return false;
+    }
+}
+
+string ParseEnvironmentValue(string value)
+{
+    if (value.Length >= 2 && value[0] == '\'' && value[^1] == '\'')
+    {
+        var inner = value[1..^1];
+        return inner.Replace("'\"'\"'", "'");
+    }
+
+    if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+    {
+        var inner = value[1..^1];
+        return inner.Replace("\\\"", "\"").Replace("\\\\", "\\");
+    }
+
+    return value;
+}
+
+string GetEnvValue(IReadOnlyDictionary<string, string> vars, string key)
+{
+    return vars.TryGetValue(key, out var value) ? value : string.Empty;
 }
 
 int ShortcutUpsert(string[] argv, AppConfig cfg, ShortcutService service)
@@ -853,6 +1259,8 @@ void PrintHelp()
     Console.WriteLine("  shortcut list");
     Console.WriteLine("  steam restart");
     Console.WriteLine("  runtime install-shortcut --sd-root <path> [--restart-steam]");
+    Console.WriteLine("  runtime autorun-launch --sd-root <path> [--guid <guid>]");
+    Console.WriteLine("  runtime ensure-identity --sd-root <path>");
 }
 
 int PrintAndExit(int code)
