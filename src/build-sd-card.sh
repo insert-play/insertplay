@@ -2,8 +2,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-PROJECT="$REPO_ROOT/src/insertplay-cli/InsertPlay.Cli.csproj"
+PUBLISH_SCRIPT="$REPO_ROOT/src/publish.sh"
 PUBLISH_DIR="$REPO_ROOT/publish"
+SDCARD_ASSETS_DIR="$REPO_ROOT/src/insertplay-sdcard"
 RID="${1:-linux-x64}"
 CURRENT_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 
@@ -130,46 +131,34 @@ ensure_shortcut_identity_guid() {
   die "Unable to ensure shortcut identity GUID. InsertPlay CLI not found in published SD output."
 }
 
-if [ ! -f "$PROJECT" ]; then
-  die "project not found at $PROJECT"
+if [ ! -f "$PUBLISH_SCRIPT" ]; then
+  die "publish script not found at $PUBLISH_SCRIPT"
 fi
 
 TARGET_MOUNTPOINT="$(select_target_mountpoint)"
 TARGET_INSERTPLAY_DIR="$TARGET_MOUNTPOINT/insertplay"
-RUNTIME_ASSETS_DIR="$PUBLISH_DIR/assets/runtime"
 log "Target media: $TARGET_MOUNTPOINT"
 
-rm -rf "$PUBLISH_DIR"
-mkdir -p "$PUBLISH_DIR"
-
 log "Publishing latest InsertPlay build for RID: $RID"
-dotnet publish "$PROJECT" \
-  -c Release \
-  -r "$RID" \
-  -p:PublishSingleFile=true \
-  -p:IncludeNativeLibrariesForSelfExtract=true \
-  -p:DebugType=None \
-  -p:DebugSymbols=false \
-  --self-contained true \
-  -o "$PUBLISH_DIR"
+"$PUBLISH_SCRIPT" "$RID"
 
 log "Refreshing target directory: $TARGET_INSERTPLAY_DIR"
 rm -rf "$TARGET_INSERTPLAY_DIR"
 mkdir -p "$TARGET_INSERTPLAY_DIR"
-cp -a "$PUBLISH_DIR"/. "$TARGET_INSERTPLAY_DIR"/
+cp -a "$PUBLISH_DIR/insertplay"/. "$TARGET_INSERTPLAY_DIR"/
 
 ensure_shortcut_identity_guid "$TARGET_MOUNTPOINT"
 
-for runtime_script in autorun.sh install-shortcut.sh; do
-  src="$RUNTIME_ASSETS_DIR/$runtime_script"
-  dst="$TARGET_MOUNTPOINT/$runtime_script"
+for sdcard_script in autorun.sh install-shortcut.sh; do
+  src="$SDCARD_ASSETS_DIR/$sdcard_script"
+  dst="$TARGET_MOUNTPOINT/$sdcard_script"
 
   if [[ -f "$src" ]]; then
     cp -f "$src" "$dst"
     chmod +x "$dst"
-    log "Copied $runtime_script to SD root: $dst"
+    log "Copied $sdcard_script to SD root: $dst"
   else
-    log "Warning: runtime script not found in publish output: $src"
+    log "Warning: sdcard script not found: $src"
   fi
 done
 

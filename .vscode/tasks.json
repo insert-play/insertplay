@@ -17,21 +17,11 @@
     },
     {
       "label": "publish",
-      "type": "process",
-      "command": "dotnet",
+      "type": "shell",
+      "command": "bash",
       "args": [
-        "publish",
-        "src/insertplay-cli/InsertPlay.Cli.csproj",
-        "-c",
-        "Release",
-        "-p:PublishSingleFile=true",
-        "-p:SelfContained=true",
-        "-r",
-        "linux-x64",
-        "-o",
-        "publish"
+        "src/publish.sh"
       ],
-      "problemMatcher": "$msCompile",
       "group": {
         "kind": "build",
         "isDefault": false

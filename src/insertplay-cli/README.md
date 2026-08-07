@@ -45,14 +45,14 @@ shortcuts:
 
 ## SD-card installation (self-contained)
 
-- Build the SD-card package with: `bash scripts/build-sd-card.sh`
-- Optional: pass the RID as an argument, e.g.: `bash scripts/build-sd-card.sh linux-x64`
-- Output generated in: `dist/sd-card`
+- Build the SD-card package with: `bash src/build-sd-card.sh`
+- Optional: pass the RID as an argument, e.g.: `bash src/build-sd-card.sh linux-x64`
+- The script publishes the CLI (via `src/publish.sh`) and copies the result onto the mounted SD card's `insertplay/` folder, plus `autorun.sh`/`install-shortcut.sh` at the SD card root
 - Expected SD-card structure:
-	- `install.sh`
-	- `uninstall.sh`
-	- `insertplay-cli-runtime/`
-- On the target PC, run: `bash ./install.sh`
+	- `autorun.sh`
+	- `install-shortcut.sh`
+	- `insertplay/` (`InsertPlay.Cli`, `insertplay-service.sh`, `insertplay-start-bootstrap.sh`, `install.sh`, `uninstall.sh`)
+- On the target PC, run: `bash insertplay/install.sh`
 - The script checks whether a valid installation already exists.
 - If not, it installs to `~/.local/share/insertplay`, creates `~/.local/bin/insertplay`, and runs `insertplay setup`.
 - To uninstall, run: `bash ./uninstall.sh`
@@ -60,31 +60,41 @@ shortcuts:
 
 ## Scripts
 
-Scripts are split into two categories: **dev tools** and **runtime assets**.
+Scripts are split into dev tools, service scripts, SD-card scripts, and the installer.
 
-### Dev tools (`scripts/`)
+### Dev tools (`src/`)
 
 Used only during development and build automation. Never deployed to the target machine.
 
 | Script | Purpose |
 |---|---|
-| `build-sd-card.sh` | Publishes the CLI as a self-contained binary and assembles the SD-card distribution package under `dist/sd-card/` |
+| `publish.sh` | Publishes the CLI as a self-contained binary into `publish/insertplay/` and `publish/assets/` |
+| `build-sd-card.sh` | Runs `publish.sh` and copies the result onto a mounted SD card, alongside the SD-card scripts |
 
-### Runtime assets (`src/insertplay-cli/assets/runtime/`)
+### Service scripts (`src/insertplay-service/`)
 
-Copied into the build output and deployed to the target machine via `install.sh`.
+Linked into the CLI's build/publish output (flat, alongside `InsertPlay.Cli`) and deployed to the target machine via `install.sh`.
 
 | Script | Purpose |
 |---|---|
 | `insertplay-service.sh` | systemd service that monitors removable media (`/run/media/`, `/media/`) and executes `autorun.sh` when an InsertPlay SD card is inserted |
 | `insertplay-start-bootstrap.sh` | Steam shortcut launch script; if specific shortcut mapping is missing it runs `install-shortcut.sh` and returns to Steam, otherwise it delegates to the game's `insertplay-start.sh` on the SD card |
-| `autorun.sh` | Template script placed at the root of each InsertPlay SD card. Reads `runtime.env`, resolves the SD GUID from `shortcut-identity.json`, loads `~/.config/insertplay/shortcuts/<guid>.env` when present, and launches the game via `steam://rungameid/` with fallback to generic shortcut |
 
-### Installer (`src/insertplay-cli/assets/installer/`)
+### SD-card scripts (`src/insertplay-sdcard/`)
 
-Bundled into the SD-card distribution package by `build-sd-card.sh`. Run manually on the target PC.
+Copied to the SD card by `build-sd-card.sh`, not part of the CLI's own publish output.
 
 | Script | Purpose |
 |---|---|
-| `install.sh` | Deploys the CLI to `~/.local/share/insertplay`, creates `~/.local/bin/insertplay`, optionally installs the systemd service, and runs `insertplay setup` |
+| `autorun.sh` | Placed at the root of each InsertPlay SD card. Resolves the SD GUID from `shortcut-identity.json` and delegates to the CLI's `runtime autorun-launch` |
+| `install-shortcut.sh` | Placed at the root of each InsertPlay SD card. Delegates to the CLI's `runtime install-shortcut` |
+| `insertplay-start.sh` | Per-game launch template placed alongside the game/prefix/runtime/proton folders on the SD card |
+
+### Installer (`src/insertplay-cli/assets/installer/`)
+
+Linked into the CLI's build/publish output (flat, alongside `InsertPlay.Cli`). Run manually on the target PC.
+
+| Script | Purpose |
+|---|---|
+| `install.sh` | Deploys the CLI to `~/.local/share/insertplay`, copies the sibling `assets/` folder, creates `~/.local/bin/insertplay`, optionally installs the systemd service, and runs `insertplay setup` |
 | `uninstall.sh` | Removes the CLI, launcher, and systemd service. Use `--purge` to also delete the configuration |

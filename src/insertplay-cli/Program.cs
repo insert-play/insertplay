@@ -79,10 +79,7 @@ void BootstrapStartSdShortcut(AppConfig cfg, ShortcutService service, ConfigServ
         return;
     }
 
-    var scriptPath = ResolveOutputFilePath(
-        "insertplay-start-bootstrap.sh",
-        Path.Combine("assets", "runtime", "insertplay-start-bootstrap.sh"),
-        Path.Combine("steam-shortcuts", "insertplay-start-bootstrap.sh"));
+    var scriptPath = ResolveOutputFilePath("insertplay-start-bootstrap.sh");
 
     if (scriptPath is null)
     {
@@ -90,10 +87,7 @@ void BootstrapStartSdShortcut(AppConfig cfg, ShortcutService service, ConfigServ
         return;
     }
 
-    var iconPath = ResolveOutputFilePath(
-        "start-sd-icon.png",
-        Path.Combine("assets", "steam-shortcuts", "start-sd-icon.png"),
-        Path.Combine("steam-shortcuts", "start-sd-icon.png")) ?? string.Empty;
+    var iconPath = ResolveOutputFilePath(Path.Combine("assets", "start-sd-icon.png")) ?? string.Empty;
 
     var appId = AppIdCalculator.Calculate(StartSdExePath, StartSdAppName);
 
@@ -123,25 +117,10 @@ void ApplyStartSdArtwork(AppConfig cfg, uint appId)
     var gridDir = Path.Combine(cfg.SteamPath, "userdata", cfg.SteamUserId, "config", "grid");
     Directory.CreateDirectory(gridDir);
 
-    var portraitSrc = ResolveOutputFilePath(
-        "start-sd-capsule.png",
-        Path.Combine("assets", "steam-shortcuts", "start-sd-capsule.png"),
-        Path.Combine("steam-shortcuts", "start-sd-capsule.png"));
-
-    var horizontalSrc = ResolveOutputFilePath(
-        "start-sd-horizontal.png",
-        Path.Combine("assets", "steam-shortcuts", "start-sd-horizontal.png"),
-        Path.Combine("steam-shortcuts", "start-sd-horizontal.png"));
-
-    var heroSrc = ResolveOutputFilePath(
-        "start-sd-hero.png",
-        Path.Combine("assets", "steam-shortcuts", "start-sd-hero.png"),
-        Path.Combine("steam-shortcuts", "start-sd-hero.png"));
-
-    var logoSrc = ResolveOutputFilePath(
-        "start-sd-logo.png",
-        Path.Combine("assets", "steam-shortcuts", "start-sd-logo.png"),
-        Path.Combine("steam-shortcuts", "start-sd-logo.png"));
+    var portraitSrc = ResolveOutputFilePath(Path.Combine("assets", "start-sd-capsule.png"));
+    var horizontalSrc = ResolveOutputFilePath(Path.Combine("assets", "start-sd-horizontal.png"));
+    var heroSrc = ResolveOutputFilePath(Path.Combine("assets", "start-sd-hero.png"));
+    var logoSrc = ResolveOutputFilePath(Path.Combine("assets", "start-sd-logo.png"));
 
     var copied = 0;
     copied += CopyIfExists(portraitSrc, Path.Combine(gridDir, $"{appId}p.png"));

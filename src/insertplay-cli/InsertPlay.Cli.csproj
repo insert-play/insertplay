@@ -8,12 +8,17 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="assets/**/*" Exclude="assets/examples/**;assets/runtime/insertplay-service.sh;assets/installer/install.sh;assets/installer/uninstall.sh">
+    <!-- Steam shortcut artwork, flattened into assets/ alongside the executable -->
+    <Content Include="assets/steam-shortcuts/*.png" Link="assets/%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
-    <!-- insertplay-service.sh is linked to the output root so install.sh can locate it at $INSTALL_HOME/insertplay-service.sh -->
-    <Content Include="assets/runtime/insertplay-service.sh" Link="insertplay-service.sh">
+    <!-- insertplay-service scripts are linked to the output root so install.sh / the CLI can find them alongside itself -->
+    <Content Include="../insertplay-service/insertplay-service.sh" Link="insertplay-service.sh">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="../insertplay-service/insertplay-start-bootstrap.sh" Link="insertplay-start-bootstrap.sh">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>

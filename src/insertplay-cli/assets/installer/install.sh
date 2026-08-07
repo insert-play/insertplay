@@ -145,6 +145,12 @@ fi
 mkdir -p "$INSTALL_HOME" "$BIN_DIR"
 cp -a "$PAYLOAD"/. "$INSTALL_HOME"/
 
+ASSETS_DIR="$SCRIPT_DIR/../assets"
+if [ -d "$ASSETS_DIR" ]; then
+  mkdir -p "$INSTALL_HOME/assets"
+  cp -a "$ASSETS_DIR"/. "$INSTALL_HOME/assets"/
+fi
+
 if [ -f "$INSTALL_HOME/InsertPlay.Cli" ]; then
   chmod +x "$INSTALL_HOME/InsertPlay.Cli" || true
   cat > "$LAUNCHER" << 'EOF'
