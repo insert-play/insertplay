@@ -8,12 +8,20 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="assets/**/*" Exclude="assets/examples/**;assets/runtime/insertplay-service.sh">
+    <Content Include="assets/**/*" Exclude="assets/examples/**;assets/runtime/insertplay-service.sh;assets/installer/install.sh;assets/installer/uninstall.sh">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
     <!-- insertplay-service.sh is linked to the output root so install.sh can locate it at $INSTALL_HOME/insertplay-service.sh -->
     <Content Include="assets/runtime/insertplay-service.sh" Link="insertplay-service.sh">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="assets/installer/install.sh" Link="install.sh">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="assets/installer/uninstall.sh" Link="uninstall.sh">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
