@@ -77,8 +77,8 @@ Copied into the build output and deployed to the target machine via `install.sh`
 | Script | Purpose |
 |---|---|
 | `insertplay-service.sh` | systemd service that monitors removable media (`/run/media/`, `/media/`) and executes `autorun.sh` when an InsertPlay SD card is inserted |
-| `insertplay-start-bootstrap.sh` | Steam shortcut launch script; displays a startup overlay and delegates to the game's `insertplay-start.sh` on the SD card |
-| `autorun.sh` | Template script placed at the root of each InsertPlay SD card. Reads `runtime.env`, resolves the Steam game ID, and launches the game via `steam://rungameid/` |
+| `insertplay-start-bootstrap.sh` | Steam shortcut launch script; if specific shortcut mapping is missing it runs `install-shortcut.sh` and returns to Steam, otherwise it delegates to the game's `insertplay-start.sh` on the SD card |
+| `autorun.sh` | Template script placed at the root of each InsertPlay SD card. Reads `runtime.env`, resolves the SD GUID from `shortcut-identity.json`, loads `~/.config/insertplay/shortcuts/<guid>.env` when present, and launches the game via `steam://rungameid/` with fallback to generic shortcut |
 
 ### Installer (`src/insertplay-cli/assets/installer/`)
 
