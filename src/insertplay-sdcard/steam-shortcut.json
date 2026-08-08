@@ -1,7 +1,7 @@
 {
 	"schemaVersion": 1,
 	"shortcut": {
-		"appName": "Need for Speed Pro Street",
+		"appName": "New Super Mario Bros. U",
 		"visibility": {
 			"hidden": true
 		},
@@ -10,16 +10,12 @@
 			"args": "\"{SD_ROOT}/insertplay-start.sh\"",
 			"startDir": "{SD_ROOT}"
 		},
-		"launchVerification": {
-			"processName": "nfs.exe",
-			"timeoutSeconds": 10
-		},
 		"artwork": {
-			"icon": "insertplay/steam-artwork/icon.png",
-			"capsule": "insertplay/steam-artwork/capsule.png",
-			"horizontal": "insertplay/steam-artwork/horizontal.png",
-			"hero": "insertplay/steam-artwork/hero.png",
-			"logo": "insertplay/steam-artwork/logo.png"
+			"icon": "steam-artwork/icon.png",
+			"capsule": "steam-artwork/capsule.png",
+			"horizontal": "steam-artwork/horizontal.png",
+			"hero": "steam-artwork/hero.png",
+			"logo": "steam-artwork/logo.png"
 		}
 	}
 }
