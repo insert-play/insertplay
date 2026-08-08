@@ -164,6 +164,31 @@ public class InstallSdShortcutUseCaseTests
     }
 
     [Fact]
+    public void Execute_InstallsShortcutWithoutProcessVerificationEnv_WhenManifestOmitsLaunchVerification()
+    {
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddDirectory("/sd");
+        fileSystem.AddFile("/sd/steam-shortcut.json", "{}");
+
+        var manifest = ValidManifest();
+        manifest.Shortcut!.LaunchVerification = null;
+        var manifestRepository = new FakeShortcutManifestRepository { Result = true, Manifest = manifest };
+        var guid = Guid.NewGuid().ToString("D");
+        var identityStore = new FakeShortcutIdentityStore { GetOrCreateResult = true, GetOrCreateGuid = guid };
+        var shortcutRepository = new FakeShortcutRepository();
+        var configStore = ValidConfigStore();
+
+        var useCase = CreateUseCase(configStore, shortcutRepository, identityStore, manifestRepository, fileSystem);
+        var result = useCase.Execute("/sd", restartSteam: false);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Null(result.ErrorMessage);
+        var savedEnv = configStore.SavedShortcutEnvironments[guid];
+        Assert.False(savedEnv.ContainsKey("INSERTPLAY_SPECIFIC_PROCESS_NAME"));
+        Assert.False(savedEnv.ContainsKey("INSERTPLAY_SPECIFIC_TIMEOUT_SECONDS"));
+    }
+
+    [Fact]
     public void Execute_AttemptsSteamRestart_WhenRequested()
     {
         var fileSystem = new FakeFileSystem();
