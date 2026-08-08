@@ -52,7 +52,7 @@ public sealed class InstallSdShortcutUseCase(
 
             var shortcut = manifest!.Shortcut!;
             var launch = shortcut.Launch!;
-            var verification = shortcut.LaunchVerification!;
+            var verification = shortcut.LaunchVerification;
 
             var appName = shortcut.AppName.Trim();
             var exe = ResolveSdPlaceholder(launch.Exe, sdRoot);
@@ -89,13 +89,18 @@ public sealed class InstallSdShortcutUseCase(
                 ResolveArtworkPath(sdRoot, shortcut.Artwork?.Logo, "steam-artwork/logo.png", "insertplay/steam-artwork/logo.png"));
             artworkInstaller.Apply(cfg.SteamPath, cfg.SteamUserId, appId, artwork);
 
-            var runtimeShortcutEnvPath = configStore.SaveRuntimeShortcutEnvironment(shortcutGuid, new Dictionary<string, string>
+            var runtimeShortcutEnv = new Dictionary<string, string>
             {
                 ["INSERTPLAY_SHORTCUT_GUID"] = shortcutGuid,
-                ["INSERTPLAY_SPECIFIC_GAME_ID"] = gameId.ToString(),
-                ["INSERTPLAY_SPECIFIC_PROCESS_NAME"] = verification.ProcessName.Trim(),
-                ["INSERTPLAY_SPECIFIC_TIMEOUT_SECONDS"] = verification.TimeoutSeconds.ToString()
-            });
+                ["INSERTPLAY_SPECIFIC_GAME_ID"] = gameId.ToString()
+            };
+            if (verification is not null)
+            {
+                runtimeShortcutEnv["INSERTPLAY_SPECIFIC_PROCESS_NAME"] = verification.ProcessName.Trim();
+                runtimeShortcutEnv["INSERTPLAY_SPECIFIC_TIMEOUT_SECONDS"] = verification.TimeoutSeconds.ToString();
+            }
+
+            var runtimeShortcutEnvPath = configStore.SaveRuntimeShortcutEnvironment(shortcutGuid, runtimeShortcutEnv);
 
             var outputLines = new List<string>
             {
