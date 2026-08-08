@@ -91,6 +91,26 @@ select_target_mountpoint() {
   done
 }
 
+ensure_steam_shortcut_manifest() {
+  local sd_root="$1"
+  local manifest_root="$sd_root/steam-shortcut.json"
+  local manifest_legacy="$sd_root/insertplay/steam-shortcut.json"
+
+  if [[ -f "$manifest_root" || -f "$manifest_legacy" ]]; then
+    log "Steam shortcut manifest already present, leaving it untouched."
+    return 0
+  fi
+
+  local src="$SDCARD_ASSETS_DIR/steam-shortcut.json"
+  if [[ ! -f "$src" ]]; then
+    log "Warning: steam-shortcut.json template not found: $src"
+    return 0
+  fi
+
+  cp -f "$src" "$manifest_root"
+  log "Copied default steam-shortcut.json to SD root: $manifest_root"
+}
+
 ensure_shortcut_identity_guid() {
   local sd_root="$1"
   local identity_root="$sd_root/shortcut-identity.json"
@@ -147,6 +167,7 @@ rm -rf "$TARGET_INSERTPLAY_DIR"
 mkdir -p "$TARGET_INSERTPLAY_DIR"
 cp -a "$PUBLISH_DIR/insertplay"/. "$TARGET_INSERTPLAY_DIR"/
 
+ensure_steam_shortcut_manifest "$TARGET_MOUNTPOINT"
 ensure_shortcut_identity_guid "$TARGET_MOUNTPOINT"
 
 for sdcard_script in autorun.sh install-shortcut.sh insertplay-guid-guard.sh; do
