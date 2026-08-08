@@ -149,7 +149,7 @@ cp -a "$PUBLISH_DIR/insertplay"/. "$TARGET_INSERTPLAY_DIR"/
 
 ensure_shortcut_identity_guid "$TARGET_MOUNTPOINT"
 
-for sdcard_script in autorun.sh install-shortcut.sh; do
+for sdcard_script in autorun.sh install-shortcut.sh insertplay-guid-guard.sh; do
   src="$SDCARD_ASSETS_DIR/$sdcard_script"
   dst="$TARGET_MOUNTPOINT/$sdcard_script"
 
