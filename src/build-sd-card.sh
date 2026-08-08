@@ -91,6 +91,42 @@ select_target_mountpoint() {
   done
 }
 
+SD_USER_ASSET_RELATIVE_PATHS=(
+  "steam-shortcut.json"
+  "shortcut-identity.json"
+  "steam-artwork"
+)
+
+backup_sd_user_assets() {
+  local insertplay_dir="$1"
+  local backup_dir="$2"
+  local rel src
+
+  for rel in "${SD_USER_ASSET_RELATIVE_PATHS[@]}"; do
+    src="$insertplay_dir/$rel"
+    if [[ -e "$src" ]]; then
+      mkdir -p "$(dirname "$backup_dir/$rel")"
+      mv "$src" "$backup_dir/$rel"
+      log "Preserved existing SD asset before refresh: insertplay/$rel"
+    fi
+  done
+}
+
+restore_sd_user_assets() {
+  local insertplay_dir="$1"
+  local backup_dir="$2"
+  local rel backed_up
+
+  for rel in "${SD_USER_ASSET_RELATIVE_PATHS[@]}"; do
+    backed_up="$backup_dir/$rel"
+    if [[ -e "$backed_up" ]]; then
+      mkdir -p "$(dirname "$insertplay_dir/$rel")"
+      mv "$backed_up" "$insertplay_dir/$rel"
+      log "Restored preserved SD asset: insertplay/$rel"
+    fi
+  done
+}
+
 ensure_steam_shortcut_manifest() {
   local sd_root="$1"
   local manifest_root="$sd_root/steam-shortcut.json"
@@ -163,9 +199,15 @@ log "Publishing latest InsertPlay build for RID: $RID"
 "$PUBLISH_SCRIPT" "$RID"
 
 log "Refreshing target directory: $TARGET_INSERTPLAY_DIR"
+SD_ASSET_BACKUP_DIR="$(mktemp -d)"
+if [[ -d "$TARGET_INSERTPLAY_DIR" ]]; then
+  backup_sd_user_assets "$TARGET_INSERTPLAY_DIR" "$SD_ASSET_BACKUP_DIR"
+fi
 rm -rf "$TARGET_INSERTPLAY_DIR"
 mkdir -p "$TARGET_INSERTPLAY_DIR"
 cp -a "$PUBLISH_DIR/insertplay"/. "$TARGET_INSERTPLAY_DIR"/
+restore_sd_user_assets "$TARGET_INSERTPLAY_DIR" "$SD_ASSET_BACKUP_DIR"
+rmdir "$SD_ASSET_BACKUP_DIR" 2>/dev/null || rm -rf "$SD_ASSET_BACKUP_DIR"
 
 ensure_steam_shortcut_manifest "$TARGET_MOUNTPOINT"
 ensure_shortcut_identity_guid "$TARGET_MOUNTPOINT"
