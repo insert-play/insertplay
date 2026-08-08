@@ -3,6 +3,15 @@ set -e
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+SD_ROOT="$BASE_DIR"
+while [[ ! -f "$SD_ROOT/autorun.sh" && "$SD_ROOT" != "/" ]]; do
+    SD_ROOT="$(dirname "$SD_ROOT")"
+done
+if [[ -f "$SD_ROOT/insertplay-guid-guard.sh" ]]; then
+    source "$SD_ROOT/insertplay-guid-guard.sh"
+    insertplay_guard_verify_or_exit "$SD_ROOT" "$@"
+fi
+
 GAME="$BASE_DIR/game/nfs.exe"
 PREFIX="$BASE_DIR/prefix"
 
