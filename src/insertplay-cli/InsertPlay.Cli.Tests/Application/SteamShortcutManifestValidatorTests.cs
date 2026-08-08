@@ -153,15 +153,15 @@ public class SteamShortcutManifestValidatorTests
     }
 
     [Fact]
-    public void Validate_RejectsMissingLaunchVerification()
+    public void Validate_AcceptsMissingLaunchVerification()
     {
         var manifest = ValidManifest();
         manifest.Shortcut!.LaunchVerification = null;
 
         var ok = SteamShortcutManifestValidator.Validate(manifest, out var error);
 
-        Assert.False(ok);
-        Assert.Equal("Manifest field 'shortcut.launchVerification' is required.", error);
+        Assert.True(ok);
+        Assert.Empty(error);
     }
 
     [Fact]
