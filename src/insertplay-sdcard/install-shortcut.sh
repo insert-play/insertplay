@@ -29,7 +29,7 @@ try_runtime_install() {
 
 	local output
 	set +e
-	output="$($@ "${RUNTIME_INSTALL_ARGS[@]}" 2>&1)"
+	output="$("$@" "${RUNTIME_INSTALL_ARGS[@]}" 2>&1)"
 	local status=$?
 	set -e
 
