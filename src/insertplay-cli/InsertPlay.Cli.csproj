@@ -8,6 +8,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Sibling layer projects live under this project's own directory; keep their sources out of this project's glob -->
+    <Compile Remove="InsertPlay.Cli.*/**/*.cs" />
+    <Content Remove="InsertPlay.Cli.*/**/*" />
+    <None Remove="InsertPlay.Cli.*/**/*" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Steam shortcut artwork, flattened into assets/ alongside the executable -->
     <Content Include="assets/steam-shortcuts/*.png" Link="assets/%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -30,5 +37,14 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="InsertPlay.Cli.Application\InsertPlay.Cli.Application.csproj" />
+    <ProjectReference Include="InsertPlay.Cli.Infrastructure\InsertPlay.Cli.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
   </ItemGroup>
 </Project>

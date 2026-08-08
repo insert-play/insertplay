@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="InsertPlay.Cli.Application/InsertPlay.Cli.Application.csproj" />
+  <Project Path="InsertPlay.Cli.csproj" />
+  <Project Path="InsertPlay.Cli.Domain/InsertPlay.Cli.Domain.csproj" />
+  <Project Path="InsertPlay.Cli.Infrastructure/InsertPlay.Cli.Infrastructure.csproj" />
+  <Project Path="InsertPlay.Cli.Tests/InsertPlay.Cli.Tests.csproj" />
+</Solution>

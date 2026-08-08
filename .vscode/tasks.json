@@ -16,6 +16,20 @@
       }
     },
     {
+      "label": "test",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "test",
+        "src/insertplay-cli/InsertPlay.Cli.slnx"
+      ],
+      "problemMatcher": "$msCompile",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
       "label": "publish",
       "type": "shell",
       "command": "bash",
