@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SD_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESTART_STEAM=1
+RESTART_STEAM=0
 
 if [[ "${1-}" == "--restart-steam" ]]; then
 	RESTART_STEAM=1
