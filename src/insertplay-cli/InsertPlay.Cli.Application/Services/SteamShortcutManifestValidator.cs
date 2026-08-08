@@ -67,22 +67,19 @@ public static class SteamShortcutManifestValidator
             return false;
         }
 
-        if (manifest.Shortcut.LaunchVerification is null)
+        if (manifest.Shortcut.LaunchVerification is not null)
         {
-            error = "Manifest field 'shortcut.launchVerification' is required.";
-            return false;
-        }
+            if (string.IsNullOrWhiteSpace(manifest.Shortcut.LaunchVerification.ProcessName))
+            {
+                error = "Manifest field 'shortcut.launchVerification.processName' is required.";
+                return false;
+            }
 
-        if (string.IsNullOrWhiteSpace(manifest.Shortcut.LaunchVerification.ProcessName))
-        {
-            error = "Manifest field 'shortcut.launchVerification.processName' is required.";
-            return false;
-        }
-
-        if (manifest.Shortcut.LaunchVerification.TimeoutSeconds <= 0)
-        {
-            error = "Manifest field 'shortcut.launchVerification.timeoutSeconds' must be a positive integer.";
-            return false;
+            if (manifest.Shortcut.LaunchVerification.TimeoutSeconds <= 0)
+            {
+                error = "Manifest field 'shortcut.launchVerification.timeoutSeconds' must be a positive integer.";
+                return false;
+            }
         }
 
         return true;
