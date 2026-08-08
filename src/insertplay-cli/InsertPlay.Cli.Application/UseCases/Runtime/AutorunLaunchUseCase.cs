@@ -29,78 +29,35 @@ public sealed class AutorunLaunchUseCase(
         if (!fileSystem.DirectoryExists(sdRoot))
             return AutorunLaunchResult.Error($"SD root not found: {sdRoot}", 1);
 
-        var genericRuntimeEnvPath = configStore.GetRuntimeEnvPath();
-        if (!environmentFileStore.TryRead(genericRuntimeEnvPath, out var runtimeVars, out var runtimeEnvError))
-            return AutorunLaunchResult.Error(runtimeEnvError, 10);
-
-        var genericGameId = GetEnvValue(runtimeVars, "INSERTPLAY_SD_GAME_ID");
-        if (string.IsNullOrWhiteSpace(genericGameId))
-            return AutorunLaunchResult.Error("InsertPlay runtime configuration not found. Run 'insertplay setup' first.", 10);
-
         var infoLines = new List<string>();
 
         var (shortcutGuid, shortcutGuidMessage) = ResolveShortcutGuid(explicitGuid, sdRoot);
         if (!string.IsNullOrWhiteSpace(shortcutGuidMessage))
             infoLines.Add($"[insertplay runtime] {shortcutGuidMessage}");
 
+        if (string.IsNullOrWhiteSpace(shortcutGuid))
+            return AutorunLaunchResult.Error(
+                "No specific shortcut identity found for this SD card. Run 'insertplay runtime install-shortcut' first.", 10, infoLines);
+
+        if (!TryReadSpecificRuntimeLaunch(
+                shortcutGuid, out var specificGameId, out var specificProcessName, out var specificTimeoutSeconds, out var specificLaunchError))
+            return AutorunLaunchResult.Error(specificLaunchError, 10, infoLines);
+
         var cfg = configStore.TryLoad();
-        var hasValidConfig = configStore.IsValid(cfg, out _);
+        if (configStore.IsValid(cfg, out _) && !SpecificShortcutExistsInSteam(cfg!, specificGameId))
+            return AutorunLaunchResult.Error(
+                $"Specific shortcut guid={shortcutGuid} not found in Steam shortcuts. Run 'insertplay runtime install-shortcut' again.", 11, infoLines);
 
-        var specificLaunchError = string.Empty;
-        var specificGameId = string.Empty;
-        var specificProcessName = string.Empty;
-        var specificTimeoutSeconds = 0;
-        var attemptedSpecific = false;
+        infoLines.Add($"[insertplay runtime] Starting specific shortcut guid={shortcutGuid} gameId={specificGameId}");
+        if (!steamProcessController.LaunchGame(specificGameId, out var specificLaunchMessage))
+            return AutorunLaunchResult.Error($"Failed to launch specific shortcut: {specificLaunchMessage}", 16, infoLines);
 
-        if (!string.IsNullOrWhiteSpace(shortcutGuid))
-        {
-            attemptedSpecific = TryReadSpecificRuntimeLaunch(
-                shortcutGuid, out specificGameId, out specificProcessName, out specificTimeoutSeconds, out specificLaunchError);
-        }
+        if (!processMonitor.WaitForProcessPattern(specificProcessName, specificTimeoutSeconds))
+            return AutorunLaunchResult.Error(
+                $"Specific process (pattern: {specificProcessName}) was not detected within {specificTimeoutSeconds}s.", 16, infoLines);
 
-        if (attemptedSpecific)
-        {
-            var specificExists = true;
-            if (hasValidConfig)
-                specificExists = SpecificShortcutExistsInSteam(cfg!, specificGameId);
-
-            if (!specificExists)
-            {
-                infoLines.Add($"[insertplay runtime] Specific shortcut guid={shortcutGuid} not found in Steam shortcuts. Falling back to generic shortcut.");
-            }
-            else
-            {
-                infoLines.Add($"[insertplay runtime] Trying specific shortcut guid={shortcutGuid} gameId={specificGameId}");
-                if (steamProcessController.LaunchGame(specificGameId, out var specificLaunchMessage))
-                {
-                    if (processMonitor.WaitForProcessPattern(specificProcessName, specificTimeoutSeconds))
-                    {
-                        infoLines.Add("[insertplay runtime] Specific launch succeeded.");
-                        return AutorunLaunchResult.Success(infoLines);
-                    }
-
-                    infoLines.Add("[insertplay runtime] Specific process was not detected in time. Falling back to generic shortcut.");
-                }
-                else
-                {
-                    infoLines.Add($"[insertplay runtime] Failed to request specific launch: {specificLaunchMessage}. Falling back to generic shortcut.");
-                }
-            }
-        }
-        else if (!string.IsNullOrWhiteSpace(specificLaunchError))
-        {
-            infoLines.Add($"[insertplay runtime] {specificLaunchError} Falling back to generic shortcut.");
-        }
-        else
-        {
-            infoLines.Add("[insertplay runtime] Specific runtime shortcut env not available. Falling back to generic shortcut.");
-        }
-
-        infoLines.Add($"[insertplay runtime] Starting generic shortcut gameId={genericGameId}");
-        if (steamProcessController.LaunchGame(genericGameId, out var genericLaunchMessage))
-            return AutorunLaunchResult.Success(infoLines);
-
-        return AutorunLaunchResult.Error($"Failed to launch generic shortcut: {genericLaunchMessage}", 16, infoLines);
+        infoLines.Add("[insertplay runtime] Specific launch succeeded.");
+        return AutorunLaunchResult.Success(infoLines);
     }
 
     private (string? Guid, string Message) ResolveShortcutGuid(string? explicitGuid, string sdRoot)
