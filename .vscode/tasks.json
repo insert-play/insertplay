@@ -40,6 +40,18 @@
         "kind": "build",
         "isDefault": false
       }
+    },
+    {
+      "label": "build-sd-card",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "src/build-sd-card.sh"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
     }
   ]
 }
