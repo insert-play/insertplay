@@ -40,7 +40,7 @@ public sealed class AutorunLaunchUseCase(
                 "No specific shortcut identity found for this SD card. Run 'insertplay runtime install-shortcut' first.", 10, infoLines);
 
         if (!TryReadSpecificRuntimeLaunch(
-                shortcutGuid, out var specificGameId, out var specificProcessName, out var specificTimeoutSeconds, out var specificLaunchError))
+                shortcutGuid, out var specificGameId, out var specificProcessName, out var specificTimeoutSeconds, out var hasVerification, out var specificLaunchError))
             return AutorunLaunchResult.Error(specificLaunchError, 10, infoLines);
 
         var cfg = configStore.TryLoad();
@@ -52,9 +52,16 @@ public sealed class AutorunLaunchUseCase(
         if (!steamProcessController.LaunchGame(specificGameId, out var specificLaunchMessage))
             return AutorunLaunchResult.Error($"Failed to launch specific shortcut: {specificLaunchMessage}", 16, infoLines);
 
-        if (!processMonitor.WaitForProcessPattern(specificProcessName, specificTimeoutSeconds))
-            return AutorunLaunchResult.Error(
-                $"Specific process (pattern: {specificProcessName}) was not detected within {specificTimeoutSeconds}s.", 16, infoLines);
+        if (hasVerification)
+        {
+            if (!processMonitor.WaitForProcessPattern(specificProcessName, specificTimeoutSeconds))
+                return AutorunLaunchResult.Error(
+                    $"Specific process (pattern: {specificProcessName}) was not detected within {specificTimeoutSeconds}s.", 16, infoLines);
+        }
+        else
+        {
+            infoLines.Add("[insertplay runtime] No launch verification configured; skipping process check.");
+        }
 
         infoLines.Add("[insertplay runtime] Specific launch succeeded.");
         return AutorunLaunchResult.Success(infoLines);
@@ -80,11 +87,13 @@ public sealed class AutorunLaunchUseCase(
         out string gameId,
         out string processName,
         out int timeoutSeconds,
+        out bool hasVerification,
         out string error)
     {
         gameId = string.Empty;
         processName = string.Empty;
         timeoutSeconds = 0;
+        hasVerification = false;
         error = string.Empty;
 
         string path;
@@ -108,15 +117,26 @@ public sealed class AutorunLaunchUseCase(
         processName = GetEnvValue(values, "INSERTPLAY_SPECIFIC_PROCESS_NAME");
         var timeoutRaw = GetEnvValue(values, "INSERTPLAY_SPECIFIC_TIMEOUT_SECONDS");
 
-        if (string.IsNullOrWhiteSpace(gameId)
-            || string.IsNullOrWhiteSpace(processName)
-            || !int.TryParse(timeoutRaw, out timeoutSeconds)
-            || timeoutSeconds <= 0)
+        if (string.IsNullOrWhiteSpace(gameId))
         {
             error = $"Specific runtime shortcut data is incomplete for guid={shortcutGuid}.";
             return false;
         }
 
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            hasVerification = false;
+            timeoutSeconds = 0;
+            return true;
+        }
+
+        if (!int.TryParse(timeoutRaw, out timeoutSeconds) || timeoutSeconds <= 0)
+        {
+            error = $"Specific runtime shortcut data is incomplete for guid={shortcutGuid}.";
+            return false;
+        }
+
+        hasVerification = true;
         return true;
     }
 
