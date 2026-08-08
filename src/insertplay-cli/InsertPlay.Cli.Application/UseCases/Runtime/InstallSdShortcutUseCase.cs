@@ -70,7 +70,7 @@ public sealed class InstallSdShortcutUseCase(
                 AppName = appName,
                 Exe = exe,
                 StartDir = startDir,
-                LaunchOptions = argsResolved,
+                LaunchOptions = AppendGuidArgument(argsResolved, shortcutGuid),
                 Icon = iconPath,
                 IsHidden = true
             };
@@ -128,6 +128,13 @@ public sealed class InstallSdShortcutUseCase(
 
     private static string ResolveSdPlaceholder(string value, string sdRoot) =>
         value.Replace("{SD_ROOT}", sdRoot, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Lets insertplay-start.sh on the SD card refuse to launch when it isn't the card this
+    /// shortcut was created for (e.g. a different SD card is currently inserted).
+    /// </summary>
+    private static string AppendGuidArgument(string args, string shortcutGuid) =>
+        string.IsNullOrWhiteSpace(args) ? $"--guid {shortcutGuid}" : $"{args} --guid {shortcutGuid}";
 
     private string ResolveArtworkPath(string sdRoot, string? value, params string[] fallbackRelativePaths)
     {

@@ -158,6 +158,7 @@ public class InstallSdShortcutUseCaseTests
         Assert.Null(result.ErrorMessage);
         Assert.Single(shortcutRepository.Entries);
         Assert.Equal("/sd/run.sh", shortcutRepository.Entries[0].Exe);
+        Assert.Contains($"--guid {guid}", shortcutRepository.Entries[0].LaunchOptions);
         Assert.True(configStore.SavedShortcutEnvironments.ContainsKey(guid));
         Assert.Contains(result.StandardOutputLines, l => l.Contains("Specific shortcut installed"));
     }
