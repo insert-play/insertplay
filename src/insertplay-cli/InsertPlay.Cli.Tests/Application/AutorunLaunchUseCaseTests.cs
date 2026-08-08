@@ -97,6 +97,44 @@ public class AutorunLaunchUseCaseTests
         Assert.Empty(steamProcessController.LaunchedGameIds);
     }
 
+    private static (string Guid, string GameId) SetUpSpecificRuntimeLaunchWithoutVerification(
+        FakeConfigStore configStore, FakeEnvironmentFileStore environmentFileStore, uint appId = 999u)
+    {
+        var guid = Guid.NewGuid().ToString("D");
+        var gameId = (((ulong)appId << 32) | 0x02000000).ToString();
+        environmentFileStore.ReadResults[configStore.GetRuntimeShortcutEnvPath(guid)] = (new Dictionary<string, string>
+        {
+            ["INSERTPLAY_SPECIFIC_GAME_ID"] = gameId
+        }, "");
+
+        return (guid, gameId);
+    }
+
+    [Fact]
+    public void Execute_LaunchesSpecificShortcut_WhenNoLaunchVerificationConfigured()
+    {
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddDirectory("/sd");
+        var configStore = new FakeConfigStore { ValidResult = false };
+        var environmentFileStore = new FakeEnvironmentFileStore();
+        var (guid, gameId) = SetUpSpecificRuntimeLaunchWithoutVerification(configStore, environmentFileStore);
+        var identityStore = new FakeShortcutIdentityStore { ReadResult = true, ReadGuid = guid };
+        var steamProcessController = new FakeSteamProcessController();
+
+        // WaitResult=false proves the process wait is skipped entirely -- if it were consulted, this would fail.
+        var processMonitor = new FakeProcessMonitor { WaitResult = false };
+
+        var useCase = CreateUseCase(
+            configStore, new FakeShortcutRepository(), identityStore, environmentFileStore, fileSystem,
+            steamProcessController, processMonitor);
+        var result = useCase.Execute("/sd", null);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains(gameId, steamProcessController.LaunchedGameIds);
+        Assert.Contains(result.InfoLines, l => l.Contains("No launch verification configured"));
+        Assert.Contains(result.InfoLines, l => l.Contains("Specific launch succeeded."));
+    }
+
     [Fact]
     public void Execute_ReturnsExitCode11_WhenSpecificShortcutIsNotInSteam()
     {
