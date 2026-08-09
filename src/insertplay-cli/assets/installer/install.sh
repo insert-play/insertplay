@@ -7,6 +7,7 @@ BIN_DIR="$HOME/.local/bin"
 LAUNCHER="$BIN_DIR/insertplay"
 SERVICE_NAME="insertplay.service"
 UNIT_PATH="/etc/systemd/system/$SERVICE_NAME"
+POLKIT_RULE_PATH="/etc/polkit-1/rules.d/49-insertplay-controller-sleep.rules"
 
 run_privileged() {
   if [ "$(id -u)" -eq 0 ]; then
@@ -36,6 +37,147 @@ prompt_install_service() {
   esac
 }
 
+CONTROLLER_SLEEP_ENABLED=0
+CONTROLLER_SLEEP_VENDOR_ID=""
+CONTROLLER_SLEEP_PRODUCT_ID=""
+
+prompt_controller_sleep() {
+  if [ ! -t 0 ]; then
+    return 1
+  fi
+
+  local answer
+  read -r -p "Suspend the PC automatically when a specific controller is disconnected? (y/N): " answer
+  case "${answer:-N}" in
+    y|Y|yes|YES) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Prints one line per currently connected joystick/gamepad device, as
+# "vendor:product<TAB>name", by reading /proc/bus/input/devices.
+list_connected_controllers() {
+  local vendor="" product="" name="" handlers=""
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      I:\ *)
+        vendor=""
+        product=""
+        name=""
+        if [[ "$line" =~ Vendor=([0-9a-fA-F]+) ]]; then
+          vendor="${BASH_REMATCH[1],,}"
+        fi
+        if [[ "$line" =~ Product=([0-9a-fA-F]+) ]]; then
+          product="${BASH_REMATCH[1],,}"
+        fi
+        ;;
+      N:\ Name=*)
+        name="${line#N: Name=}"
+        name="${name%\"}"
+        name="${name#\"}"
+        ;;
+      H:\ Handlers=*)
+        handlers="${line#H: Handlers=}"
+        if [[ "$handlers" =~ (^|[[:space:]])js[0-9]+([[:space:]]|$) ]]; then
+          printf '%s:%s\t%s\n' "$vendor" "$product" "$name"
+        fi
+        ;;
+      "")
+        vendor=""
+        product=""
+        name=""
+        ;;
+    esac
+  done < /proc/bus/input/devices
+}
+
+prompt_controller_ids_manually() {
+  local vendor product
+  read -r -p "Controller Vendor ID (hex, e.g. 045e, blank to skip): " vendor
+  read -r -p "Controller Product ID (hex, e.g. 028e, blank to skip): " product
+
+  if [ -z "$vendor" ] || [ -z "$product" ]; then
+    echo "Vendor/Product ID not provided; controller-sleep feature left disabled."
+    return
+  fi
+
+  CONTROLLER_SLEEP_ENABLED=1
+  CONTROLLER_SLEEP_VENDOR_ID="$vendor"
+  CONTROLLER_SLEEP_PRODUCT_ID="$product"
+}
+
+prompt_controller_ids() {
+  local -a keys=() names=()
+  local key name choice
+
+  while IFS=$'\t' read -r key name; do
+    [ -z "$key" ] && continue
+    keys+=("$key")
+    names+=("$name")
+  done < <(list_connected_controllers)
+
+  if [ "${#keys[@]}" -eq 0 ]; then
+    echo "No controller detected under /proc/bus/input/devices."
+    echo "Connect the controller you want to use, then either re-run the installer or enter its Vendor/Product ID manually."
+    prompt_controller_ids_manually
+    return
+  fi
+
+  echo "Detected controllers:"
+  local i
+  for i in "${!keys[@]}"; do
+    printf '  %d) %s (%s)\n' "$((i + 1))" "${names[$i]}" "${keys[$i]}"
+  done
+  printf '  %d) Enter Vendor/Product ID manually\n' "$(( ${#keys[@]} + 1 ))"
+
+  read -r -p "Select the controller to use (blank to skip): " choice
+
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$(( ${#keys[@]} + 1 ))" ]; then
+    echo "Controller-sleep feature left disabled."
+    return
+  fi
+
+  if [ "$choice" -eq "$(( ${#keys[@]} + 1 ))" ]; then
+    prompt_controller_ids_manually
+    return
+  fi
+
+  local selected="${keys[$((choice - 1))]}"
+  CONTROLLER_SLEEP_ENABLED=1
+  CONTROLLER_SLEEP_VENDOR_ID="${selected%%:*}"
+  CONTROLLER_SLEEP_PRODUCT_ID="${selected##*:}"
+}
+
+# insertplay-service.sh runs as a system service (not an interactive login
+# session), so logind's default polkit policy would otherwise prompt for
+# interactive authentication when it calls `systemctl suspend`. This grants
+# passwordless suspend to the configured user only.
+install_controller_sleep_polkit_rule() {
+  local user_name="$1"
+  local tmp_rule
+  tmp_rule="$(mktemp)"
+
+  cat > "$tmp_rule" <<EOF
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.login1.suspend") == 0 &&
+        subject.user == "$user_name") {
+        return polkit.Result.YES;
+    }
+});
+EOF
+
+  if ! run_privileged install -D -m 0644 "$tmp_rule" "$POLKIT_RULE_PATH"; then
+    echo "Warning: failed to install polkit rule at $POLKIT_RULE_PATH." >&2
+    echo "'systemctl suspend' will likely fail with an authentication error when the controller-sleep feature triggers." >&2
+    rm -f "$tmp_rule"
+    return
+  fi
+
+  rm -f "$tmp_rule"
+  echo "Polkit rule installed: $user_name can suspend the system without interactive authentication."
+}
+
 install_system_service() {
   if ! command -v systemctl >/dev/null 2>&1; then
     echo "systemctl not found. Skipping service installation."
@@ -55,6 +197,10 @@ install_system_service() {
   home_dir="$HOME"
   tmp_unit="$(mktemp)"
 
+  if [ "$CONTROLLER_SLEEP_ENABLED" -eq 1 ]; then
+    install_controller_sleep_polkit_rule "$user_name"
+  fi
+
   cat > "$tmp_unit" <<EOF
 [Unit]
 Description=InsertPlay SD Monitor Service
@@ -64,6 +210,17 @@ After=local-fs.target
 Type=simple
 User=$user_name
 Environment=HOME=$home_dir
+EOF
+
+  if [ "$CONTROLLER_SLEEP_ENABLED" -eq 1 ]; then
+    cat >> "$tmp_unit" <<EOF
+Environment=INSERTPLAY_CONTROLLER_SLEEP_ENABLED=1
+Environment=INSERTPLAY_CONTROLLER_VENDOR_ID=$CONTROLLER_SLEEP_VENDOR_ID
+Environment=INSERTPLAY_CONTROLLER_PRODUCT_ID=$CONTROLLER_SLEEP_PRODUCT_ID
+EOF
+  fi
+
+  cat >> "$tmp_unit" <<EOF
 ExecStart=/usr/bin/env bash $service_script
 Restart=always
 RestartSec=5
@@ -114,6 +271,19 @@ restart_system_service_if_active() {
   else
     echo "Warning: failed to restart $SERVICE_NAME after update." >&2
   fi
+}
+
+ensure_controller_sleep_polkit_rule() {
+  if [ ! -f "$UNIT_PATH" ] || [ -f "$POLKIT_RULE_PATH" ]; then
+    return
+  fi
+
+  if ! grep -q '^Environment=INSERTPLAY_CONTROLLER_SLEEP_ENABLED=1' "$UNIT_PATH" 2>/dev/null; then
+    return
+  fi
+
+  echo "Controller-sleep feature is enabled but its polkit rule is missing; installing it now."
+  install_controller_sleep_polkit_rule "$(id -un)"
 }
 
 IS_UPDATE=0
@@ -174,6 +344,7 @@ fi
 chmod +x "$LAUNCHER"
 
 if [ "$IS_UPDATE" -eq 1 ]; then
+  ensure_controller_sleep_polkit_rule
   restart_system_service_if_active
   echo "Update complete. Existing configuration was preserved."
   echo "Tip: run 'insertplay setup' only if you want to reconfigure Steam user/paths."
@@ -182,6 +353,9 @@ else
   "$LAUNCHER" setup
 
   if prompt_install_service; then
+    if prompt_controller_sleep; then
+      prompt_controller_ids
+    fi
     install_system_service
   else
     echo "Service installation skipped."
