@@ -8,6 +8,7 @@ CONFIG_DIR="$HOME/.config/insertplay"
 PURGE_CONFIG="false"
 SERVICE_NAME="insertplay.service"
 UNIT_PATH="/etc/systemd/system/$SERVICE_NAME"
+POLKIT_RULE_PATH="/etc/polkit-1/rules.d/49-insertplay-controller-sleep.rules"
 
 run_privileged() {
   if [ "$(id -u)" -eq 0 ]; then
@@ -53,6 +54,11 @@ remove_system_service() {
   fi
 
   run_privileged systemctl daemon-reload >/dev/null 2>&1 || true
+
+  if [ -f "$POLKIT_RULE_PATH" ]; then
+    run_privileged rm -f "$POLKIT_RULE_PATH" || echo "Warning: failed to remove $POLKIT_RULE_PATH" >&2
+  fi
+
   echo "Service $SERVICE_NAME removed (if it existed)."
 }
 
