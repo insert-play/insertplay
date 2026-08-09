@@ -78,8 +78,25 @@ Linked into the CLI's build/publish output (flat, alongside `InsertPlay.Cli`) an
 
 | Script | Purpose |
 |---|---|
-| `insertplay-service.sh` | systemd service that monitors removable media (`/run/media/`, `/media/`) and executes `autorun.sh` when an InsertPlay SD card is inserted |
+| `insertplay-service.sh` | systemd service that monitors removable media (`/run/media/`, `/media/`) and executes `autorun.sh` when an InsertPlay SD card is inserted. Optionally also suspends the system when a specific controller is unplugged (see below) |
 | `insertplay-start-bootstrap.sh` | Steam shortcut launch script; always runs `install-shortcut.sh` (idempotent, never restarts Steam) and then delegates to the game's `insertplay-start.sh` on the SD card, regardless of install outcome |
+| `log-controller-events.sh` | Standalone diagnostic tool: logs controller connect/disconnect events (Vendor/Product ID) so you can find the values to configure below. Not deployed as part of the service; run manually |
+
+#### Suspend on controller disconnect (optional)
+
+`insertplay-service.sh` can suspend the PC when a specific controller is unplugged. Disabled by default. Controlled via environment variables (set as `Environment=` lines in the systemd unit, or exported before running the script manually):
+
+| Variable | Purpose |
+|---|---|
+| `INSERTPLAY_CONTROLLER_SLEEP_ENABLED` | `1` to enable, anything else (default) disables the feature |
+| `INSERTPLAY_CONTROLLER_VENDOR_ID` | Controller USB Vendor ID, hex (e.g. `045e`) |
+| `INSERTPLAY_CONTROLLER_PRODUCT_ID` | Controller USB Product ID, hex (e.g. `028e`) |
+
+Both IDs are required for the feature to activate; if either is missing, it stays disabled. Since these come from the controller's own USB descriptor, the same values work on any PC for that controller.
+
+`install.sh` sets these up interactively when installing the systemd service: it lists currently connected controllers (read from `/proc/bus/input/devices`) for you to pick from, with manual Vendor/Product ID entry as a fallback if none are detected or you want to enter them directly. To find the ID of a controller without running the installer, use `log-controller-events.sh` and unplug it.
+
+**Polkit rule.** `insertplay-service.sh` runs as a systemd *system* service (not an interactive login session), so `systemctl suspend` fails with `Access denied ... requires interactive authentication` under the default logind policy. When you enable this feature, `install.sh` also installs `/etc/polkit-1/rules.d/49-insertplay-controller-sleep.rules`, granting your user passwordless suspend. On update, `install.sh` re-checks the installed unit and (re)installs this rule automatically if it's missing (self-heals installs made before this rule existed). `uninstall.sh` removes it along with the service.
 
 ### SD-card scripts (`src/insertplay-sdcard/`)
 
@@ -98,5 +115,5 @@ Linked into the CLI's build/publish output (flat, alongside `InsertPlay.Cli`). R
 
 | Script | Purpose |
 |---|---|
-| `install.sh` | Deploys the CLI to `~/.local/share/insertplay`, copies the sibling `assets/` folder, creates `~/.local/bin/insertplay`, optionally installs the systemd service, and runs `insertplay setup` |
+| `install.sh` | Deploys the CLI to `~/.local/share/insertplay`, copies the sibling `assets/` folder, creates `~/.local/bin/insertplay`, optionally installs the systemd service (and optionally the controller-sleep feature, listing currently connected controllers to pick from, with manual Vendor/Product ID entry as a fallback), and runs `insertplay setup` |
 | `uninstall.sh` | Removes the CLI, launcher, and systemd service. Use `--purge` to also delete the configuration |
