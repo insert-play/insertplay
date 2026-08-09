@@ -21,9 +21,52 @@ POLL_INTERVAL="${POLL_INTERVAL:-1}"
 LOCK_DIR="/tmp/sd-monitor.lock"
 SOUND_FILE="/usr/share/sounds/freedesktop/stereo/device-added.oga"
 
+CONTROLLER_SLEEP_ENABLED="${INSERTPLAY_CONTROLLER_SLEEP_ENABLED:-0}"
+CONTROLLER_VENDOR_ID="${INSERTPLAY_CONTROLLER_VENDOR_ID:-}"
+CONTROLLER_PRODUCT_ID="${INSERTPLAY_CONTROLLER_PRODUCT_ID:-}"
+
+if [[ "$CONTROLLER_SLEEP_ENABLED" == "1" && ( -z "$CONTROLLER_VENDOR_ID" || -z "$CONTROLLER_PRODUCT_ID" ) ]]; then
+    CONTROLLER_SLEEP_ENABLED="0"
+fi
+
 log() {
     # Logs to stderr so systemd/journald can capture it if present.
     printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*" >&2
+}
+
+# Prints "1" on stdout if the configured controller (Vendor:Product from
+# /proc/bus/input/devices) currently has a joystick handler, i.e. is connected.
+is_configured_controller_connected() {
+    local vendor="" product="" handlers=""
+    local target="${CONTROLLER_VENDOR_ID,,}:${CONTROLLER_PRODUCT_ID,,}"
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        case "$line" in
+            I:\ *)
+                vendor=""
+                product=""
+                if [[ "$line" =~ Vendor=([0-9a-fA-F]+) ]]; then
+                    vendor="${BASH_REMATCH[1],,}"
+                fi
+                if [[ "$line" =~ Product=([0-9a-fA-F]+) ]]; then
+                    product="${BASH_REMATCH[1],,}"
+                fi
+                ;;
+            H:\ Handlers=*)
+                handlers="${line#H: Handlers=}"
+                if [[ "${vendor}:${product}" == "$target" && "$handlers" =~ (^|[[:space:]])js[0-9]+([[:space:]]|$) ]]; then
+                    echo "1"
+                    return 0
+                fi
+                ;;
+            "")
+                vendor=""
+                product=""
+                ;;
+        esac
+    done < /proc/bus/input/devices
+
+    echo "0"
 }
 
 cleanup() {
@@ -38,6 +81,7 @@ fi
 trap cleanup EXIT INT TERM
 
 declare -A last_seen=()
+controller_last_connected=""
 
 while true; do
     declare -A current_seen=()
@@ -69,6 +113,24 @@ while true; do
     for dir in "${!current_seen[@]}"; do
         last_seen["$dir"]=1
     done
+
+    if [[ "$CONTROLLER_SLEEP_ENABLED" == "1" ]]; then
+        controller_now_connected="$(is_configured_controller_connected)"
+
+        if [[ "$controller_last_connected" == "1" && "$controller_now_connected" == "0" ]]; then
+            log "Configured controller ($CONTROLLER_VENDOR_ID:$CONTROLLER_PRODUCT_ID) disconnected. Suspending system."
+            output="$(systemctl suspend 2>&1)"
+            rc=$?
+
+            if [[ "$rc" -eq 0 ]]; then
+                log "System suspend command completed successfully."
+            else
+                log "Failed to suspend system. rc=$rc output=$output"
+            fi
+        fi
+
+        controller_last_connected="$controller_now_connected"
+    fi
 
     sleep "$POLL_INTERVAL"
 done
