@@ -189,6 +189,29 @@ public class InstallSdShortcutUseCaseTests
     }
 
     [Fact]
+    public void Execute_CopiesIconIntoSteamGridFolder_InsteadOfPointingAtTheSdCard()
+    {
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddDirectory("/sd");
+        fileSystem.AddFile("/sd/steam-shortcut.json", "{}");
+        fileSystem.AddFile("/sd/steam-artwork/icon.png", "icon-bytes");
+
+        var manifestRepository = new FakeShortcutManifestRepository { Result = true, Manifest = ValidManifest() };
+        var identityStore = new FakeShortcutIdentityStore { GetOrCreateResult = true, GetOrCreateGuid = Guid.NewGuid().ToString("D") };
+        var shortcutRepository = new FakeShortcutRepository();
+        var configStore = ValidConfigStore();
+
+        var useCase = CreateUseCase(configStore, shortcutRepository, identityStore, manifestRepository, fileSystem);
+        var result = useCase.Execute("/sd", restartSteam: false);
+
+        Assert.Equal(0, result.ExitCode);
+        var icon = shortcutRepository.Entries[0].Icon;
+        Assert.DoesNotContain("/sd/", icon);
+        Assert.StartsWith("/steam/userdata/111/config/grid/", icon);
+        Assert.True(fileSystem.FileExists(icon));
+    }
+
+    [Fact]
     public void Execute_AttemptsSteamRestart_WhenRequested()
     {
         var fileSystem = new FakeFileSystem();

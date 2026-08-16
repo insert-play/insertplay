@@ -23,6 +23,23 @@ public sealed class SteamArtworkInstaller(IFileSystem fileSystem)
         return copied;
     }
 
+    /// <summary>
+    /// Copies a shortcut's icon into Steam's grid folder so it keeps working after its
+    /// original source (e.g. a removable SD card) is no longer available.
+    /// </summary>
+    public string? ApplyIcon(string steamPath, string userId, uint appId, string? sourceIconPath)
+    {
+        if (string.IsNullOrWhiteSpace(sourceIconPath) || !fileSystem.FileExists(sourceIconPath))
+            return null;
+
+        var gridDir = Path.Combine(steamPath, "userdata", userId, "config", "grid");
+        fileSystem.CreateDirectory(gridDir);
+
+        var destination = Path.Combine(gridDir, $"{appId}_icon{Path.GetExtension(sourceIconPath)}");
+        fileSystem.CopyFile(sourceIconPath, destination, overwrite: true);
+        return destination;
+    }
+
     private int CopyIfExists(string? source, string destination)
     {
         if (string.IsNullOrWhiteSpace(source) || !fileSystem.FileExists(source))

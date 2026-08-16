@@ -36,4 +36,29 @@ public class SteamArtworkInstallerTests
 
         Assert.Equal(0, copied);
     }
+
+    [Fact]
+    public void ApplyIcon_CopiesIconIntoGridFolder_PreservingExtension()
+    {
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddFile("/sd/icon.png", "icon-bytes");
+
+        var installer = new SteamArtworkInstaller(fileSystem);
+
+        var destination = installer.ApplyIcon("/steam", "12345", 999u, "/sd/icon.png");
+
+        Assert.Equal("/steam/userdata/12345/config/grid/999_icon.png", destination);
+        Assert.True(fileSystem.FileExists("/steam/userdata/12345/config/grid/999_icon.png"));
+    }
+
+    [Fact]
+    public void ApplyIcon_ReturnsNull_WhenSourceIconIsMissing()
+    {
+        var fileSystem = new FakeFileSystem();
+        var installer = new SteamArtworkInstaller(fileSystem);
+
+        var destination = installer.ApplyIcon("/steam", "12345", 999u, "/sd/missing-icon.png");
+
+        Assert.Null(destination);
+    }
 }

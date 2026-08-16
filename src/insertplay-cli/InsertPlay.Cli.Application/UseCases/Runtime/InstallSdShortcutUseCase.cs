@@ -62,8 +62,14 @@ public sealed class InstallSdShortcutUseCase(
             if (!identityStore.TryGetOrCreate(sdRoot, appName, shortcut.Guid, out var shortcutGuid, out var identityError))
                 return InstallSdShortcutResult.Error(identityError, 12);
 
-            var iconPath = ResolveArtworkPath(
+            var sdIconPath = ResolveArtworkPath(
                 sdRoot, shortcut.Artwork?.Icon, "steam-artwork/icon.png", "insertplay/steam-artwork/icon.png");
+
+            var appId = AppIdCalculator.Calculate(exe, appName);
+
+            // Copy the icon into Steam's grid folder rather than pointing at the SD card file
+            // directly, so the icon keeps working after the SD card is removed.
+            var iconPath = artworkInstaller.ApplyIcon(cfg!.SteamPath, cfg.SteamUserId, appId, sdIconPath) ?? string.Empty;
 
             var entry = new SteamShortcutEntry
             {
@@ -75,11 +81,10 @@ public sealed class InstallSdShortcutUseCase(
                 IsHidden = true
             };
 
-            var ok = shortcutRepository.AddOrUpdate(cfg!.SteamPath, cfg.SteamUserId, entry, out var message);
+            var ok = shortcutRepository.AddOrUpdate(cfg.SteamPath, cfg.SteamUserId, entry, out var message);
             if (!ok)
                 return InstallSdShortcutResult.Error(message, 13);
 
-            var appId = AppIdCalculator.Calculate(exe, appName);
             var gameId = GameIdCalculator.Calculate(appId);
 
             var artwork = new SteamArtworkPaths(
