@@ -147,6 +147,22 @@ ensure_steam_shortcut_manifest() {
   log "Copied default steam-shortcut.json to SD root: $manifest_root"
 }
 
+sync_installer_assets_to_sd() {
+  local sd_root="$1"
+  local publish_assets_dir="$PUBLISH_DIR/assets"
+  local sd_assets_dir="$sd_root/assets"
+
+  if [[ ! -d "$publish_assets_dir" ]]; then
+    log "Warning: publish assets directory not found: $publish_assets_dir"
+    return 0
+  fi
+
+  rm -rf "$sd_assets_dir"
+  mkdir -p "$sd_assets_dir"
+  cp -a "$publish_assets_dir"/. "$sd_assets_dir"/
+  log "Copied installer assets to SD root: $sd_assets_dir"
+}
+
 ensure_shortcut_identity_guid() {
   local sd_root="$1"
   local identity_root="$sd_root/shortcut-identity.json"
@@ -210,6 +226,7 @@ restore_sd_user_assets "$TARGET_INSERTPLAY_DIR" "$SD_ASSET_BACKUP_DIR"
 rmdir "$SD_ASSET_BACKUP_DIR" 2>/dev/null || rm -rf "$SD_ASSET_BACKUP_DIR"
 
 ensure_steam_shortcut_manifest "$TARGET_MOUNTPOINT"
+sync_installer_assets_to_sd "$TARGET_MOUNTPOINT"
 ensure_shortcut_identity_guid "$TARGET_MOUNTPOINT"
 
 for sdcard_script in autorun.sh install-shortcut.sh insertplay-guid-guard.sh; do
