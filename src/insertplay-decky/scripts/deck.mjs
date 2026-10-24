@@ -114,7 +114,10 @@ async function check(cfg) {
   add("ssh sem senha", s.code === 0, s.code === 0 ? `SteamOS ${facts.os} (${facts.device})` : s.err);
   if (s.code === 0) {
     add("Decky (plugin_loader)", facts.loader === "active", facts.loader);
-    add("deploy sem senha", facts.deploy === "liberado", facts.deploy === "liberado" ? DEPLOY : "rode o setup-access (README)");
+    if (facts.deploy === "liberado") add("deploy sem senha", true, DEPLOY);
+    // em prod o plugin chega pelo fluxo real (zip do cartão); sem a liberação é o esperado
+    else if (cfg.role === "prod") add("deploy sem senha", true, "não usado em prod");
+    else add("deploy sem senha", false, "rode o setup-access (README)");
     add("plugin InsertPlay", true, facts.plugin);
     add("serviço antigo desligado", facts.old_service !== "enabled", facts.old_service);
   }
