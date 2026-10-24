@@ -147,6 +147,9 @@ try {
 console.table(checks);
 for (const file of screens) console.log(`screenshot: ${file}`);
 const out = join(ROOT, "out", "spike-result.json");
+// o relatório importa justamente quando o spike falha antes de qualquer screenshot
+// (que era quem criava out/)
+mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, JSON.stringify({ host, date: new Date().toISOString(), checks, screens }, null, 2));
 console.log(`Resultado salvo em ${out}`);
 process.exit(checks.every((c) => c.ok !== "FALHOU") ? 0 : 1);

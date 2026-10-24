@@ -14,7 +14,7 @@ function Panel() {
 
   const refresh = useCallback(async () => {
     const [c, s, l] = await Promise.all([currentCards(), getSettings(), logTail(8)]);
-    setCards(c);
+    if (Array.isArray(c)) setCards(c); // null = backend ainda varrendo; mantém o que havia
     setSettings(s);
     setLog(l);
   }, []);

@@ -63,19 +63,6 @@ export function shortcutExists(appid: number): boolean {
   return Boolean(apps()?.GetAppOverviewByAppID?.(appid));
 }
 
-/** Atalho local cujo nome bate exatamente — para adotar um atalho criado antes pelo
- *  CLI (shortcuts.vdf) em vez de duplicá-lo. Só adota quando há um único candidato. */
-export function findShortcutByName(name: string): number | null {
-  const wanted = name.trim().toLowerCase();
-  const found = (Array.from(apps()?.allApps ?? []) as any[]).filter(
-    (app) =>
-      (app.display_name ?? "").trim().toLowerCase() === wanted &&
-      typeof app.BIsShortcut === "function" &&
-      app.BIsShortcut(),
-  );
-  return found.length === 1 ? found[0].appid : null;
-}
-
 export async function addShortcut(spec: ShortcutSpec): Promise<number> {
   const apps = client()?.Apps;
   const appid: number = await method(apps, "AddShortcut", "SteamClient.Apps.AddShortcut")(

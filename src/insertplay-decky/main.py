@@ -15,15 +15,22 @@ from insertplay_decky.manifest import CardError, load_card  # noqa: E402
 from insertplay_decky.store import EventLog, Registry, Settings  # noqa: E402
 
 POLL_SECONDS = 1.0
+READY_TIMEOUT_SECONDS = 15.0
 
 
 def guarded(fallback):
-    """Exceção numa RPC vira resposta vazia + linha no log, nunca um plugin travado."""
+    """Exceção numa RPC vira resposta vazia + linha no log, nunca um plugin travado.
+
+    Toda RPC espera o `_main` terminar a primeira varredura: o Decky atende RPCs em
+    paralelo com o `_main`, e antes disso `mounted` e o registro não existem. Responder
+    "nenhum cartão" ou "registro vazio" nessa janela fazia o frontend ocultar o cartão
+    presente ou criar um atalho duplicado (review do PR #2)."""
 
     def wrap(method):
         @functools.wraps(method)
         async def inner(self, *args, **kwargs):
             try:
+                await self._wait_ready()
                 return await method(self, *args, **kwargs)
             except Exception as exc:
                 decky.logger.exception("InsertPlay: %s failed", method.__name__)
@@ -50,6 +57,17 @@ def _describe(card: dict) -> dict:
 
 
 class Plugin:
+    # atributo de classe: existe antes de o `_main` rodar, quando as RPCs já chegam
+    ready = False
+
+    async def _wait_ready(self):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + READY_TIMEOUT_SECONDS
+        while not self.ready:
+            if loop.time() > deadline:
+                raise TimeoutError("initial card scan did not finish")
+            await asyncio.sleep(0.1)
+
     def _setup(self):
         settings_dir = decky.DECKY_PLUGIN_SETTINGS_DIR
         self.registry = Registry(os.path.join(settings_dir, "registry.json"))
@@ -64,6 +82,7 @@ class Plugin:
         # com current_cards() e reconcilia sem auto-launch. Assim reiniciar o
         # plugin_loader com o cartão inserido não inicia o jogo sozinho.
         self.mounted = {c["real"]: c for c in await asyncio.to_thread(cards.find_cards, cards.default_media_roots())}
+        self.ready = True
         self.watcher = asyncio.get_event_loop().create_task(self._watch())
         decky.logger.info("InsertPlay: started with %d card(s)", len(self.mounted))
 
@@ -91,7 +110,9 @@ class Plugin:
                 decky.logger.exception("InsertPlay: watcher iteration failed")
             await asyncio.sleep(POLL_SECONDS)
 
-    @guarded(list)
+    # fallback None, não []: "não sei" não pode parecer "nenhum cartão" (o frontend oculta
+    # os atalhos de todo cartão que não está na lista)
+    @guarded(lambda: None)
     async def current_cards(self) -> list:
         return [await asyncio.to_thread(_describe, c) for c in self.mounted.values()]
 
@@ -105,11 +126,12 @@ class Plugin:
         with open(real, "rb") as f:
             return base64.b64encode(f.read()).decode("ascii")
 
-    @guarded(dict)
+    # None, não {}: um registro "vazio" por falha faria o frontend criar atalhos duplicados
+    @guarded(lambda: None)
     async def registry_all(self) -> dict:
         return self.registry.all()
 
-    @guarded(dict)
+    @guarded(lambda: None)
     async def registry_put(self, guid: str, record: dict) -> dict:
         return self.registry.put(guid, record)
 

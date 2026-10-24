@@ -89,6 +89,12 @@ O primeiro comando envia o instalador. O segundo pede a senha do deck uma vez e 
 
 Para desfazer, no Deck: `sudo rm -rf /etc/insertplay-dev /etc/sudoers.d/zz-insertplay-dev`.
 
+O script valida e instala uma cópia privada do root, nunca os arquivos que o usuário `deck` ainda pode alterar. Limite conhecido: `~/homebrew` pertence ao `deck` por design do Decky, e com essa posse o `deck` já controla o que o Decky (root) carrega no boot. O script não cria esse risco, mas também não o elimina. Use essa liberação só no aparelho de desenvolvimento.
+
+Rode `setup-access` e o comando `ssh -t … install-dev-access.sh` de novo quando:
+- **o SteamOS atualizar**: a atualização apaga `/etc/insertplay-dev` e `/etc/sudoers.d/zz-insertplay-dev` (medido na 3.8.28 → 3.9.5). O `check` mostra "deploy sem senha: FALHOU";
+- `scripts/deck-setup/` mudar: o Deck usa a cópia instalada em `/etc/insertplay-dev`.
+
 As funções do Steam que o plugin usa já foram conferidas no seu Deck com `node scripts/spike.mjs` (resultado em [docs/steam-api-notes.md](docs/steam-api-notes.md)). Rode de novo depois de atualizações do Steam.
 
 ### Passo 6: instalar o plugin

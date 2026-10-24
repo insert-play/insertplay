@@ -29,10 +29,14 @@ export interface LogEntry {
   message: string;
 }
 
-export const currentCards = callable<[], Card[]>("current_cards");
+/** `null` = o backend ainda não terminou a primeira varredura; não é "nenhum cartão". */
+export const currentCards = callable<[], Card[] | null>("current_cards");
 export const artworkBase64 = callable<[path: string], string>("artwork_base64");
-export const registryAll = callable<[], Record<string, RegistryRecord>>("registry_all");
-export const registryPut = callable<[guid: string, record: Partial<RegistryRecord>], RegistryRecord>("registry_put");
+/** `null` = falha no backend; nunca tratar como registro vazio (geraria duplicados). */
+export const registryAll = callable<[], Record<string, RegistryRecord> | null>("registry_all");
+export const registryPut = callable<[guid: string, record: Partial<RegistryRecord>], RegistryRecord | null>(
+  "registry_put",
+);
 export const getSettings = callable<[], Settings>("get_settings");
 export const setSetting = callable<[key: keyof Settings, value: boolean], Settings>("set_setting");
 export const logAdd = callable<[kind: string, message: string], void>("log_add");

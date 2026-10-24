@@ -1,6 +1,7 @@
 import { toaster } from "@decky/api";
 import {
   Card,
+  RegistryRecord,
   artworkBase64,
   currentCards,
   getSettings,
@@ -11,7 +12,6 @@ import {
 import {
   addShortcut,
   applyArtwork,
-  findShortcutByName,
   runGame,
   setHidden,
   shortcutExists,
@@ -51,14 +51,18 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
     startDir: card.startDir ?? card.mount,
     launchOptions: card.launchOptions ?? "",
   };
-  const known = (await registryAll())[card.guid];
-  let appid = known && shortcutExists(known.appid) ? known.appid : null;
+  // Só o registro associa um atalho a um cartão, sempre pelo guid. Adotar por nome
+  // sobrescrevia atalhos alheios com o mesmo nome e fazia dois cartões homônimos
+  // dividirem um atalho (review do PR #2). Um appid que outro guid também reivindica
+  // não é confiável: criamos um atalho próprio.
+  const registry = await loadRegistry();
+  const known = registry[card.guid];
+  const claimedByOther =
+    known !== undefined &&
+    Object.entries(registry).some(([guid, record]) => guid !== card.guid && record.appid === known.appid);
+  let appid = known && !claimedByOther && shortcutExists(known.appid) ? known.appid : null;
   let created = false;
 
-  if (appid === null) {
-    appid = findShortcutByName(card.appName);
-    if (appid !== null) await logAdd("adopt", `${card.appName}: adopted existing shortcut ${appid}`);
-  }
   if (appid === null) {
     appid = await addShortcut(spec);
     created = true;
@@ -73,7 +77,7 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
     if (failed.length) await logAdd("error", `${card.appName}: artwork failed: ${failed.join("; ")}`);
     artworkApplied = failed.length === 0;
   }
-  await registryPut(card.guid, { appid, appName: card.appName, artworkApplied });
+  await saveRecord(card.guid, { appid, appName: card.appName, artworkApplied });
   setHidden(appid, false);
 
   if (launch && (await getSettings()).autoLaunch) {
@@ -90,11 +94,38 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
  *  backend em vez de lembrar mount→guid aqui: o frontend recarrega sem o backend
  *  saber, e o backend já atualizou a lista antes de emitir a remoção. */
 async function hideAbsent(): Promise<void> {
-  const present = new Set((await currentCards()).map((c) => c.guid).filter(Boolean));
-  for (const [guid, record] of Object.entries(await registryAll())) {
-    if (present.has(guid) || !shortcutExists(record.appid)) continue;
+  const present = new Set((await presentCards()).map((c) => c.guid).filter(Boolean));
+  const registry = Object.entries(await loadRegistry());
+  // um appid que um cartão PRESENTE usa nunca é ocultado, mesmo que outro guid
+  // (ausente) aponte para ele num registro antigo
+  const presentAppids = new Set(registry.filter(([guid]) => present.has(guid)).map(([, r]) => r.appid));
+  for (const [guid, record] of registry) {
+    if (present.has(guid) || presentAppids.has(record.appid) || !shortcutExists(record.appid)) continue;
     setHidden(record.appid, true);
   }
+}
+
+/** Cartões montados agora. `null` do backend = ele ainda não terminou a primeira
+ *  varredura (ou falhou): seguir com "nenhum cartão" ocultaria o atalho do cartão
+ *  que está no leitor, então lançamos e a operação aparece como erro. */
+async function presentCards(): Promise<Card[]> {
+  const cards = await currentCards();
+  if (!Array.isArray(cards)) throw new Error("backend has not finished scanning for cards");
+  return cards;
+}
+
+/** Registro guid → appid. Falha do backend lança: tratar como vazio faria cada
+ *  cartão parecer novo e ganhar um atalho duplicado. */
+async function loadRegistry(): Promise<Record<string, RegistryRecord>> {
+  const registry = await registryAll();
+  if (!registry || typeof registry !== "object") throw new Error("could not read the shortcut registry");
+  return registry;
+}
+
+/** Gravação que falha em silêncio perderia o vínculo guid → appid e a próxima
+ *  inserção criaria outro atalho; por isso lança. */
+async function saveRecord(guid: string, record: Partial<RegistryRecord>): Promise<void> {
+  if (!(await registryPut(guid, record))) throw new Error(`could not save the registry entry for ${guid}`);
 }
 
 async function report(what: string, err: unknown): Promise<void> {
@@ -119,7 +150,7 @@ export const onRemoved = (card: { mount: string; label: string }) =>
  *  não inicia nada. */
 export const reconcile = () =>
   enqueue(async () => {
-    const cards = await currentCards();
+    const cards = await presentCards();
     for (const card of cards) await ensureCard(card, false);
     await hideAbsent();
     // sem esta linha, "reconciliou certo" e "nem rodou" ficam iguais no log
@@ -129,7 +160,7 @@ export const reconcile = () =>
 /** Botão "Reinstalar atalho": força nova aplicação das artes. */
 export const reinstall = (card: Card) =>
   enqueue(async () => {
-    if (card.guid) await registryPut(card.guid, { artworkApplied: false });
+    if (card.guid) await saveRecord(card.guid, { artworkApplied: false });
     await ensureCard(card, false);
   }).catch((err) => report(`Reinstalação de ${card.label}`, err));
 

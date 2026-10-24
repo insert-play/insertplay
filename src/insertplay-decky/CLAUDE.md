@@ -49,6 +49,7 @@ Outros:
 - Não mexa em outros plugins do Decky (`~/homebrew/plugins/*` além de `InsertPlay`).
 - Não inicie jogos reais do usuário. `RunGame` só em atalho de teste ou num cartão InsertPlay que o usuário pediu para testar.
 - Não tente obter root fora do `deploy-plugin.sh`, não peça a senha do usuário e não altere a regra de sudo. Se faltar permissão, explique e deixe o passo para o usuário.
+- **Atualização do SteamOS apaga a liberação de deploy** (`/etc/insertplay-dev`, `/etc/sudoers.d/zz-insertplay-dev`). Se o `check` mostrar "deploy sem senha: FALHOU", rode `setup-access` e peça ao usuário o comando `ssh -t … install-dev-access.sh`. Depois de uma atualização, rode também o `spike.mjs`: a API do Steam pode ter mudado.
 - O `deploy-plugin.sh` recusa `plugin.json` com a flag `root`. Não contorne isso; o backend precisa rodar como usuário comum.
 - Inserir e remover cartão SD é físico: peça ao usuário e confira com `logs` ou `eval`.
 - **Reiniciar o Steam** (para testar a inicialização): `eval "(SteamClient.User.StartRestart(false), true)"`.
