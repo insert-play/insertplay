@@ -1,0 +1,11 @@
+{
+  "name": "InsertPlay",
+  "author": "InsertPlay",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["library", "non-steam", "sd-card"],
+    "description": "Insert an InsertPlay SD card and its game appears in the Steam library and starts; remove it and the game is hidden.",
+    "image": ""
+  }
+}

@@ -8,6 +8,7 @@
    - InsertPlay.Cli.Tests: xUnit unit tests (fakes for Application's abstractions, plus round-trip tests for the VDF binary format and the runtime .env file format)
  - src/insertplay-service: scripts sh that implements insertplay service (insertplay-service.sh and insertplay-start-bootstrap.sh)
  - src/insertplay-sdcard: scripts sh used on sd cards (autorun.sh, insertplay-start.sh, install-shortcut.sh)
+ - src/insertplay-decky: Decky Loader plugin (POC) that detects InsertPlay SD cards and creates/hides/launches their Steam shortcuts at runtime, without restarting Steam (replaces insertplay-service when installed)
  - src/publish.sh: script used to publish insertplay to 'publish' folder
  - src/build-sd-card.sh: script used to build and copy insertplay to sd-card
 
