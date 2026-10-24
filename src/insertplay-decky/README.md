@@ -1,6 +1,6 @@
 # InsertPlay: plugin Decky (POC)
 
-Insira um cartão InsertPlay: o atalho do jogo aparece na biblioteca com as artes do próprio cartão e o jogo inicia. Remova o cartão: o atalho é ocultado (opção "Ocultar ao remover o cartão" no painel). Jogos no cartão inserido levam um badge de cartão SD na capa: os atalhos do InsertPlay e os jogos Steam instalados numa biblioteca do cartão. Tudo isso sem reiniciar o Steam.
+Insira um cartão InsertPlay: o atalho do jogo aparece na biblioteca com as artes do próprio cartão e o jogo inicia. Remova o cartão: o atalho é ocultado (opção "Ocultar ao remover o cartão" no painel). Jogos no cartão inserido levam um badge de cartão SD na capa: os atalhos do InsertPlay e os jogos Steam instalados numa biblioteca do cartão. Um cartão com biblioteca Steam e sem manifesto InsertPlay também avisa ao entrar e sair e, com "Iniciar ao inserir", abre o jogo se o cartão tiver exatamente um e nenhum outro estiver aberto. Tudo isso sem reiniciar o Steam.
 
 O plugin **substitui o InsertPlay legado** (CLI em C#, `insertplay.service` e os atalhos criados no `shortcuts.vdf`). Se os dois rodarem juntos, o jogo é iniciado duas vezes. Num aparelho que tinha o legado, remova-o **antes** de instalar o plugin: veja [Remover o InsertPlay legado](#remover-o-insertplay-legado).
 

@@ -135,6 +135,12 @@ class Plugin:
         with open(real, "rb") as f:
             return base64.b64encode(f.read()).decode("ascii")
 
+    # None = "não sei": o frontend trata como cartão InsertPlay e não notifica nada
+    @guarded(lambda: None)
+    async def library_card(self, path: str) -> dict:
+        """Cartão de uma biblioteca Steam e se ele é um cartão InsertPlay (issue #10)."""
+        return await asyncio.to_thread(cards.library_card, path, cards.default_media_roots())
+
     @guarded(lambda: None)
     async def package_status(self) -> dict:
         """Versão instalada e, por cartão, a versão do pacote do plugin que ele traz."""
