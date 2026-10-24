@@ -101,6 +101,10 @@ def test_build_keeps_old_package_when_new_one_is_invalid(tmp_path):
         (valid_entries(name="Other"), "not the InsertPlay"),
         ({k: v for k, v in valid_entries().items() if not k.endswith("index.js")}, "dist/index.js"),
         (valid_entries(version="banana"), "invalid version"),
+        # extraídos por cima do plugin.json validado (review do PR #6)
+        ({**valid_entries(), "InsertPlay/./plugin.json": '{"name": "InsertPlay", "flags": ["root"]}'}, "unsafe"),
+        ({**valid_entries(), "InsertPlay//plugin.json": '{"name": "InsertPlay", "flags": ["root"]}'}, "unsafe"),
+        ({**valid_entries(), "C:/evil": ""}, "unsafe"),
     ],
 )
 def test_read_package_rejects_bad_zips(tmp_path, entries, message):
@@ -195,3 +199,110 @@ def test_write_does_not_reread_for_status(tmp_path, monkeypatch):
     pp.build_zip_from_dir(str(plugin), pp.card_package_path(str(mount)))
     monkeypatch.setattr(pp, "read_package", lambda p: pytest.fail("status re-read the zip"))
     assert pp.card_status(str(mount), "0.2.0")["relation"] == "same"
+
+
+POSIX = pytest.mark.skipif(not hasattr(os, "symlink") or os.name == "nt", reason="needs POSIX symlinks")
+
+
+def test_duplicate_entries_are_rejected(tmp_path):
+    path = tmp_path / "p.zip"
+    with pytest.warns(UserWarning):
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, data in valid_entries().items():
+                archive.writestr(name, data)
+            archive.writestr("InsertPlay/plugin.json", '{"name": "InsertPlay", "flags": ["root"]}')
+    with pytest.raises(PackageError, match="duplicate"):
+        pp.read_package(str(path))
+
+
+def test_backslash_names_are_rejected(tmp_path):
+    path = tmp_path / "p.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, data in valid_entries().items():
+            archive.writestr(name, data)
+        # ZipInfo("a\\b") vira "a/b" no Windows; o nome cru é o que um zip hostil traria
+        info = zipfile.ZipInfo("placeholder")
+        info.filename = "InsertPlay\\..\\evil.py"
+        archive.writestr(info, "")
+    with pytest.raises(PackageError, match="unsafe"):
+        pp.read_package(str(path))
+
+
+def test_directory_entries_are_allowed(tmp_path):
+    entries = {"InsertPlay/": "", "InsertPlay/dist/": "", **valid_entries()}
+    path = write_zip(tmp_path / "p.zip", entries)
+    assert pp.read_package(str(path))["version"] == "0.2.0"
+
+
+def test_corrupt_payload_member_is_rejected(tmp_path):
+    """CRC errado em main.py: só o JSON era lido e o zip passava (review do PR #6)."""
+    path = tmp_path / "p.zip"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as archive:
+        for name, data in {**valid_entries(), "InsertPlay/main.py": "print('ok')"}.items():
+            archive.writestr(name, data)
+    raw = path.read_bytes()
+    path.write_bytes(raw.replace(b"print('ok')", b"print('XX')", 1))
+    with pytest.raises(PackageError, match="corrupt file in zip: 'InsertPlay/main.py'"):
+        pp.read_package(str(path))
+
+
+def test_copy_package_to_card_never_downgrades(tmp_path):
+    mount = tmp_path / "SD1"
+    mount.mkdir()
+    old = write_zip(tmp_path / "old.zip", valid_entries("0.1.0"))
+    new = write_zip(tmp_path / "new.zip", valid_entries("0.2.0"))
+    info, copied = pp.copy_package_to_card(str(new), str(mount))
+    assert copied and info["version"] == "0.2.0"
+    info, copied = pp.copy_package_to_card(str(old), str(mount))
+    assert not copied and info["version"] == "0.2.0"
+    assert pp.read_package(pp.card_package_path(str(mount)))["version"] == "0.2.0"
+
+
+def test_copy_package_to_card_replaces_invalid_package(tmp_path):
+    mount = tmp_path / "SD1"
+    dest = mount / "insertplay" / "decky" / "InsertPlay.zip"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"broken")
+    src = write_zip(tmp_path / "new.zip", valid_entries("0.1.0"))
+    assert pp.copy_package_to_card(str(src), str(mount))[1]
+
+
+def test_write_card_package_refuses_a_file_where_the_folder_should_be(tmp_path):
+    mount = tmp_path / "SD1"
+    (mount / "insertplay").mkdir(parents=True)
+    (mount / "insertplay" / "decky").write_text("not a dir", encoding="utf-8")
+    with pytest.raises(PackageError, match="not a directory"):
+        pp.write_card_package(str(make_plugin_dir(tmp_path)), str(mount))
+
+
+@POSIX
+@pytest.mark.parametrize("linked", ["insertplay", "insertplay/decky"])
+def test_write_card_package_refuses_symlinked_folders(tmp_path, linked):
+    """`insertplay` ou `decky` como symlink levaria a gravação para fora do cartão."""
+    mount = tmp_path / "SD1"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = mount / linked
+    link.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(outside, link)
+    with pytest.raises(PackageError, match="symlink"):
+        pp.write_card_package(str(make_plugin_dir(tmp_path)), str(mount))
+    assert os.listdir(outside) == []
+
+
+@POSIX
+def test_write_card_package_does_not_follow_links_in_the_folder(tmp_path):
+    """Um `.tmp` de nome fixo ou o próprio zip como symlink não podem truncar o alvo."""
+    plugin = make_plugin_dir(tmp_path)
+    mount = tmp_path / "SD1"
+    folder = mount / "insertplay" / "decky"
+    folder.mkdir(parents=True)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me", encoding="utf-8")
+    os.symlink(victim, folder / "InsertPlay.zip.tmp")
+    os.symlink(victim, folder / "InsertPlay.zip")
+    info = pp.write_card_package(str(plugin), str(mount))
+    assert victim.read_text(encoding="utf-8") == "keep me"
+    assert not os.path.islink(folder / "InsertPlay.zip")
+    assert os.stat(folder / "InsertPlay.zip").st_mode & 0o777 == 0o644
+    assert pp.read_package(str(folder / "InsertPlay.zip"))["sha256"] == info["sha256"]

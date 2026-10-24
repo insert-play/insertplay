@@ -152,8 +152,7 @@ class Plugin:
         if real not in self.mounted:
             raise PermissionError(f"{mount} is not the root of a mounted card")
         card_mount = self.mounted[real]["mount"]
-        dest = plugin_package.card_package_path(card_mount)
-        written = await asyncio.to_thread(plugin_package.build_zip_from_dir, decky.DECKY_PLUGIN_DIR, dest)
+        written = await asyncio.to_thread(plugin_package.write_card_package, decky.DECKY_PLUGIN_DIR, card_mount)
         self.log.add("package", f"{card_mount}: wrote plugin v{written['version']}")
         # build_zip_from_dir já deixou o resultado no cache: isto não relê o zip
         return await asyncio.to_thread(plugin_package.card_status, card_mount, decky.DECKY_PLUGIN_VERSION)
