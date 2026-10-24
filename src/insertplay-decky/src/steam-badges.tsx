@@ -25,6 +25,10 @@ let appids = new Set<string>();
 let doc: Document | null = null;
 let observer: MutationObserver | null = null;
 let frame = 0;
+/** Depois do stopBadges, nada desenha de novo. Um refresh que já estava a caminho
+ *  (RPC em andamento, fila do flow.ts) recriaria observer e badges ao lado dos da
+ *  próxima carga do plugin. Cada carga traz este módulo novo, então a flag não volta. */
+let stopped = false;
 
 /** Desenhado aqui, não copiado do Font Awesome (que exige atribuição): corpo com o
  *  canto superior esquerdo cortado e quatro contatos. */
@@ -87,7 +91,7 @@ function insertStyle(d: Document): void {
 
 /** Uma passada sobre os cards visíveis. Devolve quantos badges há no documento. */
 function markAll(d: Document): number {
-  const placed: HTMLElement[] = [];
+  const badges: HTMLElement[] = [];
   for (const capsule of Array.from(d.querySelectorAll(CAPSULES))) {
     const appid = appidOf(capsule);
     const existing = capsule.querySelector<HTMLElement>(`.${CLASS}`);
@@ -102,7 +106,10 @@ function markAll(d: Document): number {
     const target = (img?.parentElement ?? capsule) as HTMLElement;
     if (existing) {
       // o Steam reaproveita cards ao rolar: o badge pode estar no lugar errado
-      if (existing.parentElement === target && existing.dataset.appid === appid) continue;
+      if (existing.parentElement === target && existing.dataset.appid === appid) {
+        badges.push(existing);
+        continue;
+      }
       existing.remove();
     }
     if (getComputedStyle(target).position === "static") target.style.position = "relative";
@@ -112,25 +119,31 @@ function markAll(d: Document): number {
     badge.dataset.pos = "bottom";
     badge.innerHTML = ICON;
     target.appendChild(badge);
-    placed.push(badge);
+    badges.push(badge);
   }
   // Geometria só depois de todas as escritas: intercalar "insere badge / lê retângulo"
   // força um recálculo de layout por badge. Foi isso que travou o Steam Machine.
+  // Mede a CAPA, não o badge: assim o canto certo sai da mesma conta para badge novo e
+  // reaproveitado, esteja ele embaixo ou em cima agora.
   const clips = new Map<Element, DOMRect>();
-  const flips: HTMLElement[] = [];
-  for (const badge of placed) {
+  const positions: Array<[HTMLElement, string]> = [];
+  for (const badge of badges) {
     const clip = badge.closest("[class*=ReactVirtualized]");
-    if (!clip) continue;
-    let rect = clips.get(clip);
-    if (!rect) {
-      rect = clip.getBoundingClientRect();
-      clips.set(clip, rect);
+    let pos = "bottom";
+    if (clip && badge.parentElement) {
+      let rect = clips.get(clip);
+      if (!rect) {
+        rect = clip.getBoundingClientRect();
+        clips.set(clip, rect);
+      }
+      // 6 px = distância do badge à borda (CSS acima)
+      if (badge.parentElement.getBoundingClientRect().bottom - 6 > rect.bottom) pos = "top";
     }
-    if (badge.getBoundingClientRect().bottom > rect.bottom) flips.push(badge);
+    positions.push([badge, pos]);
   }
   // canto de baixo cortado (tela inicial): o badge sobe para o canto de cima
-  for (const badge of flips) badge.dataset.pos = "top";
-  return d.querySelectorAll(`.${CLASS}`).length;
+  for (const [badge, pos] of positions) if (badge.dataset.pos !== pos) badge.dataset.pos = pos;
+  return badges.length;
 }
 
 function attach(d: Document): void {
@@ -167,14 +180,32 @@ function detach(): void {
   doc = null;
 }
 
-/** Troca o conjunto de jogos com badge e redesenha. Sem argumento, só redesenha com o
- *  conjunto atual (gatilho de navegação). Devolve quantos badges há na tela, ou 0 se a
- *  janela da biblioteca não estiver aberta. */
-export function showBadges(ids?: Iterable<number>): number {
+/** Sem janela da biblioteca (Steam iniciando, ou o gatilho da rota rodou antes de os
+ *  cards existirem), tenta de novo a cada segundo por até um minuto. Cada gatilho novo
+ *  recomeça a contagem. */
+const RETRY_MS = 1000;
+const RETRY_LIMIT = 60;
+let retry: ReturnType<typeof setTimeout> | null = null;
+let retries = 0;
+
+function scheduleRetry(): void {
+  if (retry || retries >= RETRY_LIMIT) return;
+  retries += 1;
+  retry = setTimeout(() => {
+    retry = null;
+    draw();
+  }, RETRY_MS);
+}
+
+function draw(): number {
+  if (stopped) return 0;
   try {
-    if (ids) appids = new Set(Array.from(ids, String));
     const d = bigPictureDocument();
-    if (!d) return 0;
+    if (!d) {
+      scheduleRetry();
+      return 0;
+    }
+    retries = 0;
     attach(d);
     insertStyle(d);
     return markAll(d);
@@ -183,9 +214,22 @@ export function showBadges(ids?: Iterable<number>): number {
   }
 }
 
+/** Troca o conjunto de jogos com badge e redesenha. Sem argumento, só redesenha com o
+ *  conjunto atual (gatilho de navegação). Devolve quantos badges há na tela, ou 0 se a
+ *  janela da biblioteca não estiver aberta. */
+export function showBadges(ids?: Iterable<number>): number {
+  if (stopped) return 0;
+  if (ids) appids = new Set(Array.from(ids, String));
+  retries = 0;
+  return draw();
+}
+
 /** Remove badges, estilo e observer. Sem isto, observer e estilo sobrevivem ao reload
  *  do plugin no documento da biblioteca. */
 export function stopBadges(): void {
+  stopped = true;
+  if (retry) clearTimeout(retry);
+  retry = null;
   detach();
   appids = new Set();
 }
