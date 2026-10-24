@@ -24,7 +24,7 @@ import {
   setSetting,
   writePackageToCard,
 } from "./backend";
-import { applyHideRemoved, launchCard, onInserted, onRemoved, reconcile, refreshBadges, reinstall } from "./flow";
+import { applyHideRemoved, launchCard, onInserted, onRemoved, onSteamLibrariesChanged, reconcile, reinstall } from "./flow";
 import { InstallType, installFromCard, notifyNewerPackage } from "./selfupdate";
 import { onInstallFoldersChanged } from "./steam";
 import { showBadges, stopBadges } from "./steam-badges";
@@ -214,8 +214,8 @@ export default definePlugin(() => {
   });
   const removed = addEventListener<[{ mount: string; label: string }]>("card_removed", (card) => void onRemoved(card));
   // Cartão com biblioteca Steam e sem manifesto InsertPlay não gera evento do backend:
-  // quem avisa é o Steam.
-  const stopFolders = onInstallFoldersChanged(() => void refreshBadges());
+  // quem avisa é o Steam, para o badge e para a notificação (issue #10).
+  const stopFolders = onInstallFoldersChanged(() => void onSteamLibrariesChanged());
   // A janela da biblioteca pode não existir quando o plugin carrega (jogo aberto, Steam
   // iniciando). Entrar na biblioteca é o gatilho para prender os badges nela.
   const libraryPatch = routerHook.addPatch("/library", (tree: unknown) => {
@@ -223,6 +223,8 @@ export default definePlugin(() => {
     return tree;
   });
   void reconcile();
+  // retrato inicial das bibliotecas, mesmo que o Steam deixe de chamar o callback no registro
+  void onSteamLibrariesChanged();
   return {
     name: "InsertPlay",
     titleView: <div className={staticClasses.Title}>InsertPlay</div>,

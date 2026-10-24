@@ -10,6 +10,7 @@
 
 declare const appStore: any;
 declare const collectionStore: any;
+declare const SteamUIStore: any;
 // Tipado como `any` de propósito: nem todas as versões de @decky/ui declaram o global,
 // e as assinaturas reais são as que o passo 0 medir no Deck.
 declare const SteamClient: any;
@@ -130,22 +131,45 @@ export async function applyArtwork(
   return failed;
 }
 
-/** Appids dos jogos Steam instalados numa biblioteca em mídia removível montada agora.
+export interface RemovableLibrary {
+  path: string;
+  apps: number[];
+}
+
+/** Lista de bibliotecas já carregada. Medido no Deck ao reiniciar o Steam: ela vem
+ *  vazia no começo e, ~3 s depois, aparece inteira de uma vez e sem aviso do Steam.
+ *  A pasta padrão sempre existe, então lista sem ela = ainda carregando. Usar a lista
+ *  vazia como retrato faria o cartão já inserido parecer inserção no próximo aviso. */
+async function installFolders(timeoutMs = 60_000): Promise<any[]> {
+  const get = method(client()?.InstallFolder, "GetInstallFolders", "SteamClient.InstallFolder.GetInstallFolders");
+  const start = Date.now();
+  for (;;) {
+    const folders: any[] = await get();
+    if (Array.isArray(folders) && folders.some((f) => f?.bIsDefaultFolder)) return folders;
+    if (Date.now() - start > timeoutMs) throw new Error("Steam library folders did not finish loading");
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+/** Bibliotecas Steam em mídia removível montada agora, com os appids instalados.
  *
  *  Medido no Deck (2026-10-24, SteamOS 3.9.5): cada biblioteca que o Steam já viu vira
  *  uma pasta em `GetInstallFolders()`, montada ou não. A do cartão no leitor tem
  *  `bIsMounted: true` e `bIsFixed: false`. As de cartões ausentes continuam na lista
  *  com `bIsMounted: false` e os appids que tinham, por isso o filtro é obrigatório. */
-export async function removableLibraryApps(): Promise<number[]> {
-  const folders: any[] = await method(
-    client()?.InstallFolder,
-    "GetInstallFolders",
-    "SteamClient.InstallFolder.GetInstallFolders",
-  )();
+export async function removableLibraries(): Promise<RemovableLibrary[]> {
+  const folders = await installFolders();
   return folders
-    .filter((f) => f?.bIsMounted && !f.bIsFixed && !f.bIsDefaultFolder)
-    .flatMap((f) => (f.vecApps ?? []).map((a: any) => Number(a?.nAppID)))
-    .filter((appid) => appid > 0);
+    .filter((f) => f?.bIsMounted && !f.bIsFixed && !f.bIsDefaultFolder && f.strFolderPath)
+    .map((f) => ({
+      path: String(f.strFolderPath),
+      apps: (f.vecApps ?? []).map((a: any) => Number(a?.nAppID)).filter((appid: number) => appid > 0),
+    }));
+}
+
+/** Appids dos jogos Steam instalados numa biblioteca em mídia removível montada agora. */
+export async function removableLibraryApps(): Promise<number[]> {
+  return (await removableLibraries()).flatMap((l) => l.apps);
 }
 
 /** Avisa quando bibliotecas entram, saem ou mudam de conteúdo. Devolve o cancelamento.
@@ -164,4 +188,21 @@ function gameIdOf(appid: number): string {
 
 export function runGame(appid: number): void {
   method(client()?.Apps, "RunGame", "SteamClient.Apps.RunGame")(gameIdOf(appid), "", -1, 100);
+}
+
+/** Jogo Steam: o overview não tem `m_gameid` (medido no Deck) e o gameid é o próprio
+ *  appid, sem os bits de atalho. */
+export function runSteamGame(appid: number): void {
+  method(client()?.Apps, "RunGame", "SteamClient.Apps.RunGame")(String(appid), "", -1, 100);
+}
+
+export function appName(appid: number): string {
+  return apps()?.GetAppOverviewByAppID?.(appid)?.display_name || `app ${appid}`;
+}
+
+/** Algum jogo aberto agora. Na dúvida (store ausente), responde que sim: o pior caso é
+ *  não iniciar sozinho. */
+export function gameRunning(): boolean {
+  const running = typeof SteamUIStore === "undefined" ? undefined : SteamUIStore?.RunningApps;
+  return !Array.isArray(running) || running.length > 0;
 }

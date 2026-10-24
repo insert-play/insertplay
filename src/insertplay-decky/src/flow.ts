@@ -5,16 +5,21 @@ import {
   artworkBase64,
   currentCards,
   getSettings,
+  libraryCard,
   logAdd,
   registryAll,
   registryPut,
 } from "./backend";
 import {
   addShortcut,
+  appName,
   applyArtwork,
+  gameRunning,
   isHidden,
+  removableLibraries,
   removableLibraryApps,
   runGame,
+  runSteamGame,
   setHidden,
   shortcutExists,
   updateShortcut,
@@ -176,6 +181,90 @@ export const onRemoved = (card: { mount: string; label: string }) =>
     toaster.toast({ title: TITLE, body: `Cartão ${card.label} removido` });
   })
     .catch((err) => report(`Remoção de ${card.label}`, err))
+    .finally(refreshBadges);
+
+/** Cartão com biblioteca Steam visto no último aviso do Steam, por pasta da biblioteca. */
+interface SteamCard {
+  mount: string;
+  label: string;
+  /** Também é cartão InsertPlay (ou o backend não soube dizer): o outro fluxo notifica. */
+  silent: boolean;
+  apps: number[];
+}
+
+/** `null` = ainda sem retrato. O primeiro aviso (o Steam chama o callback logo após o
+ *  registro) e a carga do plugin com o cartão inserido são estado inicial, não inserção. */
+let steamCards: Map<string, SteamCard> | null = null;
+
+/** Compara as bibliotecas removíveis montadas com o último retrato. Por pasta, não por
+ *  appid: instalar um jogo num cartão já inserido muda `apps`, não as pastas. */
+async function checkSteamLibraries(): Promise<void> {
+  const libraries = await removableLibraries();
+  const previous = steamCards;
+  const next = new Map<string, SteamCard>();
+  for (const library of libraries) {
+    const known = previous?.get(library.path);
+    if (known) {
+      next.set(library.path, { ...known, apps: library.apps });
+      continue;
+    }
+    const card = await libraryCard(library.path);
+    next.set(library.path, {
+      mount: card?.mount ?? library.path,
+      label: card?.label ?? library.path.split("/").pop() ?? library.path,
+      silent: !card || card.insertplay,
+      apps: library.apps,
+    });
+  }
+  steamCards = next;
+  if (previous === null) {
+    // sem esta linha, um cartão que faltou no retrato só aparece como "remoção perdida"
+    const cards = [...next.values()].map((c) => `${c.label}${c.silent ? " (insertplay)" : ""}: ${c.apps.length}`);
+    await logAdd("steam", `snapshot: ${cards.join(", ") || "-"}`);
+    return;
+  }
+
+  // Um cartão com duas bibliotecas gera um aviso só, agrupando pelo ponto de montagem.
+  const byMount = (from: Map<string, SteamCard>, other: Map<string, SteamCard>) => {
+    const out = new Map<string, SteamCard>();
+    for (const [path, card] of from) {
+      if (other.has(path) || card.silent || card.apps.length === 0) continue;
+      const seen = out.get(card.mount);
+      out.set(card.mount, seen ? { ...seen, apps: [...seen.apps, ...card.apps] } : card);
+    }
+    return [...out.values()];
+  };
+  for (const card of byMount(previous, next)) {
+    await logAdd("steam", `${card.label} removed (${card.apps.join(", ")})`);
+    toaster.toast({ title: TITLE, body: `Cartão ${card.label} removido` });
+  }
+  for (const card of byMount(next, previous)) await steamCardInserted(card);
+}
+
+/** Inicia sozinho só com exatamente um jogo no cartão e nenhum jogo aberto. */
+async function steamCardInserted(card: SteamCard): Promise<void> {
+  const apps = [...new Set(card.apps)];
+  await logAdd("steam", `${card.label} inserted (${apps.join(", ")})`);
+  if (apps.length > 1) {
+    toaster.toast({ title: TITLE, body: `Cartão ${card.label}: ${apps.length} jogos disponíveis` });
+    return;
+  }
+  const [appid] = apps;
+  const name = appName(appid);
+  if ((await getSettings()).autoLaunch && !gameRunning()) {
+    toaster.toast({ title: TITLE, body: `Iniciando ${name}…` });
+    await logAdd("launch", `${name} (${appid})`);
+    runSteamGame(appid);
+  } else {
+    toaster.toast({ title: TITLE, body: `${name} disponível` });
+  }
+}
+
+/** Aviso do Steam de que as bibliotecas mudaram (cartão inserido ou removido, jogo
+ *  instalado ou movido). Também atualiza os badges, como antes. */
+export const onSteamLibrariesChanged = () =>
+  enqueue(checkSteamLibraries)
+    .catch((err) => report("Biblioteca Steam no cartão", err))
     .finally(refreshBadges);
 
 /** Estado inicial ao carregar o plugin: mostra o que está inserido, aplica "ocultar ao

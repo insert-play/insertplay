@@ -62,12 +62,18 @@ Atalhos não-Steam têm `app_type === 1073741824` e `BIsShortcut() === true`, e 
 
 ## Bibliotecas Steam no cartão (medido 2026-10-24, SteamOS 3.9.5)
 
-Usado pelo badge de cartão (`src/steam-badges.tsx`) para marcar também jogos Steam instalados no cartão, não só atalhos do InsertPlay.
+Usado pelo badge de cartão (`src/steam-badges.tsx`) para marcar também jogos Steam instalados no cartão, não só atalhos do InsertPlay, e pela notificação e início automático desses jogos (issue #10, `checkSteamLibraries` em `src/flow.ts`).
 
 | Chamada | Resultado |
 |---|---|
 | `await SteamClient.InstallFolder.GetInstallFolders()` | Uma entrada por biblioteca que o Steam já viu, montada ou não: `strFolderPath`, `bIsDefaultFolder`, `bIsMounted`, `bIsFixed`, `vecApps[].nAppID`. O cartão no leitor (`/run/media/deck/Expedition 33`) veio com `bIsMounted: true`, `bIsFixed: false` e o appid do jogo. Cartões ausentes continuam na lista com `bIsMounted: false` **e os appids antigos**, então é preciso filtrar por `bIsMounted`. |
 | `SteamClient.InstallFolder.RegisterForInstallFolderChanges(cb)` | Devolve `{ unregister }`. Chama `cb({ folderIndex })` uma vez logo após o registro (`folderIndex: 0`). Retirada do cartão: aviso ~0,5 s depois do unmount do kernel. Inserção: dois avisos em menos de 1 s depois do mount. Não precisamos de polling. |
+| Sequência dos avisos (sonda com polling de 100 ms, 2026-10-24) | Retirada: um aviso, já com `bIsMounted: false` e os appids mantidos. Inserção: dois avisos iguais, já com `bIsMounted: true` e os appids. Nenhum estado intermediário (montado sem apps). O aviso da inserção chegou ~1 s depois do mount do kernel. |
+| Lista ao reiniciar o Steam | Começa **vazia** (`[]`, sem nem a pasta padrão). ~3 s depois aparece inteira de uma vez, **sem aviso**; depois vêm ~30 avisos seguidos com a lista igual. Nas medições ela encheu antes de `appStore.m_bIsInitialized` (3,0 s contra 5,6 s), mas um retrato tirado com a lista vazia transformou o cartão já inserido em "ausente" e a remoção seguinte se perdeu. Por isso `installFolders()` espera a pasta padrão aparecer antes de usar a lista. |
+| `strUserLabel` | Rótulo que o usuário deu à biblioteca no Steam. Nem sempre é o rótulo do cartão (`/run/media/deck/The Witcher 3` veio como "Assassins Creed Unity"). O toast usa o nome da pasta de montagem, como o fluxo dos cartões InsertPlay. |
+| `strFolderPath` | Pode ser a raiz do cartão (`/run/media/deck/Expedition 33`) ou subpasta (`/run/media/deck/Games/SteamLibrary`). O backend (`library_card`) sobe até o ponto de montagem e olha o manifesto InsertPlay no disco. O cartão do NFS Underground tem biblioteca Steam vazia além do manifesto. |
+| `SteamClient.Apps.RunGame("1903340", "", -1, 100)` | Abre o jogo Steam (Clair Obscur, appid 1903340): `SteamUIStore.RunningApps` passou a ter o appid. Jogo Steam não tem `m_gameid` no overview (`undefined`); o gameid é o próprio appid como string. |
+| `appStore.GetAppOverviewByAppID(1903340).display_name` | "Clair Obscur: Expedition 33". Usado no toast. |
 
 DOM da biblioteca (janela "Steam — Modo Big Picture", 854×534 px de CSS no Deck): na tela inicial todo card `div[role="listitem"]` tem `data-id` com o appid, inclusive capas da loja cuja URL usa hash em vez do appid.
 

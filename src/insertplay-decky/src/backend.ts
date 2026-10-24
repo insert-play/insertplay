@@ -39,6 +39,15 @@ export const registryAll = callable<[], Record<string, RegistryRecord> | null>("
 export const registryPut = callable<[guid: string, record: Partial<RegistryRecord>], RegistryRecord | null>(
   "registry_put",
 );
+export interface LibraryCard {
+  mount: string;
+  label: string;
+  /** Tem manifesto InsertPlay: o fluxo do cartão InsertPlay cuida dele. */
+  insertplay: boolean;
+}
+
+/** Cartão de uma biblioteca Steam. `null` = fora de mídia montada ou falha no backend. */
+export const libraryCard = callable<[path: string], LibraryCard | null>("library_card");
 export const getSettings = callable<[], Settings>("get_settings");
 export const setSetting = callable<[key: keyof Settings, value: boolean], Settings>("set_setting");
 export const logAdd = callable<[kind: string, message: string], void>("log_add");

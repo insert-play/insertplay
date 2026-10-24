@@ -52,3 +52,26 @@ def diff(previous: dict, current: dict) -> tuple:
     inserted = [current[k] for k in sorted(current) if k not in previous]
     removed = [previous[k] for k in sorted(previous) if k not in current]
     return inserted, removed
+
+
+def library_card(path: str, media_roots: list, ismount=os.path.ismount):
+    """Cartão onde fica uma biblioteca Steam (`path` vem do Steam e pode ser subpasta,
+    como `Games/SteamLibrary`). Devolve `{"mount", "label", "insertplay"}` ou `None` se
+    o caminho não está em mídia removível montada.
+
+    `insertplay` olha o manifesto no disco, não `find_cards`: o Steam avisa da biblioteca
+    antes da próxima varredura do backend, e o cartão InsertPlay que também tem
+    biblioteca Steam não pode ganhar a notificação dos dois fluxos."""
+    roots = [os.path.realpath(r) for r in media_roots]
+    current = os.path.realpath(path)
+    if not any(current.startswith(r.rstrip(os.sep) + os.sep) for r in roots):
+        return None
+    while current not in roots and current != os.path.dirname(current):
+        if ismount(current):
+            return {
+                "mount": current,
+                "label": os.path.basename(current),
+                "insertplay": manifest_path(current) is not None,
+            }
+        current = os.path.dirname(current)
+    return None
