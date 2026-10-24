@@ -21,6 +21,8 @@ export interface RegistryRecord {
 
 export interface Settings {
   autoLaunch: boolean;
+  /** Oculta o atalho quando o cartão sai. Desligado, o atalho fica visível sem badge. */
+  hideRemoved: boolean;
 }
 
 export interface LogEntry {

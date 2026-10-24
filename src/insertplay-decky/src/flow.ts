@@ -12,12 +12,15 @@ import {
 import {
   addShortcut,
   applyArtwork,
+  isHidden,
+  removableLibraryApps,
   runGame,
   setHidden,
   shortcutExists,
   updateShortcut,
   waitForLibrary,
 } from "./steam";
+import { showBadges } from "./steam-badges";
 
 const TITLE = "InsertPlay";
 
@@ -90,18 +93,20 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
   return appid;
 }
 
-/** Oculta todo atalho registrado cujo cartão não está montado agora. Pergunta ao
- *  backend em vez de lembrar mount→guid aqui: o frontend recarrega sem o backend
+/** Aplica a configuração "ocultar ao remover" a todo atalho registrado cujo cartão não
+ *  está montado agora: oculta, ou mostra de volta se a opção estiver desligada. Pergunta
+ *  ao backend em vez de lembrar mount→guid aqui: o frontend recarrega sem o backend
  *  saber, e o backend já atualizou a lista antes de emitir a remoção. */
-async function hideAbsent(): Promise<void> {
+async function syncAbsent(): Promise<void> {
   const present = new Set((await presentCards()).map((c) => c.guid).filter(Boolean));
   const registry = Object.entries(await loadRegistry());
+  const hide = (await getSettings()).hideRemoved ?? true;
   // um appid que um cartão PRESENTE usa nunca é ocultado, mesmo que outro guid
   // (ausente) aponte para ele num registro antigo
   const presentAppids = new Set(registry.filter(([guid]) => present.has(guid)).map(([, r]) => r.appid));
   for (const [guid, record] of registry) {
     if (present.has(guid) || presentAppids.has(record.appid) || !shortcutExists(record.appid)) continue;
-    setHidden(record.appid, true);
+    if (isHidden(record.appid) !== hide) setHidden(record.appid, hide);
   }
 }
 
@@ -136,33 +141,70 @@ async function report(what: string, err: unknown): Promise<void> {
   toaster.toast({ title: TITLE, body: `${what} falhou: ${detail}`, duration: 10000 });
 }
 
+let lastBadgeError = "";
+
+/** Recalcula quais jogos levam o badge de cartão: os atalhos dos cartões InsertPlay
+ *  inseridos e os jogos Steam instalados numa biblioteca do cartão. Só cartões
+ *  presentes: o atalho de um cartão ausente fica oculto e não deve ficar com badge.
+ *  Nunca lança; o badge é enfeite. O erro vai para o log uma vez, não a cada gatilho. */
+export async function refreshBadges(): Promise<void> {
+  try {
+    const [cards, registry, steamApps] = await Promise.all([presentCards(), loadRegistry(), removableLibraryApps()]);
+    const present = new Set(cards.map((c) => c.guid).filter(Boolean));
+    const shortcuts = Object.entries(registry)
+      .filter(([guid]) => present.has(guid))
+      .map(([, record]) => record.appid);
+    showBadges([...shortcuts, ...steamApps]);
+    lastBadgeError = "";
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    if (detail === lastBadgeError) return;
+    lastBadgeError = detail;
+    await logAdd("error", `badges: ${detail}`).catch(() => undefined);
+  }
+}
+
 export const onInserted = (card: Card) =>
-  enqueue(() => ensureCard(card, true)).catch((err) => report(`Inserção de ${card.label}`, err));
+  enqueue(() => ensureCard(card, true))
+    .catch((err) => report(`Inserção de ${card.label}`, err))
+    .finally(refreshBadges);
 
 export const onRemoved = (card: { mount: string; label: string }) =>
   enqueue(async () => {
-    await hideAbsent();
+    await syncAbsent();
     await logAdd("hide", `${card.label} removed`);
     toaster.toast({ title: TITLE, body: `Cartão ${card.label} removido` });
-  }).catch((err) => report(`Remoção de ${card.label}`, err));
+  })
+    .catch((err) => report(`Remoção de ${card.label}`, err))
+    .finally(refreshBadges);
 
-/** Estado inicial ao carregar o plugin: mostra o que está inserido, oculta o resto,
- *  não inicia nada. */
+/** Estado inicial ao carregar o plugin: mostra o que está inserido, aplica "ocultar ao
+ *  remover" ao resto, não inicia nada. */
 export const reconcile = () =>
   enqueue(async () => {
     const cards = await presentCards();
     for (const card of cards) await ensureCard(card, false);
-    await hideAbsent();
+    await syncAbsent();
     // sem esta linha, "reconciliou certo" e "nem rodou" ficam iguais no log
     await logAdd("reconcile", `${cards.length} card(s): ${cards.map((c) => c.appName ?? c.label).join(", ") || "-"}`);
-  }).catch((err) => report("Reconciliação", err));
+  })
+    .catch((err) => report("Reconciliação", err))
+    .finally(refreshBadges);
+
+/** Troca de "ocultar ao remover" no painel: aplica na hora aos cartões ausentes. */
+export const applyHideRemoved = () =>
+  enqueue(syncAbsent)
+    .catch((err) => report("Ocultar ao remover", err))
+    .finally(refreshBadges);
 
 /** Botão "Reinstalar atalho": força nova aplicação das artes. */
 export const reinstall = (card: Card) =>
   enqueue(async () => {
     if (card.guid) await saveRecord(card.guid, { artworkApplied: false });
     await ensureCard(card, false);
-  }).catch((err) => report(`Reinstalação de ${card.label}`, err));
+  })
+    .catch((err) => report(`Reinstalação de ${card.label}`, err))
+    .finally(refreshBadges);
 
 export const launchCard = (card: Card) =>
   enqueue(async () => {

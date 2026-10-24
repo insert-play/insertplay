@@ -1,4 +1,4 @@
-import { addEventListener, definePlugin, removeEventListener, toaster } from "@decky/api";
+import { addEventListener, definePlugin, removeEventListener, routerHook, toaster } from "@decky/api";
 import {
   ButtonItem,
   ConfirmModal,
@@ -24,8 +24,10 @@ import {
   setSetting,
   writePackageToCard,
 } from "./backend";
-import { launchCard, onInserted, onRemoved, reconcile, reinstall } from "./flow";
+import { applyHideRemoved, launchCard, onInserted, onRemoved, reconcile, refreshBadges, reinstall } from "./flow";
 import { InstallType, installFromCard, notifyNewerPackage } from "./selfupdate";
+import { onInstallFoldersChanged } from "./steam";
+import { showBadges, stopBadges } from "./steam-badges";
 
 const REFRESH_EVENTS = ["card_inserted", "card_removed"] as const;
 
@@ -172,6 +174,19 @@ function Panel() {
             onChange={(value) => void setSetting("autoLaunch", value).then(setSettings)}
           />
         </PanelSectionRow>
+        <PanelSectionRow>
+          <ToggleField
+            label="Ocultar ao remover o cartão"
+            description="Desligado, o jogo fica na biblioteca sem o badge do cartão."
+            checked={settings?.hideRemoved ?? true}
+            disabled={!settings}
+            onChange={(value) =>
+              void setSetting("hideRemoved", value)
+                .then(setSettings)
+                .then(applyHideRemoved)
+            }
+          />
+        </PanelSectionRow>
       </PanelSection>
       <PanelSection title="Eventos">
         {log.length === 0 && <PanelSectionRow>Nenhum evento ainda.</PanelSectionRow>}
@@ -198,6 +213,15 @@ export default definePlugin(() => {
     void notifyNewerPackage(card.mount).catch(() => undefined);
   });
   const removed = addEventListener<[{ mount: string; label: string }]>("card_removed", (card) => void onRemoved(card));
+  // Cartão com biblioteca Steam e sem manifesto InsertPlay não gera evento do backend:
+  // quem avisa é o Steam.
+  const stopFolders = onInstallFoldersChanged(() => void refreshBadges());
+  // A janela da biblioteca pode não existir quando o plugin carrega (jogo aberto, Steam
+  // iniciando). Entrar na biblioteca é o gatilho para prender os badges nela.
+  const libraryPatch = routerHook.addPatch("/library", (tree: unknown) => {
+    showBadges();
+    return tree;
+  });
   void reconcile();
   return {
     name: "InsertPlay",
@@ -207,6 +231,9 @@ export default definePlugin(() => {
     onDismount() {
       removeEventListener("card_inserted", inserted);
       removeEventListener("card_removed", removed);
+      stopFolders();
+      routerHook.removePatch("/library", libraryPatch);
+      stopBadges();
     },
   };
 });
