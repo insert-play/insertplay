@@ -1,0 +1,2 @@
+# Scripts que rodam no Deck (enviados direto da cópia local pelo deck.mjs): bash quebra com CRLF.
+*.sh text eol=lf
