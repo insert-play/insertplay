@@ -1,5 +1,10 @@
-// Ferramenta de acesso ao Steam Deck para desenvolvimento (usada pela IA e por humanos).
-// Lê o IP de deck.config.json. Veja CLAUDE.md para quando usar cada comando.
+// Ferramenta de acesso aos aparelhos de teste (usada pela IA e por humanos).
+// Lê os aparelhos de deck.config.json. Veja CLAUDE.md para quando usar cada comando.
+//
+// Aparelho: `--device <nome>` (em qualquer posição) ou INSERTPLAY_DEVICE; sem isso, o
+// "default" do config (o Steam Deck de dev). Em aparelho com "role": "prod" os comandos
+// que mudam o aparelho (deploy, remove, restart, stage-card, setup-access) exigem
+// `--confirm-prod`.
 //
 //   node scripts/deck.mjs check              diagnóstico: ssh, Steam (CEF), Decky, acesso de deploy
 //   node scripts/deck.mjs eval "<js>"        roda JS dentro do Steam (SharedJSContext)
@@ -16,7 +21,7 @@
 //                                            cartão montado (insertplay/decky/InsertPlay.zip)
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connect } from "./cdp.mjs";
 
@@ -25,13 +30,37 @@ const CONFIG_PATH = join(ROOT, "deck.config.json");
 const STAGE = "/tmp/insertplay-decky";
 const DEPLOY = "/etc/insertplay-dev/deploy-plugin.sh";
 
-export function loadConfig() {
+const MUTATING = new Set(["deploy", "remove", "restart", "stage-card", "setup-access"]);
+
+/** Config de um aparelho: `{ name, host, user, role }`. Aceita o formato antigo
+ *  (`{ host, user }` na raiz), tratado como o aparelho "deck". */
+export function loadConfig(device = process.env.INSERTPLAY_DEVICE) {
   if (!existsSync(CONFIG_PATH)) {
     throw new Error(`crie ${CONFIG_PATH} a partir de deck.config.example.json com o IP do Deck`);
   }
-  const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-  if (!cfg.host) throw new Error(`"host" ausente em ${CONFIG_PATH}`);
-  return { user: "deck", ...cfg };
+  const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+  const devices = raw.devices ?? { deck: { host: raw.host, user: raw.user, role: "dev" } };
+  const name = device ?? raw.default ?? Object.keys(devices)[0];
+  const cfg = devices[name];
+  if (!cfg) throw new Error(`aparelho "${name}" não existe em ${CONFIG_PATH} (há: ${Object.keys(devices).join(", ")})`);
+  if (!cfg.host) throw new Error(`"host" ausente para o aparelho "${name}" em ${CONFIG_PATH}`);
+  return { user: "deck", role: "dev", ...cfg, name };
+}
+
+/** Tira `--device X` e `--confirm-prod` dos argumentos. */
+function takeGlobalFlags(argv) {
+  const args = [...argv];
+  let device;
+  const i = args.indexOf("--device");
+  if (i >= 0) {
+    device = args[i + 1];
+    if (!device || device.startsWith("--")) throw new Error("--device precisa de um nome, ex.: --device machine");
+    args.splice(i, 2);
+  }
+  const j = args.indexOf("--confirm-prod");
+  const confirmProd = j >= 0;
+  if (confirmProd) args.splice(j, 1);
+  return { args, device, confirmProd };
 }
 
 /** ssh/scp devolvem 255 quando a conexão falha. O Wi-Fi do Deck às vezes dorme e o
@@ -212,8 +241,15 @@ async function screenshot(cfg, name, target = isMainWindow) {
 }
 
 async function main() {
-  const [command, ...rest] = process.argv.slice(2);
-  const cfg = loadConfig();
+  const { args, device, confirmProd } = takeGlobalFlags(process.argv.slice(2));
+  const [command, ...rest] = args;
+  const cfg = loadConfig(device);
+  // stderr: não atrapalha quem lê a saída JSON do eval/rpc
+  console.error(`[${cfg.name} · ${cfg.role} · ${cfg.host}]`);
+  if (cfg.role === "prod" && MUTATING.has(command) && !confirmProd) {
+    console.error(`"${command}" muda o aparelho de produção "${cfg.name}". Combine com o usuário e repita com --confirm-prod.`);
+    return 3;
+  }
   switch (command) {
     case "check":
       return check(cfg);
@@ -269,10 +305,13 @@ async function main() {
   }
 }
 
-main().then(
-  (code) => process.exit(code ?? 0),
-  (err) => {
-    console.error(`Erro: ${err.message}`);
-    process.exit(1);
-  },
-);
+// só como comando: o spike.mjs importa o loadConfig daqui
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().then(
+    (code) => process.exit(code ?? 0),
+    (err) => {
+      console.error(`Erro: ${err.message}`);
+      process.exit(1);
+    },
+  );
+}
