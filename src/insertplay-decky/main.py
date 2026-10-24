@@ -10,7 +10,7 @@ import decky
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "py_modules"))
 
-from insertplay_decky import cards  # noqa: E402
+from insertplay_decky import cards, plugin_package  # noqa: E402
 from insertplay_decky.manifest import CardError, load_card  # noqa: E402
 from insertplay_decky.store import EventLog, Registry, Settings  # noqa: E402
 
@@ -54,6 +54,15 @@ def _describe(card: dict) -> dict:
     except CardError as exc:
         out["error"] = str(exc)
     return out
+
+
+def _on_mounted_card(mounted: dict, path: str) -> str:
+    """Caminho real de `path`, desde que esteja dentro de um cartão montado. As RPCs que
+    leem ou escrevem arquivos não podem virar acesso arbitrário ao disco."""
+    real = os.path.realpath(path)
+    if not any(real == root or real.startswith(root.rstrip(os.sep) + os.sep) for root in mounted):
+        raise PermissionError(f"{path} is not on a mounted InsertPlay card")
+    return real
 
 
 class Plugin:
@@ -120,11 +129,33 @@ class Plugin:
     async def artwork_base64(self, path: str) -> str:
         """Só entrega arquivos de dentro de um cartão montado — a RPC não pode virar
         leitura arbitrária do disco."""
-        real = os.path.realpath(path)
-        if not any(real.startswith(root.rstrip(os.sep) + os.sep) for root in self.mounted):
-            raise PermissionError(f"{path} is not on a mounted InsertPlay card")
+        real = _on_mounted_card(self.mounted, path)
+        if real in self.mounted:
+            raise PermissionError(f"{path} is a card, not a file")
         with open(real, "rb") as f:
             return base64.b64encode(f.read()).decode("ascii")
+
+    @guarded(lambda: None)
+    async def package_status(self) -> dict:
+        """Versão instalada e, por cartão, a versão do pacote do plugin que ele traz."""
+        installed = decky.DECKY_PLUGIN_VERSION
+        out = []
+        for card in self.mounted.values():
+            status = await asyncio.to_thread(plugin_package.card_status, card["mount"], installed)
+            out.append({"mount": card["mount"], "label": card["label"], **status})
+        return {"installed": installed, "cards": out}
+
+    @guarded(lambda: None)
+    async def write_package_to_card(self, mount: str) -> dict:
+        """Grava a versão instalada do plugin no cartão. Devolve o status do pacote gravado."""
+        real = _on_mounted_card(self.mounted, mount)
+        if real not in self.mounted:
+            raise PermissionError(f"{mount} is not the root of a mounted card")
+        card_mount = self.mounted[real]["mount"]
+        dest = plugin_package.card_package_path(card_mount)
+        written = await asyncio.to_thread(plugin_package.build_zip_from_dir, decky.DECKY_PLUGIN_DIR, dest)
+        self.log.add("package", f"{card_mount}: wrote plugin v{written['version']}")
+        return await asyncio.to_thread(plugin_package.card_status, card_mount, decky.DECKY_PLUGIN_VERSION)
 
     # None, não {}: um registro "vazio" por falha faria o frontend criar atalhos duplicados
     @guarded(lambda: None)

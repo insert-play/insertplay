@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 PUBLISH_SCRIPT="$REPO_ROOT/src/publish.sh"
 PUBLISH_DIR="$REPO_ROOT/publish"
 SDCARD_ASSETS_DIR="$REPO_ROOT/src/insertplay-sdcard"
+DECKY_PACKAGE="$REPO_ROOT/src/insertplay-decky/out/InsertPlay.zip"
 RID="${1:-linux-x64}"
 CURRENT_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 
@@ -95,6 +96,7 @@ SD_USER_ASSET_RELATIVE_PATHS=(
   "steam-shortcut.json"
   "shortcut-identity.json"
   "steam-artwork"
+  "decky"
 )
 
 backup_sd_user_assets() {
@@ -241,6 +243,17 @@ for sdcard_script in autorun.sh install-shortcut.sh insertplay-guid-guard.sh; do
     log "Warning: sdcard script not found: $src"
   fi
 done
+
+# Plugin Decky no cartão: o Decky o instala por "Install Plugin from ZIP File" e o plugin
+# instalado se atualiza a partir dele. Sem pacote novo (insertplay-decky/scripts/package.sh),
+# o que já estava no cartão foi preservado acima.
+if [[ -f "$DECKY_PACKAGE" ]]; then
+  mkdir -p "$TARGET_INSERTPLAY_DIR/decky"
+  cp -f "$DECKY_PACKAGE" "$TARGET_INSERTPLAY_DIR/decky/InsertPlay.zip"
+  log "Copied Decky plugin package to: $TARGET_INSERTPLAY_DIR/decky/InsertPlay.zip"
+else
+  log "Decky plugin package not found (run src/insertplay-decky/scripts/package.sh): $DECKY_PACKAGE"
+fi
 
 if [[ -f "$TARGET_INSERTPLAY_DIR/install.sh" ]]; then
   chmod +x "$TARGET_INSERTPLAY_DIR/install.sh"

@@ -12,6 +12,8 @@
 //   node scripts/deck.mjs panel [nome]       abre o painel do InsertPlay no Quick Access e captura
 //   node scripts/deck.mjs rpc <método> [args JSON...]  chama o backend do plugin pelo Decky
 //   node scripts/deck.mjs setup-access       envia o instalador do acesso sem senha (ver README)
+//   node scripts/deck.mjs stage-card <rótulo> [--version X]   build + grava o zip do plugin no
+//                                            cartão montado (insertplay/decky/InsertPlay.zip)
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -101,7 +103,8 @@ async function check(cfg) {
   return rows.every((r) => r.status === "OK") ? 0 : 1;
 }
 
-function deploy(cfg, skipBuild) {
+/** Build (opcional) e envio dos arquivos do plugin para o stage no Deck. */
+function upload(cfg, skipBuild) {
   if (!skipBuild) {
     const b = npx(["build"]);
     if (b.code !== 0 || b.out.includes("plugin typescript")) {
@@ -112,11 +115,17 @@ function deploy(cfg, skipBuild) {
     console.log("build ok");
   }
   if (ssh(cfg, `rm -rf ${STAGE} && mkdir -p ${STAGE}/dist`).code !== 0) return 1;
-  const files = ["plugin.json", "package.json", "main.py", "py_modules"];
+  const files = ["plugin.json", "package.json", "main.py", "NOTICE", "py_modules"];
   const target = `${cfg.user}@${cfg.host}`;
   if (run("scp", ["-q", "-r", "-o", "BatchMode=yes", ...files, `${target}:${STAGE}/`]).code !== 0) return 1;
   if (run("scp", ["-q", "-o", "BatchMode=yes", "dist/index.js", `${target}:${STAGE}/dist/`]).code !== 0) return 1;
   ssh(cfg, `find ${STAGE} -name __pycache__ -type d -prune -exec rm -rf {} +`);
+  return 0;
+}
+
+function deploy(cfg, skipBuild) {
+  if (upload(cfg, skipBuild) !== 0) return 1;
+  const target = `${cfg.user}@${cfg.host}`;
   const viaSudo = ssh(cfg, `sudo -n ${DEPLOY} deploy`);
   if (viaSudo.code === 0) return 0;
   // Sem o acesso liberado: pede a senha num terminal interativo (uso humano).
@@ -126,6 +135,31 @@ function deploy(cfg, skipBuild) {
   }
   return run("ssh", ["-t", target,
     `sudo rsync -a --delete ${STAGE}/ ~/homebrew/plugins/InsertPlay/ && sudo systemctl restart plugin_loader`]).code;
+}
+
+/** Grava o zip do plugin no cartão, como o build-sd-card.sh faria, usando o mesmo
+ *  build_zip_from_dir do plugin (valida o zip antes de substituir o anterior).
+ *  `--version` troca a versão só no zip: serve para testar "cartão mais novo". */
+function stageCard(cfg, label, version) {
+  if (!label || label.startsWith("--")) throw new Error("uso: deck.mjs stage-card <rótulo do cartão> [--version X]");
+  if (upload(cfg, false) !== 0) return 1;
+  return ssh(cfg, `python3 - <<'PY'
+import json, os, sys
+sys.path.insert(0, ${JSON.stringify(STAGE + "/py_modules")})
+from insertplay_decky.plugin_package import build_zip_from_dir, card_package_path
+mount = os.path.join("/run/media/deck", ${JSON.stringify(label)})
+if not os.path.isdir(mount):
+    sys.exit(f"cartão {mount} não está montado")
+version = ${JSON.stringify(version ?? "")}
+if version:
+    path = ${JSON.stringify(STAGE + "/package.json")}
+    data = json.load(open(path))
+    data["version"] = version
+    json.dump(data, open(path, "w"), indent=2)
+dest = card_package_path(mount)
+info = build_zip_from_dir(${JSON.stringify(STAGE)}, dest)
+print(f"{dest}: v{info['version']} sha256={info['sha256'][:12]} {info['size']} bytes")
+PY`).code;
 }
 
 function setupAccess(cfg) {
@@ -206,6 +240,10 @@ async function main() {
     }
     case "setup-access":
       return setupAccess(cfg);
+    case "stage-card": {
+      const i = rest.indexOf("--version");
+      return stageCard(cfg, rest[0], i >= 0 ? rest[i + 1] : undefined);
+    }
     case "screenshot":
       return screenshot(cfg, rest[0]);
     case "panel":
@@ -224,7 +262,7 @@ async function main() {
       return 0;
     }
     default:
-      console.error("uso: node scripts/deck.mjs check|eval|ssh|deploy|restart|remove|logs|setup-access");
+      console.error("uso: node scripts/deck.mjs check|eval|ssh|deploy|restart|remove|logs|setup-access|stage-card|screenshot|panel|rpc");
       return 2;
   }
 }

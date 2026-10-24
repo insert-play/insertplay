@@ -23,6 +23,7 @@ Todos os comandos rodam da pasta `insertplay-decky`, no Windows ou no WSL. Use `
 | `panel [nome]` | Abre o Quick Access no painel do InsertPlay e captura. O Quick Access é outra janela do CEF (`QuickAccess_uid2`); o `screenshot` comum não o pega. Feche depois com `eval "(SteamUIStore.m_WindowStore ?? SteamUIStore.WindowStore).SteamUIWindows[0].MenuStore.CloseSideMenus()"`. |
 | `rpc <método> [args JSON…]` | Chama um método do `main.py` pelo Decky, como o frontend faz. Ex.: `rpc log_tail 5`, `rpc current_cards`. Internamente usa `DeckyBackend.call("loader/call_plugin_method", "InsertPlay", método, ...args)`: os argumentos vão **espalhados**; uma lista vira um argumento a mais. |
 | `ssh "<cmd>"` | Comando no Deck como usuário `deck`, sem TTY e sem senha. |
+| `stage-card <rótulo> [--version X]` | Build e gravação do zip do plugin no cartão montado (`insertplay/decky/InsertPlay.zip`), validado pelo mesmo `build_zip_from_dir` do plugin. `--version` muda a versão só no zip, para testar "cartão mais novo/antigo". |
 | `restart` / `remove` | Reiniciam o Decky / desinstalam o InsertPlay. |
 
 Outros:

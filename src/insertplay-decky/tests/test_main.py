@@ -67,3 +67,40 @@ def test_registry_round_trip_after_ready(main):
         return result
 
     assert asyncio.run(scenario())["g"]["appid"] == 7
+
+
+def _plugin_dir(root, version):
+    plugin = root / "installed" / "InsertPlay"
+    (plugin / "dist").mkdir(parents=True)
+    (plugin / "plugin.json").write_text('{"name": "InsertPlay", "flags": []}', encoding="utf-8")
+    (plugin / "package.json").write_text('{"version": "%s"}' % version, encoding="utf-8")
+    (plugin / "main.py").write_text("", encoding="utf-8")
+    (plugin / "dist" / "index.js").write_text("", encoding="utf-8")
+    return plugin
+
+
+def test_write_package_to_card_and_status(main, tmp_path):
+    main.decky.DECKY_PLUGIN_DIR = str(_plugin_dir(tmp_path, "0.2.0"))
+    main.decky.DECKY_PLUGIN_VERSION = "0.2.0"
+    card = tmp_path / "media" / "SD1"
+    card.mkdir(parents=True)
+    (card / "steam-shortcut.json").write_text("{}", encoding="utf-8")
+
+    async def scenario():
+        plugin = main.Plugin()
+        await plugin._main()
+        before = await plugin.package_status()
+        written = await plugin.write_package_to_card(str(card))
+        after = await plugin.package_status()
+        outside = await plugin.write_package_to_card(str(tmp_path))
+        inside = await plugin.write_package_to_card(str(card / "insertplay"))
+        await plugin._unload()
+        return before, written, after, outside, inside
+
+    before, written, after, outside, inside = asyncio.run(scenario())
+    assert before["installed"] == "0.2.0"
+    assert [c["relation"] for c in before["cards"]] == ["missing"]
+    assert written["relation"] == "same" and written["version"] == "0.2.0"
+    assert after["cards"][0]["zipPath"].endswith(os.path.join("insertplay", "decky", "InsertPlay.zip"))
+    # fora de um cartão, ou numa subpasta dele, é recusado (fallback None)
+    assert outside is None and inside is None

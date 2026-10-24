@@ -41,3 +41,25 @@ export const getSettings = callable<[], Settings>("get_settings");
 export const setSetting = callable<[key: keyof Settings, value: boolean], Settings>("set_setting");
 export const logAdd = callable<[kind: string, message: string], void>("log_add");
 export const logTail = callable<[count: number], LogEntry[]>("log_tail");
+
+/** Pacote do plugin no cartão comparado com a versão instalada. */
+export type PackageRelation = "missing" | "invalid" | "newer" | "older" | "same";
+
+export interface CardPackage {
+  mount: string;
+  label: string;
+  zipPath: string;
+  version: string | null;
+  sha256: string | null;
+  relation: PackageRelation;
+  error: string | null;
+}
+
+export interface PackageStatus {
+  installed: string;
+  cards: CardPackage[];
+}
+
+/** `null` = falha no backend (detalhe no log de eventos). */
+export const packageStatus = callable<[], PackageStatus | null>("package_status");
+export const writePackageToCard = callable<[mount: string], CardPackage | null>("write_package_to_card");
