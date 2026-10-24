@@ -17,6 +17,10 @@ Não faz perguntas e não precisa de ninguém olhando. O resultado fica em `out/
 
 Rode de novo **depois de toda atualização do Steam/SteamOS**.
 
+## Revalidação: 2026-10-24, SteamOS 3.9.5 + Decky v3.3.0
+
+`spike.mjs`: 15/15 OK, mesmo comportamento da tabela abaixo, com artes confirmadas por screenshot. Nada mudou nas chamadas usadas pelo plugin.
+
 ## Resultado: 2026-10-24, Steam Deck (Jupiter), SteamOS 3.8.28, Steam Deck Stable
 
 | Chamada | Resultado |
