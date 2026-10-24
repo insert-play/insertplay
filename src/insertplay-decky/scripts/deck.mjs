@@ -44,7 +44,9 @@ export function loadConfig(device = process.env.INSERTPLAY_DEVICE) {
   const cfg = devices[name];
   if (!cfg) throw new Error(`aparelho "${name}" não existe em ${CONFIG_PATH} (há: ${Object.keys(devices).join(", ")})`);
   if (!cfg.host) throw new Error(`"host" ausente para o aparelho "${name}" em ${CONFIG_PATH}`);
-  return { user: "deck", role: "dev", ...cfg, name };
+  // padrões depois do spread: no formato antigo `user` vem como undefined explícito
+  // e, antes, sobrescrevia o "deck" (review do PR #7)
+  return { ...cfg, user: cfg.user ?? "deck", role: cfg.role ?? "dev", name };
 }
 
 /** Tira `--device X` e `--confirm-prod` dos argumentos. */
