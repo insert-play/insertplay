@@ -54,7 +54,7 @@ class Registry:
             _save(self.path, data)
 
 
-DEFAULT_SETTINGS = {"autoLaunch": True}
+DEFAULT_SETTINGS = {"autoLaunch": True, "hideRemoved": True}
 
 
 class Settings:

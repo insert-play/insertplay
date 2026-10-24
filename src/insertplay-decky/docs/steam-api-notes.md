@@ -60,6 +60,17 @@ Atalhos não-Steam têm `app_type === 1073741824` e `BIsShortcut() === true`, e 
 - `LaunchNonSteamApp`;
 - `SetShortcutSortAs`.
 
+## Bibliotecas Steam no cartão (medido 2026-10-24, SteamOS 3.9.5)
+
+Usado pelo badge de cartão (`src/steam-badges.tsx`) para marcar também jogos Steam instalados no cartão, não só atalhos do InsertPlay.
+
+| Chamada | Resultado |
+|---|---|
+| `await SteamClient.InstallFolder.GetInstallFolders()` | Uma entrada por biblioteca que o Steam já viu, montada ou não: `strFolderPath`, `bIsDefaultFolder`, `bIsMounted`, `bIsFixed`, `vecApps[].nAppID`. O cartão no leitor (`/run/media/deck/Expedition 33`) veio com `bIsMounted: true`, `bIsFixed: false` e o appid do jogo. Cartões ausentes continuam na lista com `bIsMounted: false` **e os appids antigos**, então é preciso filtrar por `bIsMounted`. |
+| `SteamClient.InstallFolder.RegisterForInstallFolderChanges(cb)` | Devolve `{ unregister }`. Chama `cb({ folderIndex })` uma vez logo após o registro (`folderIndex: 0`). Retirada do cartão: aviso ~0,5 s depois do unmount do kernel. Inserção: dois avisos em menos de 1 s depois do mount. Não precisamos de polling. |
+
+DOM da biblioteca (janela "Steam — Modo Big Picture", 854×534 px de CSS no Deck): na tela inicial todo card `div[role="listitem"]` tem `data-id` com o appid, inclusive capas da loja cuja URL usa hash em vez do appid.
+
 ## Instalação do plugin pelo Decky (medido 2026-10-24, Decky v3.3.0)
 
 Não é API do Steam, mas é o outro global não documentado que o plugin usa (`src/selfupdate.ts`).

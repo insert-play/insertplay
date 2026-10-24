@@ -126,7 +126,9 @@ def test_registry_round_trip_and_merge(tmp_path):
 def test_settings_reject_unknown_key_and_wrong_type(tmp_path):
     s = Settings(str(tmp_path / "settings.json"))
     assert s.all()["autoLaunch"] is True
+    assert s.all()["hideRemoved"] is True
     assert s.set("autoLaunch", False)["autoLaunch"] is False
+    assert s.set("hideRemoved", False)["hideRemoved"] is False
     with pytest.raises(ValueError):
         s.set("autoLaunch", "no")
     with pytest.raises(ValueError):

@@ -130,6 +130,31 @@ export async function applyArtwork(
   return failed;
 }
 
+/** Appids dos jogos Steam instalados numa biblioteca em mídia removível montada agora.
+ *
+ *  Medido no Deck (2026-10-24, SteamOS 3.9.5): cada biblioteca que o Steam já viu vira
+ *  uma pasta em `GetInstallFolders()`, montada ou não. A do cartão no leitor tem
+ *  `bIsMounted: true` e `bIsFixed: false`. As de cartões ausentes continuam na lista
+ *  com `bIsMounted: false` e os appids que tinham, por isso o filtro é obrigatório. */
+export async function removableLibraryApps(): Promise<number[]> {
+  const folders: any[] = await method(
+    client()?.InstallFolder,
+    "GetInstallFolders",
+    "SteamClient.InstallFolder.GetInstallFolders",
+  )();
+  return folders
+    .filter((f) => f?.bIsMounted && !f.bIsFixed && !f.bIsDefaultFolder)
+    .flatMap((f) => (f.vecApps ?? []).map((a: any) => Number(a?.nAppID)))
+    .filter((appid) => appid > 0);
+}
+
+/** Avisa quando bibliotecas entram, saem ou mudam de conteúdo. Devolve o cancelamento.
+ *  Medido no Deck: o aviso chega menos de 1 s depois de o cartão montar ou desmontar. */
+export function onInstallFoldersChanged(callback: () => void): () => void {
+  const registration = client()?.InstallFolder?.RegisterForInstallFolderChanges?.(callback);
+  return () => registration?.unregister?.();
+}
+
 /** gameid de atalho = (appid << 32) | 0x02000000. Prefere o valor que o Steam expõe. */
 function gameIdOf(appid: number): string {
   const fromStore = apps()?.GetAppOverviewByAppID?.(appid)?.m_gameid;
