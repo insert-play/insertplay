@@ -14,7 +14,7 @@ Regras da Steam Machine (prod):
 - O plugin chega nela **pelo fluxo real**: zip do cartão ou "Install Plugin from ZIP File" do Decky, não por `deploy`. Ela serve para validar o que o usuário final vai ver.
 - `deploy`, `remove`, `restart`, `stage-card`, `setup-access` e `legacy-uninstall` exigem `--confirm-prod`. Só use depois de combinar com o usuário **naquela sessão**.
 - Não rode o `spike.mjs` nela: ele cria atalhos de teste.
-- Ela tem plugins que o Deck não tem (Non-Steam Badges, MicroSDeck, SteamGridDB, PlayCount). Algo que funciona no Deck pode se comportar diferente lá.
+- Ela tem plugins que o Deck não tem (SteamGridDB, PlayCount). Algo que funciona no Deck pode se comportar diferente lá. Non-Steam Badges e MicroSDeck foram desinstalados em 2026-10-24: o badge de cartão do próprio InsertPlay os substitui.
 - Não altere atalhos que o plugin não criou. O InsertPlay legado (CLI + `insertplay.service`) foi removido dos dois aparelhos em 2026-10-24; se o `check` voltar a acusar legado, siga "Remover o InsertPlay legado" no README.
 
 Os aparelhos ficam em `deck.config.json` (fora do git; modelo em `deck.config.example.json`): `{"default": "deck", "devices": {"deck": {"host", "user", "role"}, "machine": {...}}}`. O formato antigo, `{"host"}` na raiz, ainda vale como o aparelho `deck`. Todo comando aceita `--device <nome>`, em qualquer posição, ou a variável `INSERTPLAY_DEVICE`, e mostra no stderr qual aparelho está usando. Os IPs vêm de DHCP e podem mudar: se o `check` falhar na conexão, peça ao usuário o IP atual e atualize o arquivo.

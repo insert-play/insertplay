@@ -1,6 +1,6 @@
 # InsertPlay: plugin Decky (POC)
 
-Insira um cartão InsertPlay: o atalho do jogo aparece na biblioteca com as artes do próprio cartão e o jogo inicia. Remova o cartão: o atalho é ocultado. Tudo isso sem reiniciar o Steam.
+Insira um cartão InsertPlay: o atalho do jogo aparece na biblioteca com as artes do próprio cartão e o jogo inicia. Remova o cartão: o atalho é ocultado (opção "Ocultar ao remover o cartão" no painel). Jogos no cartão inserido levam um badge de cartão SD na capa: os atalhos do InsertPlay e os jogos Steam instalados numa biblioteca do cartão. Tudo isso sem reiniciar o Steam.
 
 O plugin **substitui o InsertPlay legado** (CLI em C#, `insertplay.service` e os atalhos criados no `shortcuts.vdf`). Se os dois rodarem juntos, o jogo é iniciado duas vezes. Num aparelho que tinha o legado, remova-o **antes** de instalar o plugin: veja [Remover o InsertPlay legado](#remover-o-insertplay-legado).
 
@@ -11,7 +11,8 @@ O plugin **substitui o InsertPlay legado** (CLI em C#, `insertplay.service` e os
   - avisa o frontend com `card_inserted` e `card_removed`.
 - `src/` (frontend, roda dentro do Steam):
   - cria ou atualiza o atalho com `SteamClient.Apps.*`;
-  - aplica as artes, oculta e mostra o atalho e inicia o jogo.
+  - aplica as artes, oculta e mostra o atalho e inicia o jogo;
+  - desenha o badge de cartão SD nas capas da biblioteca (`src/steam-badges.tsx`, depende do DOM do Steam).
 - Registro `guid → appid` em `~/homebrew/settings/InsertPlay/registry.json`.
 - Log de eventos em `~/homebrew/data/InsertPlay/events.jsonl`, também visível no painel.
 
@@ -171,4 +172,4 @@ node scripts/deck.mjs deploy
 O plugin aparece no menu do Decky (Quick Access) como **InsertPlay**. Logs do plugin: `node scripts/deck.mjs logs`.
 
 ## Fora da POC
-Ícone do atalho (`SetShortcutIcon` existe e é candidato), ocultar/mostrar manualmente, i18n, criar a identidade do cartão, selos visuais na biblioteca.
+Ícone do atalho (`SetShortcutIcon` existe e é candidato), ocultar/mostrar manualmente, i18n, criar a identidade do cartão.
