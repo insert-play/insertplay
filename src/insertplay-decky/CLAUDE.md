@@ -1,17 +1,32 @@
 # insertplay-decky: guia para agentes de IA
 
-Plugin Decky Loader (POC) do InsertPlay. Visão geral, layout e preparação manual do Deck estão em [README.md](README.md). Este arquivo diz **quais ferramentas usar para trabalhar com o Steam Deck real** e as regras para usá-las.
+Plugin Decky Loader (POC) do InsertPlay. Visão geral, layout e preparação manual do Deck estão em [README.md](README.md). Este arquivo diz **quais ferramentas usar para trabalhar com os aparelhos reais** e as regras para usá-las.
 
-## Acesso ao Steam Deck
+## Aparelhos
 
-O IP fica em `deck.config.json` (fora do git; modelo em `deck.config.example.json`). O IP é dado por DHCP e pode mudar. Se o `check` falhar na conexão, peça ao usuário o IP atual e atualize o arquivo.
+| Nome (`--device`) | Aparelho | Papel |
+|---|---|---|
+| `deck` (padrão) | Steam Deck (Jupiter), na bancada | **Dev.** Ambiente principal: deploy, restart, testes destrutivos com atalhos `IP Teste…`. O usuário mexe nele fisicamente quando preciso. |
+| `machine` | Steam Machine (SteamOS, GPU Navi33), na sala gamer | **Prod.** Simula o uso real. Fica mais longe: peça intervenção física só quando necessário. |
+
+Regras da Steam Machine (prod):
+- Por padrão, só leitura: `check`, `eval` de consulta, `logs`, `screenshot`, `panel`, `rpc` de leitura.
+- O plugin chega nela **pelo fluxo real**: zip do cartão ou "Install Plugin from ZIP File" do Decky, não por `deploy`. Ela serve para validar o que o usuário final vai ver.
+- `deploy`, `remove`, `restart`, `stage-card` e `setup-access` exigem `--confirm-prod`. Só use depois de combinar com o usuário **naquela sessão**.
+- Não rode o `spike.mjs` nela: ele cria atalhos de teste.
+- Ela tem plugins que o Deck não tem (Non-Steam Badges, MicroSDeck, SteamGridDB, PlayCount). Algo que funciona no Deck pode se comportar diferente lá.
+- Já tem atalhos não-Steam do fluxo antigo (CLI), por exemplo "Need for Speed Pro Street". Não altere atalhos que o plugin não criou.
+
+Os aparelhos ficam em `deck.config.json` (fora do git; modelo em `deck.config.example.json`): `{"default": "deck", "devices": {"deck": {"host", "user", "role"}, "machine": {...}}}`. O formato antigo, `{"host"}` na raiz, ainda vale como o aparelho `deck`. Todo comando aceita `--device <nome>`, em qualquer posição, ou a variável `INSERTPLAY_DEVICE`, e mostra no stderr qual aparelho está usando. Os IPs vêm de DHCP e podem mudar: se o `check` falhar na conexão, peça ao usuário o IP atual e atualize o arquivo.
+
+## Acesso aos aparelhos
 
 Pré-requisitos, feitos uma vez e à mão pelo usuário (README, passos 1 a 5 e "Acesso sem senha para a IA"):
 - SSH com chave para `deck@<ip>`;
 - Decky com "Allow Remote CEF Debugging";
 - a regra de sudo restrita instalada por `setup-access`.
 
-Todos os comandos rodam da pasta `insertplay-decky`, no Windows ou no WSL. Use `node scripts/deck.mjs <comando>`:
+Todos os comandos rodam da pasta `insertplay-decky`, no Windows ou no WSL. Use `node scripts/deck.mjs <comando> [--device machine]`:
 
 | Comando | Para quê |
 |---|---|

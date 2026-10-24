@@ -1,14 +1,16 @@
 // Spike automatizado: confirma no Deck as chamadas do Steam que src/steam.ts usa.
 // Cria um atalho "IP Teste", mede cada chamada, tira screenshots para a parte visual e
 // sempre apaga o atalho no fim. Não faz perguntas: roda sem ninguém olhando.
-// Uso: node scripts/spike.mjs [ip]   (sem ip, usa deck.config.json)
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// Uso: node scripts/spike.mjs [ip|aparelho]   (sem argumento, o aparelho padrão do deck.config.json)
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connect } from "./cdp.mjs";
+import { loadConfig } from "./deck.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const host = process.argv[2] ?? JSON.parse(readFileSync(join(ROOT, "deck.config.json"), "utf8")).host;
+const arg = process.argv[2];
+const host = arg && /^[\d.]+$/.test(arg) ? arg : loadConfig(arg).host;
 const OPTS = "-c 'sleep 15' --guid 00000000-0000-0000-0000-000000000000";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 

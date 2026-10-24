@@ -106,7 +106,7 @@ No Chrome ou Edge: `chrome://inspect` → **Configure…** → adicione `<ip>:80
 A janela que abre é o DevTools **do Steam do Deck**: tudo o que roda ali roda dentro do Steam, como se fosse o plugin. Durante os testes do plugin, deixe-o aberto: os erros do frontend aparecem em vermelho na aba **Console**. Se o Steam do Deck reiniciar, volte ao `chrome://inspect` e clique em **inspect** de novo.
 
 ### Passo 5b: no Windows, configurar o IP e conferir tudo
-Copie `deck.config.example.json` para `deck.config.json` e coloque o IP do Deck. Esse arquivo não vai para o git. Depois:
+Copie `deck.config.example.json` para `deck.config.json` e coloque os IPs: `deck` é o Steam Deck de desenvolvimento (padrão) e `machine` é a Steam Machine usada como produção. Esse arquivo não vai para o git. Para usar outro aparelho, acrescente `--device machine` a qualquer comando. Depois:
 ```powershell
 node scripts/deck.mjs check
 ```
