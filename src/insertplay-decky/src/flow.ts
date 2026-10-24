@@ -16,8 +16,7 @@ import {
   applyArtwork,
   gameRunning,
   isHidden,
-  removableLibraries,
-  removableLibraryApps,
+  steamLibraries,
   runGame,
   runSteamGame,
   setHidden,
@@ -154,8 +153,10 @@ let lastBadgeError = "";
  *  Nunca lança; o badge é enfeite. O erro vai para o log uma vez, não a cada gatilho. */
 export async function refreshBadges(): Promise<void> {
   try {
-    const [cards, registry, steamApps] = await Promise.all([presentCards(), loadRegistry(), removableLibraryApps()]);
+    const [cards, registry] = await Promise.all([presentCards(), loadRegistry()]);
     const present = new Set(cards.map((c) => c.guid).filter(Boolean));
+    // o mesmo critério de cartão das notificações; antes do primeiro retrato, nenhum
+    const steamApps = [...(steamCards?.values() ?? [])].filter((c) => c.card).flatMap((c) => c.apps);
     const shortcuts = Object.entries(registry)
       .filter(([guid]) => present.has(guid))
       .map(([, record]) => record.appid);
@@ -183,10 +184,13 @@ export const onRemoved = (card: { mount: string; label: string }) =>
     .catch((err) => report(`Remoção de ${card.label}`, err))
     .finally(refreshBadges);
 
-/** Cartão com biblioteca Steam visto no último aviso do Steam, por pasta da biblioteca. */
+/** Biblioteca Steam montada vista no último aviso do Steam, por pasta da biblioteca. */
 interface SteamCard {
   mount: string;
   label: string;
+  /** Está num cartão: o Steam diz que não é fixa (Deck) ou o kernel diz que o disco é
+   *  removível (leitor USB da Steam Machine). Um segundo SSD interno fica de fora. */
+  card: boolean;
   /** Também é cartão InsertPlay (ou o backend não soube dizer): o outro fluxo notifica. */
   silent: boolean;
   apps: number[];
@@ -200,7 +204,7 @@ let steamCards: Map<string, SteamCard> | null = null;
  *  montagem), não por appid: instalar um jogo num cartão já inserido muda `apps`, não
  *  os cartões presentes. */
 async function checkSteamLibraries(): Promise<void> {
-  const libraries = await removableLibraries();
+  const libraries = await steamLibraries();
   const previous = steamCards;
   const next = new Map<string, SteamCard>();
   // Medido no Deck: o aviso do Steam chega ~12 s depois de um move terminar, então `apps`
@@ -223,6 +227,7 @@ async function checkSteamLibraries(): Promise<void> {
     next.set(library.path, {
       mount: card?.mount ?? library.path,
       label: card?.label ?? library.path.split("/").pop() ?? library.path,
+      card: !library.fixed || Boolean(card?.removable),
       silent: !card || card.insertplay,
       apps: library.apps,
     });
@@ -230,7 +235,9 @@ async function checkSteamLibraries(): Promise<void> {
   steamCards = next;
   if (previous === null) {
     // sem esta linha, um cartão que faltou no retrato só aparece como "remoção perdida"
-    const cards = [...next.values()].map((c) => `${c.label}${c.silent ? " (insertplay)" : ""}: ${c.apps.length}`);
+    const cards = [...next.values()]
+      .filter((c) => c.card)
+      .map((c) => `${c.label}${c.silent ? " (insertplay)" : ""}: ${c.apps.length}`);
     await logAdd("steam", `snapshot: ${cards.join(", ") || "-"}`);
     return;
   }
@@ -244,7 +251,14 @@ async function checkSteamLibraries(): Promise<void> {
       const seen = out.get(card.mount);
       out.set(
         card.mount,
-        seen ? { ...seen, silent: seen.silent || card.silent, apps: [...seen.apps, ...card.apps] } : card,
+        seen
+          ? {
+              ...seen,
+              card: seen.card || card.card,
+              silent: seen.silent || card.silent,
+              apps: [...seen.apps, ...card.apps],
+            }
+          : card,
       );
     }
     return out;
@@ -252,7 +266,9 @@ async function checkSteamLibraries(): Promise<void> {
   const before = byMount(previous);
   const after = byMount(next);
   const gone = (from: Map<string, SteamCard>, other: Map<string, SteamCard>) =>
-    [...from.values()].filter((card) => !other.has(card.mount) && !card.silent && card.apps.length > 0);
+    [...from.values()].filter(
+      (card) => !other.has(card.mount) && card.card && !card.silent && card.apps.length > 0,
+    );
   for (const card of gone(before, after)) {
     await logAdd("steam", `${card.label} removed (${card.apps.join(", ")})`);
     toaster.toast({ title: TITLE, body: `Cartão ${card.label} removido` });

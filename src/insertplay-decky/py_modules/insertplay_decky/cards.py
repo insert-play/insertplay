@@ -54,10 +54,30 @@ def diff(previous: dict, current: dict) -> tuple:
     return inserted, removed
 
 
-def library_card(path: str, media_roots: list, ismount=os.path.ismount):
+def disk_is_removable(mount: str, sys_root: str = "/sys", resolve=os.path.realpath) -> bool:
+    """O disco do ponto de montagem se declara removível no kernel (`removable` = 1).
+
+    Medido em 2026-10-24: o leitor USB da Steam Machine (`/dev/sda1`) tem `removable` 1,
+    mas o Steam marca a biblioteca do cartão como `bIsFixed: true`. Sem isto, cartão em
+    leitor USB nunca conta como cartão. O `removable` fica no disco, não na partição:
+    `/sys/dev/block/<maj>:<min>` aponta para a partição, e o arquivo está na pasta pai."""
+    try:
+        dev = os.stat(mount).st_dev
+        node = resolve(os.path.join(sys_root, "dev", "block", f"{os.major(dev)}:{os.minor(dev)}"))
+        for path in (node, os.path.dirname(node)):
+            flag = os.path.join(path, "removable")
+            if os.path.isfile(flag):
+                with open(flag) as f:
+                    return f.read().strip() == "1"
+    except (OSError, AttributeError):  # AttributeError: os.major não existe fora do POSIX
+        pass
+    return False
+
+
+def library_card(path: str, media_roots: list, ismount=os.path.ismount, removable=disk_is_removable):
     """Cartão onde fica uma biblioteca Steam (`path` vem do Steam e pode ser subpasta,
-    como `Games/SteamLibrary`). Devolve `{"mount", "label", "insertplay"}` ou `None` se
-    o caminho não está em mídia removível montada.
+    como `Games/SteamLibrary`). Devolve `{"mount", "label", "insertplay", "removable"}`
+    ou `None` se o caminho não está em mídia montada.
 
     `insertplay` olha o manifesto no disco, não `find_cards`: o Steam avisa da biblioteca
     antes da próxima varredura do backend, e o cartão InsertPlay que também tem
@@ -72,6 +92,7 @@ def library_card(path: str, media_roots: list, ismount=os.path.ismount):
                 "mount": current,
                 "label": os.path.basename(current),
                 "insertplay": manifest_path(current) is not None,
+                "removable": removable(current),
             }
         current = os.path.dirname(current)
     return None

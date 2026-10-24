@@ -44,6 +44,8 @@ export interface LibraryCard {
   label: string;
   /** Tem manifesto InsertPlay: o fluxo do cartão InsertPlay cuida dele. */
   insertplay: boolean;
+  /** O kernel declara o disco removível (`/sys/.../removable`), como o leitor USB. */
+  removable: boolean;
 }
 
 /** Cartão de uma biblioteca Steam. `null` = fora de mídia montada ou falha no backend. */

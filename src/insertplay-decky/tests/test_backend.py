@@ -75,8 +75,10 @@ def test_library_card_finds_the_mount_above_a_steam_library(tmp_path):
     media = tmp_path / "media"
     mount = media / "deck" / "Games"
     (mount / "SteamLibrary").mkdir(parents=True)
-    found = cards.library_card(str(mount / "SteamLibrary"), [str(media)], ismount=lambda p: p == str(mount))
-    assert found == {"mount": str(mount), "label": "Games", "insertplay": False}
+    found = cards.library_card(
+        str(mount / "SteamLibrary"), [str(media)], ismount=lambda p: p == str(mount), removable=lambda p: True
+    )
+    assert found == {"mount": str(mount), "label": "Games", "insertplay": False, "removable": True}
 
 
 def test_library_card_flags_insertplay_cards(tmp_path):
@@ -86,6 +88,21 @@ def test_library_card_flags_insertplay_cards(tmp_path):
     (mount / "insertplay" / cards.MANIFEST_NAME).write_text("{}")
     found = cards.library_card(str(mount), [str(media)], ismount=lambda p: p == str(mount))
     assert found["insertplay"] is True
+
+
+@pytest.mark.skipif(not hasattr(os, "major"), reason="needs os.major (POSIX)")
+def test_disk_is_removable_reads_the_parent_disk_flag(tmp_path):
+    # /sys/dev/block/<maj>:<min> aponta para a partição; `removable` fica no disco pai
+    disk = tmp_path / "sys" / "devices" / "usb" / "block" / "sda"
+    (disk / "sda1").mkdir(parents=True)
+    (disk / "removable").write_text("1\n")
+    assert cards.disk_is_removable(str(tmp_path), str(tmp_path / "sys"), resolve=lambda p: str(disk / "sda1"))
+    (disk / "removable").write_text("0\n")
+    assert not cards.disk_is_removable(str(tmp_path), str(tmp_path / "sys"), resolve=lambda p: str(disk / "sda1"))
+
+
+def test_disk_is_removable_without_sysfs_is_false(tmp_path):
+    assert cards.disk_is_removable(str(tmp_path), str(tmp_path / "nosys")) is False
 
 
 def test_library_card_outside_media_or_unmounted_is_none(tmp_path):
