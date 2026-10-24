@@ -115,6 +115,7 @@ function upload(cfg, skipBuild) {
     console.log("build ok");
   }
   if (ssh(cfg, `rm -rf ${STAGE} && mkdir -p ${STAGE}/dist`).code !== 0) return 1;
+  // mesma lista de PACKAGE_ENTRIES (py_modules/insertplay_decky/plugin_package.py); dist vai abaixo
   const files = ["plugin.json", "package.json", "main.py", "NOTICE", "py_modules"];
   const target = `${cfg.user}@${cfg.host}`;
   if (run("scp", ["-q", "-r", "-o", "BatchMode=yes", ...files, `${target}:${STAGE}/`]).code !== 0) return 1;
@@ -242,6 +243,7 @@ async function main() {
       return setupAccess(cfg);
     case "stage-card": {
       const i = rest.indexOf("--version");
+      if (i >= 0 && (!rest[i + 1] || rest[i + 1].startsWith("--"))) throw new Error("--version precisa de um valor, ex.: --version 0.3.0");
       return stageCard(cfg, rest[0], i >= 0 ? rest[i + 1] : undefined);
     }
     case "screenshot":

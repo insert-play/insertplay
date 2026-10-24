@@ -17,12 +17,20 @@ import zipfile
 
 PLUGIN_NAME = "InsertPlay"
 CARD_PACKAGE = os.path.join("insertplay", "decky", f"{PLUGIN_NAME}.zip")
-# mesmo conteúdo que o scripts/package.sh copia; o resto da pasta instalada fica fora
+# o que entra no pacote, seja da pasta do projeto (package.sh) ou da instalada (plugin);
+# o `upload` do scripts/deck.mjs envia a mesma lista
 PACKAGE_ENTRIES = ("plugin.json", "package.json", "main.py", "NOTICE", "py_modules", "dist")
 REQUIRED = ("plugin.json", "package.json", "main.py", "dist/index.js")
-VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.+-]*)?$")
-# um pacote real tem algumas centenas de KB; isto barra zip bomb sem limitar o plugin
+# semver: major.minor.patch[-pré-release][+build]
+VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
+# um pacote real tem algumas dezenas de KB; isto barra zip bomb e arquivo gigante com
+# o nome certo sem limitar o plugin
+MAX_ZIP_BYTES = 16 * 1024 * 1024
 MAX_UNCOMPRESSED = 64 * 1024 * 1024
+
+# zip_path -> ((mtime_ns, size), resultado ou PackageError). O painel pergunta o status
+# a cada 5 s; sem isto cada pergunta relia e refazia o hash do zip no cartão.
+_cache: dict = {}
 
 
 class PackageError(Exception):
@@ -34,14 +42,21 @@ def card_package_path(mount: str) -> str:
 
 
 def parse_version(value) -> tuple:
+    """Chave de ordenação com a precedência do semver: `1.0.0-beta < 1.0.0`, e
+    identificadores de pré-release numéricos ordenam como número. `+build` não conta."""
     match = VERSION_RE.match(str(value or "").strip())
     if not match:
         raise PackageError(f"invalid version: {value!r}")
-    return tuple(int(part) for part in match.groups())
+    core = tuple(int(part) for part in match.group(1, 2, 3))
+    pre = match.group(4)
+    if not pre:
+        return core + ((1,),)
+    ids = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.split("."))
+    return core + ((0,) + ids,)
 
 
 def compare_versions(a: str, b: str) -> int:
-    """-1, 0 ou 1. Só major.minor.patch contam: sufixos de pré-release não ordenam."""
+    """-1, 0 ou 1."""
     pa, pb = parse_version(a), parse_version(b)
     return (pa > pb) - (pa < pb)
 
@@ -63,6 +78,8 @@ def read_package(zip_path: str) -> dict:
     absolutos, sem `..` e sem symlinks. O arquivo é lido uma vez só, para que o hash
     devolvido (e conferido pelo Decky na instalação) seja dos bytes validados."""
     try:
+        if os.path.getsize(zip_path) > MAX_ZIP_BYTES:
+            raise PackageError(f"{zip_path} is too large")
         with open(zip_path, "rb") as f:
             data = f.read()
     except OSError as exc:
@@ -90,11 +107,31 @@ def read_package(zip_path: str) -> dict:
                 raise PackageError(f"zip is missing {', '.join(missing)}")
             _check_plugin_json(json.loads(archive.read(f"{PLUGIN_NAME}/plugin.json")))
             package = json.loads(archive.read(f"{PLUGIN_NAME}/package.json"))
-    except (zipfile.BadZipFile, ValueError, KeyError) as exc:
-        raise PackageError(f"invalid zip {zip_path}: {exc}") from exc
+    except PackageError:
+        raise
+    except Exception as exc:
+        # zip corrompido falha de muitos jeitos (BadZipFile, zlib.error, EOFError,
+        # NotImplementedError, RuntimeError de entrada cifrada...); todos são "inválido"
+        raise PackageError(f"invalid zip {zip_path}: {type(exc).__name__}: {exc}") from exc
     version = str(package.get("version") or "") if isinstance(package, dict) else ""
     parse_version(version)
     return {"version": version, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+
+
+def read_package_cached(zip_path: str) -> dict:
+    """`read_package`, refeito só quando o arquivo muda (mtime ou tamanho)."""
+    st = os.stat(zip_path)
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _cache.get(zip_path)
+    if not hit or hit[0] != key:
+        try:
+            hit = (key, read_package(zip_path))
+        except PackageError as exc:
+            hit = (key, exc)
+        _cache[zip_path] = hit
+    if isinstance(hit[1], PackageError):
+        raise hit[1]
+    return dict(hit[1])
 
 
 def _package_files(plugin_dir: str):
@@ -106,14 +143,14 @@ def _package_files(plugin_dir: str):
             for root, dirs, files in os.walk(path):
                 dirs[:] = sorted(d for d in dirs if d != "__pycache__")
                 for name in sorted(files):
-                    if name.endswith(".pyc"):
+                    if name.endswith((".pyc", ".map")):
                         continue
                     full = os.path.join(root, name)
                     yield full, os.path.relpath(full, plugin_dir).replace(os.sep, "/")
 
 
 def build_zip_from_dir(plugin_dir: str, dest_zip: str) -> dict:
-    """Empacota a pasta instalada do plugin em `dest_zip` e devolve `read_package` dele.
+    """Empacota a pasta do plugin em `dest_zip` e devolve `read_package` dele.
 
     Escreve em `<dest>.tmp`, faz fsync e só então renomeia: cartão removido no meio da
     gravação deixa o zip antigo intacto (ou um .tmp órfão), nunca um zip pela metade."""
@@ -127,7 +164,7 @@ def build_zip_from_dir(plugin_dir: str, dest_zip: str) -> dict:
             f.flush()
             os.fsync(f.fileno())
         # valida antes de substituir: nunca troca um pacote bom por um quebrado
-        read_package(tmp)
+        info = read_package(tmp)
         os.replace(tmp, dest_zip)
     except BaseException:
         try:
@@ -136,7 +173,10 @@ def build_zip_from_dir(plugin_dir: str, dest_zip: str) -> dict:
             pass
         raise
     _fsync_dir(os.path.dirname(dest_zip))
-    return read_package(dest_zip)
+    # os.replace mantém os bytes validados: guarda o resultado em vez de reler o cartão
+    st = os.stat(dest_zip)
+    _cache[dest_zip] = ((st.st_mtime_ns, st.st_size), info)
+    return dict(info)
 
 
 def _fsync_dir(path: str) -> None:
@@ -162,8 +202,8 @@ def card_status(mount: str, installed_version: str) -> dict:
     if not os.path.isfile(path):
         return out
     try:
-        out.update(read_package(path))
-    except PackageError as exc:
+        out.update(read_package_cached(path))
+    except (PackageError, OSError) as exc:
         out.update(relation="invalid", error=str(exc))
         return out
     try:

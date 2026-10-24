@@ -64,7 +64,7 @@ function PackageRow({ pkg, installed, onChange }: { pkg: CardPackage; installed:
     showModal(
       <ConfirmModal
         strTitle="Gravar plugin no cartão"
-        strDescription={`Substituir o plugin v${pkg.version} do cartão ${pkg.label} pela versão instalada v${installed}?`}
+        strDescription={`Substituir ${pkg.version ? `o plugin v${pkg.version}` : "o pacote inválido"} do cartão ${pkg.label} pela versão instalada v${installed}?`}
         strOKButtonText="Gravar"
         onOK={() => void write()}
       />,

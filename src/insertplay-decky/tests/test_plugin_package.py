@@ -45,7 +45,17 @@ def valid_entries(version="0.2.0", **plugin_json):
 
 @pytest.mark.parametrize(
     "a,b,expected",
-    [("0.2.0", "0.1.10", 1), ("0.1.10", "0.2.0", -1), ("1.0.0", "1.0.0", 0), ("1.0.0-beta", "1.0.0", 0)],
+    [
+        ("0.2.0", "0.1.10", 1),
+        ("0.1.10", "0.2.0", -1),
+        ("1.0.0", "1.0.0", 0),
+        ("1.0.0-beta", "1.0.0", -1),
+        ("1.0.0", "1.0.0-beta", 1),
+        ("1.0.0-beta.2", "1.0.0-beta.10", -1),
+        ("1.0.0-alpha", "1.0.0-beta", -1),
+        ("1.0.0-1", "1.0.0-alpha", -1),
+        ("1.0.0+build.5", "1.0.0", 0),
+    ],
 )
 def test_compare_versions(a, b, expected):
     assert pp.compare_versions(a, b) == expected
@@ -133,3 +143,55 @@ def test_card_status(tmp_path):
     zip_path.write_bytes(b"broken")
     status = pp.card_status(str(mount), "0.1.0")
     assert status["relation"] == "invalid" and status["error"]
+
+
+def test_corrupt_entry_data_is_invalid_not_a_crash(tmp_path):
+    """Diretório central bom, dados de uma entrada estragados: zlib.error vira PackageError."""
+    path = tmp_path / "p.zip"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in valid_entries().items():
+            archive.writestr(name, data + " " * 200)
+    raw = bytearray(path.read_bytes())
+    info = zipfile.ZipFile(path).getinfo("InsertPlay/plugin.json")
+    start = info.header_offset + 30 + len(info.filename.encode()) + len(info.extra)
+    raw[start:start + 8] = bytes([0xFF]) * 8
+    path.write_bytes(bytes(raw))
+    with pytest.raises(PackageError, match="invalid zip"):
+        pp.read_package(str(path))
+    mount = tmp_path / "SD1"
+    (mount / "insertplay" / "decky").mkdir(parents=True)
+    (mount / "insertplay" / "decky" / "InsertPlay.zip").write_bytes(bytes(raw))
+    assert pp.card_status(str(mount), "0.1.0")["relation"] == "invalid"
+
+
+def test_oversized_file_is_rejected_without_reading(tmp_path, monkeypatch):
+    path = write_zip(tmp_path / "p.zip", valid_entries())
+    monkeypatch.setattr(pp, "MAX_ZIP_BYTES", 10)
+    with pytest.raises(PackageError, match="too large"):
+        pp.read_package(str(path))
+
+
+def test_status_is_cached_until_the_file_changes(tmp_path, monkeypatch):
+    mount = tmp_path / "SD1"
+    zip_path = mount / "insertplay" / "decky" / "InsertPlay.zip"
+    zip_path.parent.mkdir(parents=True)
+    write_zip(zip_path, valid_entries("0.2.0"))
+    reads = []
+    real = pp.read_package
+    monkeypatch.setattr(pp, "read_package", lambda p: reads.append(p) or real(p))
+    pp.card_status(str(mount), "0.1.0")
+    pp.card_status(str(mount), "0.1.0")
+    assert len(reads) == 1
+    write_zip(zip_path, valid_entries("0.3.0"))
+    os.utime(zip_path, ns=(1, 1))  # garante mtime diferente mesmo em FS de baixa resolução
+    assert pp.card_status(str(mount), "0.1.0")["version"] == "0.3.0"
+    assert len(reads) == 2
+
+
+def test_write_does_not_reread_for_status(tmp_path, monkeypatch):
+    plugin = make_plugin_dir(tmp_path)
+    mount = tmp_path / "SD1"
+    mount.mkdir()
+    pp.build_zip_from_dir(str(plugin), pp.card_package_path(str(mount)))
+    monkeypatch.setattr(pp, "read_package", lambda p: pytest.fail("status re-read the zip"))
+    assert pp.card_status(str(mount), "0.2.0")["relation"] == "same"

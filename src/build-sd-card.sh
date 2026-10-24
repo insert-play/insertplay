@@ -248,9 +248,30 @@ done
 # instalado se atualiza a partir dele. Sem pacote novo (insertplay-decky/scripts/package.sh),
 # o que já estava no cartão foi preservado acima.
 if [[ -f "$DECKY_PACKAGE" ]]; then
-  mkdir -p "$TARGET_INSERTPLAY_DIR/decky"
-  cp -f "$DECKY_PACKAGE" "$TARGET_INSERTPLAY_DIR/decky/InsertPlay.zip"
-  log "Copied Decky plugin package to: $TARGET_INSERTPLAY_DIR/decky/InsertPlay.zip"
+  # valida o zip e não troca um pacote mais novo do cartão (gravado pelo próprio plugin)
+  # por um out/InsertPlay.zip antigo; a cópia é atômica (build_zip_from_dir não serve
+  # aqui porque o zip já está pronto)
+  PYTHONPATH="$REPO_ROOT/src/insertplay-decky/py_modules" python3 - "$DECKY_PACKAGE" "$TARGET_INSERTPLAY_DIR/decky/InsertPlay.zip" <<'PY' \
+    || die "Decky plugin package is invalid: $DECKY_PACKAGE"
+import os, shutil, sys
+from insertplay_decky.plugin_package import PackageError, compare_versions, read_package
+src, dest = sys.argv[1], sys.argv[2]
+new = read_package(src)
+if os.path.isfile(dest):
+    try:
+        old = read_package(dest)
+    except PackageError:
+        old = None
+    if old and compare_versions(old["version"], new["version"]) > 0:
+        print(f"[build-sd-card] Card already has Decky plugin v{old['version']}, newer than v{new['version']}; kept it")
+        sys.exit(0)
+os.makedirs(os.path.dirname(dest), exist_ok=True)
+shutil.copyfile(src, dest + ".tmp")
+with open(dest + ".tmp", "rb+") as f:
+    os.fsync(f.fileno())
+os.replace(dest + ".tmp", dest)
+print(f"[build-sd-card] Copied Decky plugin v{new['version']} to: {dest}")
+PY
 else
   log "Decky plugin package not found (run src/insertplay-decky/scripts/package.sh): $DECKY_PACKAGE"
 fi

@@ -155,6 +155,7 @@ class Plugin:
         dest = plugin_package.card_package_path(card_mount)
         written = await asyncio.to_thread(plugin_package.build_zip_from_dir, decky.DECKY_PLUGIN_DIR, dest)
         self.log.add("package", f"{card_mount}: wrote plugin v{written['version']}")
+        # build_zip_from_dir já deixou o resultado no cache: isto não relê o zip
         return await asyncio.to_thread(plugin_package.card_status, card_mount, decky.DECKY_PLUGIN_VERSION)
 
     # None, não {}: um registro "vazio" por falha faria o frontend criar atalhos duplicados

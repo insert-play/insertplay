@@ -8,7 +8,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 OUT="$ROOT/out"
-rm -rf "$OUT" && mkdir -p "$OUT/InsertPlay/dist"
+mkdir -p "$OUT"
+rm -f "$OUT/InsertPlay.zip"
 
 npx -y pnpm@9 build 2>&1 | tee "$OUT/build.log"
 if grep -q "plugin typescript" "$OUT/build.log"; then
@@ -16,10 +17,8 @@ if grep -q "plugin typescript" "$OUT/build.log"; then
 	exit 1
 fi
 
-cp plugin.json package.json main.py NOTICE "$OUT/InsertPlay/"
-cp -r py_modules "$OUT/InsertPlay/"
-cp dist/index.js "$OUT/InsertPlay/dist/"
-PYTHONPATH="$ROOT/py_modules" python3 - "$OUT/InsertPlay" "$OUT/InsertPlay.zip" <<'PY'
+# build_zip_from_dir escolhe os arquivos (PACKAGE_ENTRIES) direto da pasta do projeto
+PYTHONPATH="$ROOT/py_modules" python3 - "$ROOT" "$OUT/InsertPlay.zip" <<'PY'
 import sys
 from insertplay_decky.plugin_package import build_zip_from_dir
 info = build_zip_from_dir(sys.argv[1], sys.argv[2])
