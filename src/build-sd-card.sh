@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 PUBLISH_SCRIPT="$REPO_ROOT/src/publish.sh"
 PUBLISH_DIR="$REPO_ROOT/publish"
 SDCARD_ASSETS_DIR="$REPO_ROOT/src/insertplay-sdcard"
+DECKY_PACKAGE="$REPO_ROOT/src/insertplay-decky/out/InsertPlay.zip"
 RID="${1:-linux-x64}"
 CURRENT_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 
@@ -95,6 +96,7 @@ SD_USER_ASSET_RELATIVE_PATHS=(
   "steam-shortcut.json"
   "shortcut-identity.json"
   "steam-artwork"
+  "decky"
 )
 
 backup_sd_user_assets() {
@@ -241,6 +243,27 @@ for sdcard_script in autorun.sh install-shortcut.sh insertplay-guid-guard.sh; do
     log "Warning: sdcard script not found: $src"
   fi
 done
+
+# Plugin Decky no cartão: o Decky o instala por "Install Plugin from ZIP File" e o plugin
+# instalado se atualiza a partir dele. Sem pacote novo (insertplay-decky/scripts/package.sh),
+# o que já estava no cartão foi preservado acima.
+if [[ -f "$DECKY_PACKAGE" ]]; then
+  # mesma validação e gravação do plugin: não troca um pacote mais novo do cartão
+  # (gravado pelo próprio plugin) por um out/InsertPlay.zip antigo, não segue symlinks
+  # do cartão e grava de forma atômica
+  PYTHONPATH="$REPO_ROOT/src/insertplay-decky/py_modules" python3 - "$DECKY_PACKAGE" "$TARGET_MOUNTPOINT" <<'PY' \
+    || die "Decky plugin package could not be copied: $DECKY_PACKAGE"
+import sys
+from insertplay_decky.plugin_package import card_package_path, copy_package_to_card
+info, copied = copy_package_to_card(sys.argv[1], sys.argv[2])
+if copied:
+    print(f"[build-sd-card] Copied Decky plugin v{info['version']} to: {card_package_path(sys.argv[2])}")
+else:
+    print(f"[build-sd-card] Card already has a newer Decky plugin (v{info['version']}); kept it")
+PY
+else
+  log "Decky plugin package not found (run src/insertplay-decky/scripts/package.sh): $DECKY_PACKAGE"
+fi
 
 if [[ -f "$TARGET_INSERTPLAY_DIR/install.sh" ]]; then
   chmod +x "$TARGET_INSERTPLAY_DIR/install.sh"

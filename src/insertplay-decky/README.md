@@ -29,7 +29,40 @@ uvx pytest tests -q     # backend; o teste de symlink só roda em Linux/WSL
 node scripts/deck.mjs check     # diagnóstico da conexão com o Deck
 node scripts/deck.mjs deploy    # build + instala no Deck + reinicia o Decky
 ```
-Todos os comandos do `deck.mjs` estão no topo de [scripts/deck.mjs](scripts/deck.mjs) e em [CLAUDE.md](CLAUDE.md). O zip para distribuição sai de `scripts/package.sh` (WSL), em `out/InsertPlay.zip`.
+Todos os comandos do `deck.mjs` estão no topo de [scripts/deck.mjs](scripts/deck.mjs) e em [CLAUDE.md](CLAUDE.md). O zip para distribuição sai de `scripts/package.sh` (WSL), em `out/InsertPlay.zip`. Para testar o fluxo do cartão sem refazer o cartão: `node scripts/deck.mjs stage-card <rótulo> [--version X]`.
+
+## Instalar e atualizar pelo cartão SD
+
+O cartão leva o próprio plugin em `insertplay/decky/InsertPlay.zip`. Não precisa de rede nem do Modo Desktop. Só o Decky Loader precisa estar instalado.
+
+### Gerar o pacote e colocar no cartão (no PC, WSL)
+```bash
+bash src/insertplay-decky/scripts/package.sh   # gera src/insertplay-decky/out/InsertPlay.zip
+bash src/build-sd-card.sh                      # copia o zip para insertplay/decky/ no cartão
+```
+- **A cada release, suba a `version` em `package.json`.** É por ela que o plugin decide se o cartão é mais novo.
+- Sem um zip novo, o `build-sd-card.sh` mantém o que já estava no cartão.
+
+### Primeira instalação (no Deck, Modo de Jogo)
+1. Insira o cartão.
+2. Botão `...` → ícone do Decky → engrenagem → **Geral**: ligue **Developer mode** (só uma vez).
+3. Ainda nas configurações do Decky → **Desenvolvedor** → "Instalar Plugin a partir de um arquivo ZIP" → **Navegar**. Aceite o aviso de plugin de terceiros.
+4. No seletor, use o botão **↑** até chegar em `/` e entre em `run` → `media` → `deck` → `<nome do cartão>` → `insertplay` → `decky`.
+5. Toque em `InsertPlay.zip` e confirme **Instalar**.
+
+### Atualizar (no Deck, painel do InsertPlay)
+A seção **Plugin** mostra a versão instalada e, para cada cartão inserido, a versão que ele traz:
+
+| O cartão tem | Botão | O que acontece |
+|---|---|---|
+| versão mais nova | Atualizar plugin para vX | O Decky pede confirmação e troca o plugin pela versão do cartão. |
+| a mesma versão | Reinstalar plugin do cartão | Igual ao anterior, com a mesma versão. |
+| versão mais antiga, zip inválido | Atualizar cartão para vX | Pede confirmação e grava a versão instalada no cartão. |
+| nenhum pacote | Gravar plugin vX no cartão | Grava a versão instalada no cartão. |
+
+Ao inserir um cartão com versão mais nova, aparece um aviso. O plugin nunca se atualiza sozinho.
+
+O vínculo dos cartões com os atalhos (`~/homebrew/settings/InsertPlay`) é mantido na atualização. Se você tinha ocultado ou reordenado o InsertPlay na lista do Decky, isso volta ao padrão, como numa atualização pela loja.
 
 ## Preparar o Steam Deck (uma vez)
 

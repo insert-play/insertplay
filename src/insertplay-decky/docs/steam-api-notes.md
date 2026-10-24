@@ -59,3 +59,21 @@ Atalhos não-Steam têm `app_type === 1073741824` e `BIsShortcut() === true`, e 
 - `GetShortcutDataForPath`;
 - `LaunchNonSteamApp`;
 - `SetShortcutSortAs`.
+
+## Instalação do plugin pelo Decky (medido 2026-10-24, Decky v3.3.0)
+
+Não é API do Steam, mas é o outro global não documentado que o plugin usa (`src/selfupdate.ts`).
+
+- `DeckyBackend.call("utilities/install_plugin", artifact, name, version, hash, installType)`:
+  - é a mesma rota da loja e do "Install Plugin from ZIP File";
+  - `artifact` pode ser `file:///caminho/absoluto.zip`;
+  - não instala nada sozinha: abre o **modal nativo do Decky** ("Tem certeza que você deseja atualizar InsertPlay 0.2.1?"), e só "Atualizar"/"Instalar" instala;
+  - `installType` (0 INSTALL, 1 REINSTALL, 2 UPDATE, 3 DOWNGRADE, 4 OVERWRITE) só muda o texto do modal;
+  - o Decky sempre remove a pasta da versão instalada e extrai o zip como está em `~/homebrew/plugins`. A pasta raiz do zip precisa ser `InsertPlay/`, senão vira outro plugin.
+- `hash`: SHA-256 do zip. Se não bater, o Decky recusa a instalação; vazio pula a checagem. Passamos o hash que o backend leu, então um zip trocado depois da leitura é recusado.
+- Com `version` diferente de `"dev"`, o nome vem do argumento `name` e precisa ser igual ao `name` do `plugin.json`.
+- O que sobrevive à atualização: `~/homebrew/settings/InsertPlay` (registro guid → appid) e `~/homebrew/data/InsertPlay`. O Decky limpa só as entradas do plugin em `pluginOrder`, `hiddenPlugins` e `disabled_plugins` do loader.
+- Depois de instalar, o Decky recarregou o plugin duas vezes seguidas (watcher de arquivos). Isso rodou duas reconciliações e não duplicou atalho.
+- Instalado pelo Decky, os arquivos ficam `deck:deck 755`. Pelo `deploy-plugin.sh` eles ficam `root:root`.
+- O modal do Decky aparece na janela "Steam — Modo Big Picture". O `Page.captureScreenshot` dessa janela sai preto enquanto o modal está aberto, então confira o texto com `document.body.innerText` (via `cdp.mjs`).
+- **Seletor de arquivos** do "Install Plugin from ZIP File": abre em `/home/deck`, mas o botão ↑ sobe até `/`. Dá para chegar em `/run/media/deck/<rótulo>/insertplay/decky/InsertPlay.zip`. O backend do seletor (`utilities/filepicker_ls`) roda como root e não restringe caminho. Tocar no zip já abre o modal "instalar InsertPlay dev?", e o Decky lê o nome do `plugin.json`.
