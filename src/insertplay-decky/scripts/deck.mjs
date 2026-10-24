@@ -139,7 +139,7 @@ function deploy(cfg, skipBuild) {
 }
 
 /** Grava o zip do plugin no cartão, como o build-sd-card.sh faria, usando o mesmo
- *  build_zip_from_dir do plugin (valida o zip antes de substituir o anterior).
+ *  write_card_package do plugin (valida o zip antes de substituir o anterior).
  *  `--version` troca a versão só no zip: serve para testar "cartão mais novo". */
 function stageCard(cfg, label, version) {
   if (!label || label.startsWith("--")) throw new Error("uso: deck.mjs stage-card <rótulo do cartão> [--version X]");
@@ -147,7 +147,7 @@ function stageCard(cfg, label, version) {
   return ssh(cfg, `python3 - <<'PY'
 import json, os, sys
 sys.path.insert(0, ${JSON.stringify(STAGE + "/py_modules")})
-from insertplay_decky.plugin_package import build_zip_from_dir, card_package_path
+from insertplay_decky.plugin_package import card_package_path, write_card_package
 mount = os.path.join("/run/media/deck", ${JSON.stringify(label)})
 if not os.path.isdir(mount):
     sys.exit(f"cartão {mount} não está montado")
@@ -157,9 +157,8 @@ if version:
     data = json.load(open(path))
     data["version"] = version
     json.dump(data, open(path, "w"), indent=2)
-dest = card_package_path(mount)
-info = build_zip_from_dir(${JSON.stringify(STAGE)}, dest)
-print(f"{dest}: v{info['version']} sha256={info['sha256'][:12]} {info['size']} bytes")
+info = write_card_package(${JSON.stringify(STAGE)}, mount)
+print(f"{card_package_path(mount)}: v{info['version']} sha256={info['sha256'][:12]} {info['size']} bytes")
 PY`).code;
 }
 

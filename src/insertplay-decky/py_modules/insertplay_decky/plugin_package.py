@@ -13,6 +13,7 @@ import io
 import json
 import os
 import re
+import tempfile
 import zipfile
 
 PLUGIN_NAME = "InsertPlay"
@@ -75,8 +76,13 @@ def read_package(zip_path: str) -> dict:
 
     A validação é a mesma que o Decky não faz: o zip vai ser extraído como root em
     ~/homebrew/plugins, então só aceitamos a pasta `InsertPlay/`, sem caminhos
-    absolutos, sem `..` e sem symlinks. O arquivo é lido uma vez só, para que o hash
-    devolvido (e conferido pelo Decky na instalação) seja dos bytes validados."""
+    absolutos, sem `..`, sem symlinks e sem dois nomes para o mesmo arquivo
+    (`InsertPlay/./plugin.json` é extraído por cima do `plugin.json` validado). Todo
+    arquivo é descompactado e tem o CRC conferido: o Decky apaga a versão instalada
+    antes de extrair, e um zip que falha no meio deixaria o usuário sem plugin.
+
+    O arquivo é lido uma vez só, para que o hash devolvido (e conferido pelo Decky na
+    instalação) seja dos bytes validados."""
     try:
         if os.path.getsize(zip_path) > MAX_ZIP_BYTES:
             raise PackageError(f"{zip_path} is too large")
@@ -88,11 +94,21 @@ def read_package(zip_path: str) -> dict:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             infos = archive.infolist()
             total = 0
+            seen = set()
             for info in infos:
                 name = info.filename
-                parts = name.replace("\\", "/").split("/")
-                if name.startswith(("/", "\\")) or ":" in parts[0] or ".." in parts or "\\" in name:
+                parts = name.split("/")
+                # pasta termina em "/": só o último componente pode ser vazio
+                inner = parts[:-1] if info.is_dir() else parts
+                if (
+                    "\\" in name
+                    or ":" in name
+                    or any(part in ("", ".", "..") for part in inner)
+                ):
                     raise PackageError(f"unsafe path in zip: {name!r}")
+                if name in seen:
+                    raise PackageError(f"duplicate entry in zip: {name!r}")
+                seen.add(name)
                 if parts[0] != PLUGIN_NAME:
                     raise PackageError(f"zip must have a single {PLUGIN_NAME}/ folder, found {name!r}")
                 # bits de tipo no external_attr (Unix): 0o120000 = symlink
@@ -105,6 +121,10 @@ def read_package(zip_path: str) -> dict:
             missing = [r for r in REQUIRED if f"{PLUGIN_NAME}/{r}" not in names]
             if missing:
                 raise PackageError(f"zip is missing {', '.join(missing)}")
+            # descompacta tudo e confere o CRC; erro de descompressão também cai abaixo
+            bad = archive.testzip()
+            if bad is not None:
+                raise PackageError(f"corrupt file in zip: {bad!r}")
             _check_plugin_json(json.loads(archive.read(f"{PLUGIN_NAME}/plugin.json")))
             package = json.loads(archive.read(f"{PLUGIN_NAME}/package.json"))
     except PackageError:
@@ -149,18 +169,37 @@ def _package_files(plugin_dir: str):
                     yield full, os.path.relpath(full, plugin_dir).replace(os.sep, "/")
 
 
-def build_zip_from_dir(plugin_dir: str, dest_zip: str) -> dict:
-    """Empacota a pasta do plugin em `dest_zip` e devolve `read_package` dele.
+def _card_package_dir(mount: str) -> str:
+    """`<cartão>/insertplay/decky`, criada se faltar, garantidamente dentro do cartão.
 
-    Escreve em `<dest>.tmp`, faz fsync e só então renomeia: cartão removido no meio da
-    gravação deixa o zip antigo intacto (ou um .tmp órfão), nunca um zip pela metade."""
-    os.makedirs(os.path.dirname(dest_zip), exist_ok=True)
-    tmp = dest_zip + ".tmp"
+    O cartão é conteúdo de terceiros: um `insertplay` ou `decky` que seja symlink
+    levaria a gravação para fora dele."""
+    path = os.path.realpath(mount)
+    for part in os.path.dirname(CARD_PACKAGE).split(os.sep):
+        path = os.path.join(path, part)
+        if os.path.islink(path):
+            raise PackageError(f"{path} is a symlink")
+        if not os.path.exists(path):
+            os.mkdir(path)
+        elif not os.path.isdir(path):
+            raise PackageError(f"{path} is not a directory")
+    return path
+
+
+def _write_atomic(dest_zip: str, fill) -> dict:
+    """Grava o zip com `fill(arquivo)`, valida e só então troca `dest_zip`.
+
+    O temporário é criado com O_EXCL e nome aleatório (mkstemp), então nunca segue um
+    symlink que já esteja no cartão. fsync antes do rename: cartão removido no meio da
+    gravação deixa o zip antigo intacto (ou um temporário órfão), nunca um zip pela
+    metade. `os.replace` troca o próprio `dest_zip`, mesmo se ele for um symlink."""
+    folder = os.path.dirname(dest_zip)
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=f".{PLUGIN_NAME}.", suffix=".zip.tmp")
     try:
-        with open(tmp, "wb") as f:
-            with zipfile.ZipFile(f, "w", zipfile.ZIP_DEFLATED) as archive:
-                for full, rel in _package_files(plugin_dir):
-                    archive.write(full, f"{PLUGIN_NAME}/{rel}")
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o644)  # mkstemp cria 0600; o pacote não é segredo
+        with os.fdopen(fd, "wb") as f:
+            fill(f)
             f.flush()
             os.fsync(f.fileno())
         # valida antes de substituir: nunca troca um pacote bom por um quebrado
@@ -172,11 +211,56 @@ def build_zip_from_dir(plugin_dir: str, dest_zip: str) -> dict:
         except OSError:
             pass
         raise
-    _fsync_dir(os.path.dirname(dest_zip))
+    _fsync_dir(folder)
     # os.replace mantém os bytes validados: guarda o resultado em vez de reler o cartão
     st = os.stat(dest_zip)
     _cache[dest_zip] = ((st.st_mtime_ns, st.st_size), info)
     return dict(info)
+
+
+def _zip_dir(plugin_dir: str):
+    def fill(f):
+        with zipfile.ZipFile(f, "w", zipfile.ZIP_DEFLATED) as archive:
+            for full, rel in _package_files(plugin_dir):
+                archive.write(full, f"{PLUGIN_NAME}/{rel}")
+
+    return fill
+
+
+def build_zip_from_dir(plugin_dir: str, dest_zip: str) -> dict:
+    """Empacota a pasta do plugin em `dest_zip` (uma pasta do desenvolvedor, como o
+    `out/` do package.sh) e devolve `read_package` dele. Para o cartão, use
+    `write_card_package`."""
+    os.makedirs(os.path.dirname(dest_zip) or ".", exist_ok=True)
+    return _write_atomic(dest_zip, _zip_dir(plugin_dir))
+
+
+def write_card_package(plugin_dir: str, mount: str) -> dict:
+    """Empacota a pasta do plugin direto no pacote do cartão."""
+    dest = os.path.join(_card_package_dir(mount), os.path.basename(CARD_PACKAGE))
+    return _write_atomic(dest, _zip_dir(plugin_dir))
+
+
+def copy_package_to_card(src_zip: str, mount: str) -> tuple:
+    """Copia um zip pronto (out/InsertPlay.zip) para o cartão, sem rebaixar versão:
+    se o cartão já tem um pacote válido mais novo, ele fica. Devolve
+    `(info do pacote no cartão, copiou?)`."""
+    new = read_package(src_zip)
+    dest = os.path.join(_card_package_dir(mount), os.path.basename(CARD_PACKAGE))
+    if os.path.isfile(dest):
+        try:
+            old = read_package(dest)
+        except PackageError:
+            old = None
+        if old and compare_versions(old["version"], new["version"]) > 0:
+            return old, False
+
+    def fill(f):
+        with open(src_zip, "rb") as src:
+            while chunk := src.read(1 << 20):
+                f.write(chunk)
+
+    return _write_atomic(dest, fill), True
 
 
 def _fsync_dir(path: str) -> None:
