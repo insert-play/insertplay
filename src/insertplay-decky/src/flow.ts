@@ -196,19 +196,21 @@ interface SteamCard {
  *  registro) e a carga do plugin com o cartão inserido são estado inicial, não inserção. */
 let steamCards: Map<string, SteamCard> | null = null;
 
-/** Compara as bibliotecas removíveis montadas com o último retrato. Por pasta, não por
- *  appid: instalar um jogo num cartão já inserido muda `apps`, não as pastas. */
+/** Compara as bibliotecas removíveis montadas com o último retrato. Por cartão (ponto de
+ *  montagem), não por appid: instalar um jogo num cartão já inserido muda `apps`, não
+ *  os cartões presentes. */
 async function checkSteamLibraries(): Promise<void> {
   const libraries = await removableLibraries();
   const previous = steamCards;
   const next = new Map<string, SteamCard>();
-  // Medido no Deck: mover um jogo para o cartão não gera aviso do Steam, então `apps`
-  // do retrato fica velho. Na remoção vale o que o Steam guardou da pasta desmontada.
+  // Medido no Deck: o aviso do Steam chega ~12 s depois de um move terminar, então `apps`
+  // do retrato pode estar velho. Na remoção vale o que o Steam guardou da pasta
+  // desmontada, mesmo vazio (o último jogo pode ter saído do cartão).
   const unmountedApps = new Map(libraries.filter((l) => !l.mounted).map((l) => [l.path, l.apps]));
   if (previous) {
     for (const [path, card] of previous) {
       const apps = unmountedApps.get(path);
-      if (apps?.length) previous.set(path, { ...card, apps });
+      if (apps) previous.set(path, { ...card, apps });
     }
   }
   for (const library of libraries.filter((l) => l.mounted)) {
@@ -233,21 +235,29 @@ async function checkSteamLibraries(): Promise<void> {
     return;
   }
 
-  // Um cartão com duas bibliotecas gera um aviso só, agrupando pelo ponto de montagem.
-  const byMount = (from: Map<string, SteamCard>, other: Map<string, SteamCard>) => {
+  // Inserção e remoção são do cartão (ponto de montagem), não de cada biblioteca:
+  // acrescentar ou tirar uma biblioteca num cartão inserido não é evento, e um cartão
+  // com duas bibliotecas soma os jogos das duas (review do PR #12).
+  const byMount = (cards: Map<string, SteamCard>) => {
     const out = new Map<string, SteamCard>();
-    for (const [path, card] of from) {
-      if (other.has(path) || card.silent || card.apps.length === 0) continue;
+    for (const card of cards.values()) {
       const seen = out.get(card.mount);
-      out.set(card.mount, seen ? { ...seen, apps: [...seen.apps, ...card.apps] } : card);
+      out.set(
+        card.mount,
+        seen ? { ...seen, silent: seen.silent || card.silent, apps: [...seen.apps, ...card.apps] } : card,
+      );
     }
-    return [...out.values()];
+    return out;
   };
-  for (const card of byMount(previous, next)) {
+  const before = byMount(previous);
+  const after = byMount(next);
+  const gone = (from: Map<string, SteamCard>, other: Map<string, SteamCard>) =>
+    [...from.values()].filter((card) => !other.has(card.mount) && !card.silent && card.apps.length > 0);
+  for (const card of gone(before, after)) {
     await logAdd("steam", `${card.label} removed (${card.apps.join(", ")})`);
     toaster.toast({ title: TITLE, body: `Cartão ${card.label} removido` });
   }
-  for (const card of byMount(next, previous)) await steamCardInserted(card);
+  for (const card of gone(after, before)) await steamCardInserted(card);
 }
 
 /** Inicia sozinho só com exatamente um jogo no cartão e nenhum jogo aberto. */
