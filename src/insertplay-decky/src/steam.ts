@@ -133,6 +133,7 @@ export async function applyArtwork(
 
 export interface RemovableLibrary {
   path: string;
+  mounted: boolean;
   apps: number[];
 }
 
@@ -151,25 +152,27 @@ async function installFolders(timeoutMs = 60_000): Promise<any[]> {
   }
 }
 
-/** Bibliotecas Steam em mídia removível montada agora, com os appids instalados.
+/** Bibliotecas Steam em mídia removível, montadas ou não, com os appids instalados.
  *
  *  Medido no Deck (2026-10-24, SteamOS 3.9.5): cada biblioteca que o Steam já viu vira
  *  uma pasta em `GetInstallFolders()`, montada ou não. A do cartão no leitor tem
  *  `bIsMounted: true` e `bIsFixed: false`. As de cartões ausentes continuam na lista
- *  com `bIsMounted: false` e os appids que tinham, por isso o filtro é obrigatório. */
+ *  com `bIsMounted: false` e os appids que tinham: quem quer só o que está no leitor
+ *  filtra por `mounted`. */
 export async function removableLibraries(): Promise<RemovableLibrary[]> {
   const folders = await installFolders();
   return folders
-    .filter((f) => f?.bIsMounted && !f.bIsFixed && !f.bIsDefaultFolder && f.strFolderPath)
+    .filter((f) => f && !f.bIsFixed && !f.bIsDefaultFolder && f.strFolderPath)
     .map((f) => ({
       path: String(f.strFolderPath),
+      mounted: Boolean(f.bIsMounted),
       apps: (f.vecApps ?? []).map((a: any) => Number(a?.nAppID)).filter((appid: number) => appid > 0),
     }));
 }
 
 /** Appids dos jogos Steam instalados numa biblioteca em mídia removível montada agora. */
 export async function removableLibraryApps(): Promise<number[]> {
-  return (await removableLibraries()).flatMap((l) => l.apps);
+  return (await removableLibraries()).filter((l) => l.mounted).flatMap((l) => l.apps);
 }
 
 /** Avisa quando bibliotecas entram, saem ou mudam de conteúdo. Devolve o cancelamento.

@@ -202,7 +202,16 @@ async function checkSteamLibraries(): Promise<void> {
   const libraries = await removableLibraries();
   const previous = steamCards;
   const next = new Map<string, SteamCard>();
-  for (const library of libraries) {
+  // Medido no Deck: mover um jogo para o cartão não gera aviso do Steam, então `apps`
+  // do retrato fica velho. Na remoção vale o que o Steam guardou da pasta desmontada.
+  const unmountedApps = new Map(libraries.filter((l) => !l.mounted).map((l) => [l.path, l.apps]));
+  if (previous) {
+    for (const [path, card] of previous) {
+      const apps = unmountedApps.get(path);
+      if (apps?.length) previous.set(path, { ...card, apps });
+    }
+  }
+  for (const library of libraries.filter((l) => l.mounted)) {
     const known = previous?.get(library.path);
     if (known) {
       next.set(library.path, { ...known, apps: library.apps });
