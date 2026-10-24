@@ -2,10 +2,7 @@
 
 Insira um cartão InsertPlay: o atalho do jogo aparece na biblioteca com as artes do próprio cartão e o jogo inicia. Remova o cartão: o atalho é ocultado. Tudo isso sem reiniciar o Steam.
 
-O plugin **substitui o `insertplay-service`**. Se os dois rodarem juntos, o jogo é iniciado duas vezes. Antes de testar, rode no Deck:
-```
-sudo systemctl disable --now insertplay.service
-```
+O plugin **substitui o InsertPlay legado** (CLI em C#, `insertplay.service` e os atalhos criados no `shortcuts.vdf`). Se os dois rodarem juntos, o jogo é iniciado duas vezes. Num aparelho que tinha o legado, remova-o **antes** de instalar o plugin: veja [Remover o InsertPlay legado](#remover-o-insertplay-legado).
 
 ## Como funciona
 - `main.py` + `py_modules/insertplay_decky/` (backend Python):
@@ -64,6 +61,43 @@ Ao inserir um cartão com versão mais nova, aparece um aviso. O plugin nunca se
 
 O vínculo dos cartões com os atalhos (`~/homebrew/settings/InsertPlay`) é mantido na atualização. Se você tinha ocultado ou reordenado o InsertPlay na lista do Decky, isso volta ao padrão, como numa atualização pela loja.
 
+## Remover o InsertPlay legado
+
+O legado (CLI + serviço) deixava no aparelho:
+- o serviço `/etc/systemd/system/insertplay.service` e, se o "controller sleep" foi ligado, a regra `/etc/polkit-1/rules.d/49-insertplay-controller-sleep.rules`;
+- o CLI e os scripts em `~/.local/share/insertplay` e o lançador `~/.local/bin/insertplay`;
+- a configuração em `~/.config/insertplay` e os logs em `~/.local/state/insertplay`;
+- atalhos não-Steam gravados direto no `shortcuts.vdf` de cada conta Steam (ex.: "SD CARD", que lança `~/.local/share/insertplay/insertplay-start-bootstrap.sh`). Sem os arquivos acima, eles deixam de funcionar.
+
+Os cartões não dependem de nada disso: o plugin lança o `insertplay-start.sh` do próprio cartão.
+
+### Passo 1: no Windows (PowerShell, pasta `insertplay-decky`), ver o que existe
+```
+node scripts/deck.mjs check [--device machine]
+```
+As linhas **InsertPlay legado ausente** e **atalhos legados ausentes** mostram FALHOU com o que ainda existe (arquivos; `<userdata>:<qtd>` por conta Steam).
+
+### Passo 2: no Windows, enviar o desinstalador e rodá-lo com sudo
+```
+node scripts/deck.mjs legacy-uninstall [--device machine --confirm-prod]
+```
+Ele copia `src/insertplay-cli/assets/installer/uninstall.sh` para `/tmp` no aparelho e mostra o comando a rodar, que pede a senha do `deck`:
+```
+ssh -t deck@<ip> "sudo bash /tmp/insertplay-legacy-uninstall.sh --purge"
+```
+Esperado: uma linha `removed:` ou `already absent:` por item e, no fim, `Done: N removed, M already absent.`. Pode rodar de novo sem problema: na segunda vez tudo aparece como `already absent`. Sem `--purge`, a configuração e os logs ficam.
+
+### Passo 3: atalhos legados, pelo próprio Steam
+O script não mexe em atalhos. Com o Steam aberto **na conta que tem os atalhos** (no Modo de Jogo, troque de usuário se o aparelho tiver mais de uma conta), remova-os com `SteamClient.Apps.RemoveShortcut(<appid>)` via `deck.mjs eval`, ou pela própria biblioteca (Gerenciar → Remover atalho do jogo). Nunca edite o `shortcuts.vdf` à mão nem com o Steam aberto.
+
+Legado é o atalho que lança algo de `~/.local/share/insertplay` ou que menciona InsertPlay/`--guid` com o executável **sem aspas** (o CLI gravava o vdf direto). Atalhos do plugin têm o executável entre aspas (`"/bin/bash"`) e opções terminando em `--guid <uuid>`. Não remova esses.
+
+### Passo 4: no Windows, conferir
+```
+node scripts/deck.mjs check [--device machine]
+```
+As duas linhas devem dar OK. Faça isso em todas as contas Steam do aparelho: o `check` lê o `shortcuts.vdf` de todas.
+
 ## Preparar o Steam Deck (uma vez)
 
 Tudo passa pela rede (Wi-Fi). O Deck e o PC precisam estar na mesma rede. Nenhum passo usa pendrive.
@@ -95,9 +129,9 @@ type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh deck@<ip> "mkdir -p ~/.ssh && ca
 ```
 Teste com `ssh deck@<ip>`: agora deve entrar sem pedir senha. O `sudo` do deploy continua pedindo a senha, e isso é normal.
 
-### Passo 4: no Deck, instalar o Decky e desligar o serviço antigo
+### Passo 4: no Deck, instalar o Decky
+- Se o Deck tinha o InsertPlay legado, remova-o antes: [Remover o InsertPlay legado](#remover-o-insertplay-legado).
 - Instale o Decky Loader (instalador oficial, pelo navegador do Modo Desktop).
-- No Konsole: `sudo systemctl disable --now insertplay.service`. Pode dar erro se o serviço não estiver instalado; nesse caso, ignore.
 - Volte ao Modo de Jogo. No menu `...` (Quick Access) → ícone do Decky → engrenagem: ligue **Developer mode** e depois, em Developer, **Allow Remote CEF Debugging**.
 
 ### Passo 5: no Windows, abrir o console do Steam do Deck

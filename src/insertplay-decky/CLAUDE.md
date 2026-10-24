@@ -12,10 +12,10 @@ Plugin Decky Loader (POC) do InsertPlay. Visão geral, layout e preparação man
 Regras da Steam Machine (prod):
 - Por padrão, só leitura: `check`, `eval` de consulta, `logs`, `screenshot`, `panel`, `rpc` de leitura.
 - O plugin chega nela **pelo fluxo real**: zip do cartão ou "Install Plugin from ZIP File" do Decky, não por `deploy`. Ela serve para validar o que o usuário final vai ver.
-- `deploy`, `remove`, `restart`, `stage-card` e `setup-access` exigem `--confirm-prod`. Só use depois de combinar com o usuário **naquela sessão**.
+- `deploy`, `remove`, `restart`, `stage-card`, `setup-access` e `legacy-uninstall` exigem `--confirm-prod`. Só use depois de combinar com o usuário **naquela sessão**.
 - Não rode o `spike.mjs` nela: ele cria atalhos de teste.
 - Ela tem plugins que o Deck não tem (Non-Steam Badges, MicroSDeck, SteamGridDB, PlayCount). Algo que funciona no Deck pode se comportar diferente lá.
-- Já tem atalhos não-Steam do fluxo antigo (CLI), por exemplo "Need for Speed Pro Street". Não altere atalhos que o plugin não criou.
+- Não altere atalhos que o plugin não criou. O InsertPlay legado (CLI + `insertplay.service`) foi removido dos dois aparelhos em 2026-10-24; se o `check` voltar a acusar legado, siga "Remover o InsertPlay legado" no README.
 
 Os aparelhos ficam em `deck.config.json` (fora do git; modelo em `deck.config.example.json`): `{"default": "deck", "devices": {"deck": {"host", "user", "role"}, "machine": {...}}}`. O formato antigo, `{"host"}` na raiz, ainda vale como o aparelho `deck`. Todo comando aceita `--device <nome>`, em qualquer posição, ou a variável `INSERTPLAY_DEVICE`, e mostra no stderr qual aparelho está usando. Os IPs vêm de DHCP e podem mudar: se o `check` falhar na conexão, peça ao usuário o IP atual e atualize o arquivo.
 
@@ -30,7 +30,7 @@ Todos os comandos rodam da pasta `insertplay-decky`, no Windows ou no WSL. Use `
 
 | Comando | Para quê |
 |---|---|
-| `check` | **Comece por aqui.** Diagnóstico: SSH, Decky ativo, deploy sem senha, plugin instalado, serviço antigo, Steam via CEF. |
+| `check` | **Comece por aqui.** Diagnóstico: SSH, Decky ativo, deploy sem senha, plugin instalado, InsertPlay legado (arquivos e atalhos em todas as contas Steam), Steam via CEF. Também lista "atalhos do plugin fora do registro" (issue #8). |
 | `deploy [--skip-build]` | Build (falha se houver erro de TypeScript), envio para `/tmp/insertplay-decky` e instalação via `sudo -n /etc/insertplay-dev/deploy-plugin.sh deploy`, que reinicia o Decky. |
 | `logs [n]` | Últimas linhas do `journalctl -u plugin_loader` filtradas por "insertplay". |
 | `eval "<js>"` | Executa JS dentro do Steam (aba SharedJSContext, onde roda o frontend do plugin). Promises são aguardadas; o valor volta em JSON. |
@@ -40,6 +40,7 @@ Todos os comandos rodam da pasta `insertplay-decky`, no Windows ou no WSL. Use `
 | `ssh "<cmd>"` | Comando no Deck como usuário `deck`, sem TTY e sem senha. |
 | `stage-card <rótulo> [--version X]` | Build e gravação do zip do plugin no cartão montado (`insertplay/decky/InsertPlay.zip`), validado pelo mesmo `build_zip_from_dir` do plugin. `--version` muda a versão só no zip, para testar "cartão mais novo/antigo". |
 | `restart` / `remove` | Reiniciam o Decky / desinstalam o InsertPlay. |
+| `legacy-uninstall` | Envia o desinstalador do InsertPlay legado para `/tmp` e mostra o `ssh -t … sudo …` que **o usuário** roda (não há sudo para a IA fora do deploy). Atalhos legados saem pelo Steam (`RemoveShortcut`), nunca editando o `shortcuts.vdf`. |
 
 Outros:
 - `node scripts/spike.mjs`: confirma as chamadas da API do Steam (ver [docs/steam-api-notes.md](docs/steam-api-notes.md)). Rode depois de atualização do Steam ou ao usar uma chamada nova.
@@ -62,6 +63,7 @@ Outros:
 - **O Deck é o aparelho pessoal do usuário.** A biblioteca dele tem centenas de jogos reais.
   - Nunca remova, oculte ou altere atalhos ou jogos que não foram criados no teste em andamento.
   - Atalho de teste leva nome claramente de teste (`IP Teste …`) e é removido no fim, também em caso de falha.
+- **O Deck tem duas contas Steam** (`wjsantos123`, 108436075, a principal; `dalilaviana`, 385089570). O registro do plugin é por aparelho (issue #8): com a outra conta ativa e um cartão inserido, o plugin cria atalho nela e sobrescreve o registro. Troque de conta só sem cartão, ou corrija depois com `rpc registry_put`.
 - Não mexa em outros plugins do Decky (`~/homebrew/plugins/*` além de `InsertPlay`).
 - Não inicie jogos reais do usuário. `RunGame` só em atalho de teste ou num cartão InsertPlay que o usuário pediu para testar.
 - Não tente obter root fora do `deploy-plugin.sh`, não peça a senha do usuário e não altere a regra de sudo. Se faltar permissão, explique e deixe o passo para o usuário.
