@@ -165,9 +165,22 @@ async function check(cfg) {
     echo "plugin=$( [ -f ~/homebrew/plugins/InsertPlay/plugin.json ] && echo instalado || echo ausente)"
     echo "deploy=$(sudo -n ${DEPLOY} >/dev/null 2>&1; [ $? -eq 2 ] && echo liberado || echo sem-acesso)"
     legacy=""
-    for p in /etc/systemd/system/insertplay.service ~/.local/share/insertplay ~/.local/bin/insertplay ~/.config/insertplay ~/.local/state/insertplay; do
-      [ -e "$p" ] && legacy="$legacy,\${p/#$HOME/\\~}"
+    # o mesmo inventário do uninstall.sh; -L pega link quebrado
+    for p in /etc/systemd/system/insertplay.service /etc/systemd/system/multi-user.target.wants/insertplay.service \\
+        /tmp/sd-monitor.lock ~/.local/share/insertplay ~/.local/share/insertplay.update.lock \\
+        ~/.local/bin/insertplay ~/.config/insertplay ~/.local/state/insertplay; do
+      { [ -e "$p" ] || [ -L "$p" ]; } && legacy="$legacy,\${p/#$HOME/\\~}"
     done
+    state=$(systemctl show -p ActiveState --value insertplay.service 2>/dev/null)
+    case "$state" in ""|inactive) ;; *) legacy="$legacy,insertplay.service($state)" ;; esac
+    # /etc/polkit-1/rules.d só abre para o root: sem acesso, a regra não é verificável daqui
+    polkit=/etc/polkit-1/rules.d/49-insertplay-controller-sleep.rules
+    if [ -x /etc/polkit-1/rules.d ]; then
+      [ -e "$polkit" ] && legacy="$legacy,$polkit"
+      echo "legacy_polkit=verificado"
+    else
+      echo "legacy_polkit=sem-acesso"
+    fi
     echo "legacy_files=\${legacy#,}"
     read -r legacy_shortcuts orphan_shortcuts <<EOF
 $(python3 - <<'PY'
@@ -186,7 +199,8 @@ EOF
     else if (cfg.role === "prod") add("deploy sem senha", true, "não usado em prod");
     else add("deploy sem senha", false, "rode o setup-access (README)");
     add("plugin InsertPlay", true, facts.plugin);
-    add("InsertPlay legado ausente", !facts.legacy_files, facts.legacy_files || "nenhum arquivo do legado");
+    const polkitNote = facts.legacy_polkit === "verificado" ? "" : " (regra de polkit só se vê como root)";
+    add("InsertPlay legado ausente", !facts.legacy_files, (facts.legacy_files || "nenhum arquivo do legado") + polkitNote);
     add("atalhos legados ausentes", facts.legacy_shortcuts === "-", facts.legacy_shortcuts === "-" ? "nenhum (todas as contas)" : facts.legacy_shortcuts);
     // informativo: atalho do plugin que o registro não conhece (outra conta Steam, issue aberta)
     if (facts.orphan_shortcuts && facts.orphan_shortcuts !== "-") {

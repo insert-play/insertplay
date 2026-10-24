@@ -77,7 +77,12 @@ run_privileged() {
   return 1
 }
 
-# /etc/polkit-1/rules.d is root-only, so the existence test itself may need sudo.
+# Exit status of the existence test + removal below when the path does not exist; any other
+# nonzero status (failed sudo, failed rm) aborts the script instead of reading as "absent".
+ABSENT_STATUS=10
+
+# The test and the removal run in one (possibly elevated) shell: /etc/polkit-1/rules.d is
+# root-only, so the existence test itself may need sudo.
 remove_path() {
   local path="$1" privileged="${2:-}"
   local -a runner=()
@@ -85,14 +90,23 @@ remove_path() {
     runner=(run_privileged)
   fi
 
-  if "${runner[@]}" test -e "$path" || "${runner[@]}" test -L "$path"; then
-    "${runner[@]}" rm -rf -- "$path"
-    echo "removed:        $path"
-    REMOVED=$((REMOVED + 1))
-  else
-    echo "already absent: $path"
-    ABSENT=$((ABSENT + 1))
-  fi
+  local status=0
+  "${runner[@]}" sh -c 'if [ -e "$1" ] || [ -L "$1" ]; then rm -rf -- "$1"; else exit "$2"; fi' \
+    sh "$path" "$ABSENT_STATUS" || status=$?
+  case "$status" in
+    0)
+      echo "removed:        $path"
+      REMOVED=$((REMOVED + 1))
+      ;;
+    "$ABSENT_STATUS")
+      echo "already absent: $path"
+      ABSENT=$((ABSENT + 1))
+      ;;
+    *)
+      echo "Error: could not check or remove $path (exit $status); nothing after this was removed." >&2
+      exit 1
+      ;;
+  esac
 }
 
 remove_system_service() {
@@ -101,11 +115,19 @@ remove_system_service() {
     return
   fi
 
-  if systemctl cat "$SERVICE_NAME" >/dev/null 2>&1; then
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
+  # ActiveState also covers a unit still loaded after its file was deleted and one waiting
+  # to restart (Restart=always shows as "activating"); a missing unit reports "inactive".
+  local active
+  active="$(systemctl show -p ActiveState --value "$SERVICE_NAME" 2>/dev/null || true)"
+  case "$active" in
+    "" | inactive | failed) ;;
+    *)
       run_privileged systemctl stop "$SERVICE_NAME"
-      echo "stopped:        $SERVICE_NAME"
-    fi
+      echo "stopped:        $SERVICE_NAME ($active)"
+      ;;
+  esac
+
+  if systemctl cat "$SERVICE_NAME" >/dev/null 2>&1; then
     if [ "$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)" = "enabled" ]; then
       run_privileged systemctl disable --quiet "$SERVICE_NAME"
       echo "disabled:       $SERVICE_NAME"
@@ -119,6 +141,13 @@ remove_system_service() {
 }
 
 echo "Removing the legacy InsertPlay for user '$TARGET_USER' ($TARGET_HOME)..."
+
+# Authenticate once up front: a cancelled or failed sudo must stop the script before it
+# deletes anything, not leave the system files behind after removing the user's.
+if [ "$(id -u)" -ne 0 ] && ! run_privileged true; then
+  echo "Error: administrator access is required for the system files; nothing was removed." >&2
+  exit 1
+fi
 
 remove_system_service
 remove_path "$POLKIT_RULE_PATH" privileged
