@@ -357,7 +357,8 @@ const warnedCompatPath = new Set<number>();
 async function warnPrefixOverride(card: PortableCard, results: PortableResults): Promise<void> {
   for (const id of Object.keys(results)) {
     const appid = Number(id);
-    if (warnedCompatPath.has(appid) || !/STEAM_COMPAT_DATA_PATH|WINEPREFIX/.test(launchOptions(appid) ?? "")) continue;
+    if (warnedCompatPath.has(appid)) continue;
+    if (!/STEAM_COMPAT_DATA_PATH|WINEPREFIX/.test((await launchOptions(appid)) ?? "")) continue;
     warnedCompatPath.add(appid);
     await logAdd("portable", `${card.label} ${appid}: launch options override the prefix`);
     toaster.toast({

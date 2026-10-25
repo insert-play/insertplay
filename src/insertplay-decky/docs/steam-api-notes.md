@@ -131,7 +131,7 @@ Cartão `Bully`: SDHC 8 GB antigo (`SA08G`), ext4, ~0,4 MB/s de escrita com o jo
 - Desligar pelo plugin (cópia cartão → SSD de 441 MB) levou 3,9 s. Ler do cartão é rápido; escrever, não.
 - **`STEAM_COMPAT_DATA_PATH` nas opções de inicialização funciona no SteamOS** (Steam Machine, 2026-10-25).
   - Com `STEAM_COMPAT_DATA_PATH="/run/media/deck/Bully/compatdata" %command%`, sobra de um teste antigo, o Proton usou o prefixo da raiz do cartão (o `environ` do `proton waitforexitandrun` mostra a variável) e ignorou o link em `compatdata/12200`. O jogo abriu sem os saves e gravou ~115 MB de DLLs no cartão, por isso a abertura demorou ~2 min.
-  - As opções de inicialização são guardadas **por aparelho**: no Deck o campo estava vazio. Elas se leem em `appDetailsStore.GetAppDetails(appid).strLaunchOptions`.
+  - As opções de inicialização são guardadas **por aparelho**: no Deck o campo estava vazio. Elas se leem em `appDetailsStore.GetAppDetails(appid).strLaunchOptions`, mas esse cache só existe depois que alguém abre a página do jogo. Sem ele, `SteamClient.Apps.RegisterForAppDetails(appid, cb)` carrega os detalhes: o callback chegou em ~40 ms (Deck e Machine).
 - **Bully do Deck na Steam Machine, modo "Saves"** (2026-10-25, opção de inicialização removida):
   - ao inserir o cartão, o plugin trocou o `steamuser` vazio da Machine (de 19/09) por um link (`linked`) e guardou o original como backup;
   - o jogo abriu rápido e carregou os saves feitos no Deck;

@@ -229,15 +229,42 @@ export function runningAppids(): number[] | null {
   return ids.every((id) => id > 0) ? ids : null;
 }
 
-/** Opções de inicialização do jogo, se o Steam já as carregou (`undefined` = não sei).
- *  Medido na Steam Machine (2026-10-25): `appDetailsStore.GetAppDetails(12200)
- *  .strLaunchOptions` devolve o texto do campo, que é guardado por aparelho. */
-export function launchOptions(appid: number): string | undefined {
+/** Opções de inicialização do jogo (`undefined` = não deu para saber).
+ *
+ *  Medido (2026-10-25): `appDetailsStore.GetAppDetails(appid)` só tem dados depois que o
+ *  Steam carrega os detalhes, o que acontece ao abrir a página do jogo. Sem cache,
+ *  `SteamClient.Apps.RegisterForAppDetails` força a carga: o callback chegou em ~40 ms com
+ *  `strLaunchOptions`. O texto é guardado por aparelho. */
+export function launchOptions(appid: number): Promise<string | undefined> {
   try {
-    return typeof appDetailsStore === "undefined"
-      ? undefined
-      : appDetailsStore?.GetAppDetails?.(appid)?.strLaunchOptions;
+    const cached = typeof appDetailsStore === "undefined" ? undefined : appDetailsStore?.GetAppDetails?.(appid);
+    if (typeof cached?.strLaunchOptions === "string") return Promise.resolve(cached.strLaunchOptions);
   } catch {
-    return undefined;
+    // segue para a carga
   }
+  return new Promise((resolve) => {
+    let registration: any = null;
+    let finished = false;
+    const finish = (value: string | undefined) => {
+      if (finished) return;
+      finished = true;
+      try {
+        registration?.unregister?.();
+      } catch {
+        // nada a desfazer
+      }
+      resolve(value);
+    };
+    try {
+      registration = client()?.Apps?.RegisterForAppDetails?.(appid, (details: any) =>
+        finish(typeof details?.strLaunchOptions === "string" ? details.strLaunchOptions : undefined),
+      );
+    } catch {
+      return finish(undefined);
+    }
+    // o callback pode ter vindo antes de `registration` existir
+    if (finished) registration?.unregister?.();
+    else if (!registration) finish(undefined);
+    else setTimeout(() => finish(undefined), 3000);
+  });
 }
