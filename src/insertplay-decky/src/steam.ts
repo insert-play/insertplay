@@ -9,6 +9,7 @@
 // spike de novo depois de uma atualização do Steam.
 
 declare const appStore: any;
+declare const appDetailsStore: any;
 declare const collectionStore: any;
 declare const SteamUIStore: any;
 // Tipado como `any` de propósito: nem todas as versões de @decky/ui declaram o global,
@@ -173,6 +174,17 @@ export async function steamLibraries(): Promise<SteamLibrary[]> {
     }));
 }
 
+/** Appids instalados em cada biblioteca montada, inclusive a pasta padrão (SSD). */
+export async function mountedLibraries(): Promise<{ path: string; apps: number[] }[]> {
+  const folders = await installFolders();
+  return folders
+    .filter((f) => f?.strFolderPath && (f.bIsMounted || f.bIsDefaultFolder))
+    .map((f) => ({
+      path: String(f.strFolderPath),
+      apps: (f.vecApps ?? []).map((a: any) => Number(a?.nAppID)).filter((appid: number) => appid > 0),
+    }));
+}
+
 /** Avisa quando bibliotecas entram, saem ou mudam de conteúdo. Devolve o cancelamento.
  *  Medido no Deck: o aviso chega menos de 1 s depois de o cartão montar ou desmontar. */
 export function onInstallFoldersChanged(callback: () => void): () => void {
@@ -206,4 +218,26 @@ export function appName(appid: number): string {
 export function gameRunning(): boolean {
   const running = typeof SteamUIStore === "undefined" ? undefined : SteamUIStore?.RunningApps;
   return !Array.isArray(running) || running.length > 0;
+}
+
+/** Appids dos jogos abertos. `null` = não sei (store ausente ou item sem appid): o save
+ *  portátil não mexe em prefixo nenhum na dúvida. */
+export function runningAppids(): number[] | null {
+  const running = typeof SteamUIStore === "undefined" ? undefined : SteamUIStore?.RunningApps;
+  if (!Array.isArray(running)) return null;
+  const ids = running.map((app: any) => Number(app?.appid));
+  return ids.every((id) => id > 0) ? ids : null;
+}
+
+/** Opções de inicialização do jogo, se o Steam já as carregou (`undefined` = não sei).
+ *  Medido na Steam Machine (2026-10-25): `appDetailsStore.GetAppDetails(12200)
+ *  .strLaunchOptions` devolve o texto do campo, que é guardado por aparelho. */
+export function launchOptions(appid: number): string | undefined {
+  try {
+    return typeof appDetailsStore === "undefined"
+      ? undefined
+      : appDetailsStore?.GetAppDetails?.(appid)?.strLaunchOptions;
+  } catch {
+    return undefined;
+  }
 }

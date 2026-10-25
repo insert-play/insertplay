@@ -10,7 +10,7 @@ import decky
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "py_modules"))
 
-from insertplay_decky import cards, plugin_package  # noqa: E402
+from insertplay_decky import cards, plugin_package, prefixes  # noqa: E402
 from insertplay_decky.manifest import CardError, load_card  # noqa: E402
 from insertplay_decky.store import EventLog, Registry, Settings  # noqa: E402
 
@@ -63,6 +63,25 @@ def _on_mounted_card(mounted: dict, path: str) -> str:
     if not any(real == root or real.startswith(root.rstrip(os.sep) + os.sep) for root in mounted):
         raise PermissionError(f"{path} is not on a mounted InsertPlay card")
     return real
+
+
+def _steam_card(mount: str, libraries: list) -> tuple:
+    """Ponto de montagem real de um cartão com biblioteca Steam e as bibliotecas dele.
+    As RPCs do save portátil escrevem no cartão e no `compatdata` do SSD: o cartão tem
+    que ser mídia montada de verdade, e cada biblioteca, estar dentro dele."""
+    card = cards.library_card(mount, cards.default_media_roots())
+    real = os.path.realpath(mount)
+    if not card or card["mount"] != real:
+        raise PermissionError(f"{mount} is not a mounted card")
+    libs = [os.path.realpath(lib) for lib in libraries]
+    if any(not (lib == real or lib.startswith(real + os.sep)) for lib in libs):
+        raise PermissionError(f"a library is not on {mount}")
+    return real, libs
+
+
+def _steam_root() -> str:
+    home = getattr(decky, "DECKY_USER_HOME", None) or os.path.expanduser("~")
+    return os.path.join(home, ".local", "share", "Steam")
 
 
 class Plugin:
@@ -183,6 +202,54 @@ class Plugin:
     @guarded(dict)
     async def set_setting(self, key: str, value) -> dict:
         return self.settings.set(key, value)
+
+    def _log_portable(self, mount: str, results: dict) -> None:
+        quiet = ("ok", "none", "running")
+        changed = {appid: r for appid, r in results.items() if r not in quiet}
+        if changed:
+            detail = ", ".join(f"{appid} {r}" for appid, r in sorted(changed.items()))
+            self.log.add("portable", f"{os.path.basename(mount)}: {detail}")
+
+    # None = "não sei": o painel deixa o toggle desabilitado
+    @guarded(lambda: None)
+    async def portable_status(self, mount: str) -> dict:
+        real, _ = _steam_card(mount, [])
+        return await asyncio.to_thread(prefixes.status, real)
+
+    @guarded(lambda: None)
+    async def portable_set(
+        self, mount: str, mode: str, libraries: list, appids: list, running: list, elsewhere: list
+    ) -> dict:
+        """Modo do save portátil do cartão inteiro: "off", "userdata" ou "prefix". Sair de
+        um modo copia de volta ao SSD; com jogo do cartão aberto, nada muda."""
+        real, libs = _steam_card(mount, libraries)
+        if mode != "off":
+            status = await asyncio.to_thread(prefixes.status, real)
+            if not status["fsOk"]:
+                raise ValueError(status["reason"])
+        results = await asyncio.to_thread(
+            prefixes.set_mode, real, mode, libs, appids, running, elsewhere, _steam_root(), decky.DECKY_PLUGIN_VERSION
+        )
+        status = await asyncio.to_thread(prefixes.status, real)
+        if status["mode"] == mode:
+            self.log.add("portable", f"{os.path.basename(real)}: mode {mode}")
+        self._log_portable(real, results)
+        return {"status": status, "results": results}
+
+    @guarded(lambda: None)
+    async def portable_sync(self, mount: str, libraries: list, appids: list, running: list, elsewhere: list) -> dict:
+        """Uma passada num cartão. Desligado, não faz nada (devolve {})."""
+        real, libs = _steam_card(mount, libraries)
+        results = await asyncio.to_thread(prefixes.sync, real, libs, appids, running, elsewhere, _steam_root())
+        self._log_portable(real, results)
+        return results
+
+    @guarded(lambda: None)
+    async def portable_unlink_dangling(self) -> list:
+        removed = await asyncio.to_thread(prefixes.unlink_dangling, _steam_root())
+        if removed:
+            self.log.add("portable", f"unlinked (card absent): {', '.join(map(str, removed))}")
+        return removed
 
     @guarded(lambda: None)
     async def log_add(self, kind: str, message: str) -> None:

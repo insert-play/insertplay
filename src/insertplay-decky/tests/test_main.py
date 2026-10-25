@@ -104,3 +104,45 @@ def test_write_package_to_card_and_status(main, tmp_path):
     assert after["cards"][0]["zipPath"].endswith(os.path.join("insertplay", "decky", "InsertPlay.zip"))
     # fora de um cartão, ou numa subpasta dele, é recusado (fallback None)
     assert outside is None and inside is None
+
+
+def test_portable_rpcs_refuse_paths_outside_mounted_media(main, tmp_path):
+    async def scenario():
+        plugin = main.Plugin()
+        await plugin._main()
+        args = (str(tmp_path / "home" / "deck"), "userdata", [], [1], [], [])
+        result = await plugin.portable_set(*args), await plugin.portable_status(args[0])
+        await plugin._unload()
+        return result
+
+    assert asyncio.run(scenario()) == (None, None)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="symlink")
+def test_portable_enable_then_disable_round_trip(main, tmp_path, monkeypatch):
+    mount = tmp_path / "media" / "deck" / "Bully"
+    (mount / "steamapps").mkdir(parents=True)
+    ssd = tmp_path / "home" / ".local" / "share" / "Steam" / "steamapps" / "compatdata" / "12200"
+    (ssd / "pfx" / "drive_c" / "users" / "steamuser").mkdir(parents=True)
+    (ssd / "pfx" / "drive_c" / "users" / "steamuser" / "save.dat").write_text("fase 3", encoding="utf-8")
+    main.decky.DECKY_USER_HOME = str(tmp_path / "home")
+    main.decky.DECKY_PLUGIN_VERSION = "0.5.0"
+    real = os.path.realpath(mount)
+    monkeypatch.setattr(main.cards, "library_card", lambda path, roots: {"mount": real} if os.path.realpath(path) == real else None)
+    monkeypatch.setattr(main.prefixes, "fs_type", lambda m, mounts_file="/proc/mounts": "ext4")
+
+    async def scenario():
+        plugin = main.Plugin()
+        await plugin._main()
+        on = await plugin.portable_set(str(mount), "prefix", [str(mount)], [12200], [], [])
+        linked = os.path.islink(ssd)
+        off = await plugin.portable_set(str(mount), "off", [str(mount)], [12200], [], [])
+        await plugin._unload()
+        return on, linked, off
+
+    on, linked, off = asyncio.run(scenario())
+    assert on["results"] == {12200: "migrated"} and on["status"]["mode"] == "prefix"
+    assert linked
+    assert off["results"] == {12200: "restored"} and off["status"]["mode"] == "off"
+    assert (ssd / "pfx" / "drive_c" / "users" / "steamuser" / "save.dat").read_text(encoding="utf-8") == "fase 3"
+    assert (mount / ".insertplay" / "prefixes" / "12200" / "pfx").is_dir()  # cartão intacto

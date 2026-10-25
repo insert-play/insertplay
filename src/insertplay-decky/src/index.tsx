@@ -2,8 +2,10 @@ import { addEventListener, definePlugin, removeEventListener, routerHook, toaste
 import {
   ButtonItem,
   ConfirmModal,
+  DropdownItem,
   PanelSection,
   PanelSectionRow,
+  Spinner,
   ToggleField,
   showModal,
   staticClasses,
@@ -15,16 +17,34 @@ import {
   CardPackage,
   LogEntry,
   PackageStatus,
+  PortableMode,
+  PortableStatus,
   Settings,
   currentCards,
   getSettings,
   logAdd,
   logTail,
   packageStatus,
+  portableStatus,
   setSetting,
   writePackageToCard,
 } from "./backend";
-import { applyHideRemoved, launchCard, onInserted, onRemoved, onSteamLibrariesChanged, reconcile, reinstall } from "./flow";
+import {
+  PortableCard,
+  applyHideRemoved,
+  launchCard,
+  onPortableChange,
+  onInserted,
+  onRemoved,
+  onSteamLibrariesChanged,
+  portableChange,
+  portableTick,
+  reconcile,
+  reinstall,
+  setPortable,
+  settlePortableChange,
+  steamCardsPresent,
+} from "./flow";
 import { InstallType, installFromCard, notifyNewerPackage } from "./selfupdate";
 import { onInstallFoldersChanged } from "./steam";
 import { showBadges, stopBadges } from "./steam-badges";
@@ -106,11 +126,90 @@ function PackageRow({ pkg, installed, onChange }: { pkg: CardPackage; installed:
   );
 }
 
+const PORTABLE_TICK_MS = 30_000;
+
+const PORTABLE_MODES: { data: PortableMode; label: string; description: string }[] = [
+  { data: "off", label: "Desligado", description: "O save fica no aparelho." },
+  {
+    data: "userdata",
+    label: "Saves",
+    description: "Leva a pasta do usuário (Documents, AppData). Rápido em qualquer cartão.",
+  },
+  {
+    data: "prefix",
+    label: "Prefixo completo",
+    description: "Leva também o registro do Windows. Lento para abrir em cartão lento.",
+  },
+];
+
+/** Save portátil de um cartão com jogos Steam. Vale para o cartão inteiro e fica gravado
+ *  nele. Sair de um modo copia o que está no cartão de volta para o aparelho. */
+function PortableRow({
+  card,
+  status,
+  onChange,
+}: {
+  card: PortableCard;
+  status: PortableStatus | undefined;
+  onChange: () => void;
+}) {
+  // Enquanto a escolha roda (a cópia leva segundos), o seletor já mostra o modo escolhido,
+  // desabilitado e com spinner. A mudança mora no flow.ts e sobrevive ao painel remontar.
+  const change = portableChange(card.mount);
+  useEffect(() => {
+    if (change?.done && status?.mode === change.mode) settlePortableChange(card.mount);
+  }, [change, status?.mode]);
+  const pending = change && !change.done ? change.mode : null;
+  const settled = change?.done ? change.mode : status?.mode ?? "off";
+  const current = pending ?? settled;
+  // falha: o seletor volta ao modo anterior; o toast diz por quê
+  const apply = (mode: PortableMode) => void setPortable(card, mode).finally(onChange);
+  const choose = (mode: PortableMode) => {
+    if (pending || mode === settled) return;
+    if (settled === "off") return apply(mode);
+    const target = PORTABLE_MODES.find((m) => m.data === mode)?.label ?? mode;
+    showModal(
+      <ConfirmModal
+        strTitle="Mudar save portátil"
+        strDescription={`O save dos jogos do cartão ${card.label} será copiado para este aparelho antes de mudar para "${target}". A cópia do cartão continua lá.`}
+        strOKButtonText="Mudar"
+        onOK={() => apply(mode)}
+        onCancel={onChange}
+      />,
+    );
+  };
+  const games = `${card.apps.length} jogo${card.apps.length === 1 ? "" : "s"} Steam`;
+  const option = PORTABLE_MODES.find((m) => m.data === current);
+  const description = pending ? (
+    <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+      <Spinner style={{ width: "1em", height: "1em" }} />
+      Aplicando "{option?.label}"…
+    </span>
+  ) : status && !status.fsOk ? (
+    status.reason ?? ""
+  ) : (
+    `${games}. ${option?.description ?? ""}`
+  );
+  return (
+    <PanelSectionRow>
+      <DropdownItem
+        label={card.label}
+        description={description}
+        rgOptions={PORTABLE_MODES.map(({ data, label }) => ({ data, label }))}
+        selectedOption={current}
+        disabled={pending !== null || !status || (!status.fsOk && settled === "off")}
+        onChange={(option) => choose(option.data as PortableMode)}
+      />
+    </PanelSectionRow>
+  );
+}
+
 function Panel() {
   const [cards, setCards] = useState<Card[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [pkg, setPkg] = useState<PackageStatus | null>(null);
+  const [portable, setPortableCards] = useState<{ card: PortableCard; status?: PortableStatus }[]>([]);
 
   const refresh = useCallback(async () => {
     const [c, s, l, p] = await Promise.all([currentCards(), getSettings(), logTail(8), packageStatus()]);
@@ -118,6 +217,11 @@ function Panel() {
     setSettings(s);
     setLog(l);
     if (p) setPkg(p);
+    const present = await Promise.all(
+      steamCardsPresent().map(async (card) => ({ card, status: (await portableStatus(card.mount)) ?? undefined })),
+    );
+    // só cartão com jogo Steam; um cartão ligado que ficou sem jogos continua, para desligar
+    setPortableCards(present.filter(({ card, status }) => card.apps.length > 0 || (status && status.mode !== "off")));
   }, []);
 
   useEffect(() => {
@@ -125,11 +229,14 @@ function Panel() {
     // espera a fila do flow.ts tratar o evento antes de reler o estado
     const later = () => setTimeout(() => void refresh(), 1500);
     const subs = REFRESH_EVENTS.map((name) => addEventListener(name, later));
+    // começo e fim de uma mudança do save portátil: redesenha já, com o status novo
+    const stopPortable = onPortableChange(() => void refresh());
     // O Decky mantém o painel montado entre aberturas do Quick Access; sem isto ele
     // mostraria um estado velho até alguém clicar em "Atualizar" (medido no Deck).
     const timer = setInterval(() => void refresh(), 5000);
     return () => {
       clearInterval(timer);
+      stopPortable();
       REFRESH_EVENTS.forEach((name, i) => removeEventListener(name, subs[i]));
     };
   }, [refresh]);
@@ -157,6 +264,13 @@ function Panel() {
           </PanelSectionRow>
         ))}
       </PanelSection>
+      {portable.length > 0 && (
+        <PanelSection title="Save portátil">
+          {portable.map(({ card, status }) => (
+            <PortableRow key={card.mount} card={card} status={status} onChange={() => void refresh()} />
+          ))}
+        </PanelSection>
+      )}
       <PanelSection title="Plugin">
         <PanelSectionRow>
           <div style={{ fontSize: "0.85em" }}>Instalado: {pkg ? `v${pkg.installed}` : "…"}</div>
@@ -222,6 +336,7 @@ export default definePlugin(() => {
     showBadges();
     return tree;
   });
+  const portableTimer = setInterval(() => void portableTick(), PORTABLE_TICK_MS);
   void reconcile();
   // retrato inicial das bibliotecas, mesmo que o Steam deixe de chamar o callback no registro
   void onSteamLibrariesChanged();
@@ -234,6 +349,7 @@ export default definePlugin(() => {
       removeEventListener("card_inserted", inserted);
       removeEventListener("card_removed", removed);
       stopFolders();
+      clearInterval(portableTimer);
       routerHook.removePatch("/library", libraryPatch);
       stopBadges();
     },

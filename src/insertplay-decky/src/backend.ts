@@ -76,3 +76,33 @@ export interface PackageStatus {
 /** `null` = falha no backend (detalhe no log de eventos). */
 export const packageStatus = callable<[], PackageStatus | null>("package_status");
 export const writePackageToCard = callable<[mount: string], CardPackage | null>("write_package_to_card");
+
+/** Desligado; só a pasta do usuário Windows (`steamuser`, onde ficam os saves); ou o
+ *  prefixo inteiro (lento em cartão lento: o Proton recopia ~115 MB a cada abertura). */
+export type PortableMode = "off" | "userdata" | "prefix";
+
+export interface PortableStatus {
+  /** Gravado no próprio cartão (`.insertplay/portable-saves.json`): vale em qualquer aparelho. */
+  mode: PortableMode;
+  /** Cartão ext4/btrfs/xfs. exFAT/NTFS não guardam um prefixo do Proton. */
+  fsOk: boolean;
+  fsType: string | null;
+  reason: string | null;
+}
+
+/** Resultado por appid (a chave vem como string do JSON): ok, none, running, linked,
+ *  migrated, conflict, leftover, restored, unlinked, foreign ou `error: …`. */
+export type PortableResults = Record<string, string>;
+
+/** `null` = falha no backend ou caminho recusado. */
+export const portableStatus = callable<[mount: string], PortableStatus | null>("portable_status");
+export const portableSet = callable<
+  [mount: string, mode: PortableMode, libraries: string[], appids: number[], running: number[], elsewhere: number[]],
+  { status: PortableStatus; results: PortableResults } | null
+>("portable_set");
+/** Cartão desligado devolve `{}`. */
+export const portableSync = callable<
+  [mount: string, libraries: string[], appids: number[], running: number[], elsewhere: number[]],
+  PortableResults | null
+>("portable_sync");
+export const portableUnlinkDangling = callable<[], number[] | null>("portable_unlink_dangling");

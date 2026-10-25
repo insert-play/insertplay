@@ -18,6 +18,36 @@ O plugin **substitui o InsertPlay legado** (CLI em C#, `insertplay.service` e os
 
 Requisito do cartão: ter `shortcut-identity.json`, que o `build-sd-card.sh` gera. Sem ele o cartão é recusado com mensagem no painel.
 
+## Save portátil (jogos Steam no cartão, issue #13)
+
+No Modo Jogo, o Steam guarda o prefixo do Proton (onde muitos jogos salvam) no SSD, mesmo para jogo instalado no cartão. Um jogo sem Steam Cloud, ou com o Cloud quebrado no SteamOS, deixa o save no aparelho. O **save portátil** leva esses dados para o cartão e, enquanto o cartão está inserido, liga o SSD a eles por symlink.
+
+No painel, a seção **"Save portátil"** tem uma escolha por cartão com jogos Steam. A escolha vale para todos os jogos do cartão e só aparece com um cartão desses inserido:
+
+| Modo | Vai para o cartão | Fica no SSD |
+|---|---|---|
+| **Desligado** (padrão) | nada | tudo |
+| **Saves** | `pfx/drive_c/users/steamuser` (Documents, AppData, Saved Games), em `.insertplay/users/<appid>/` | o resto do prefixo, com `steamuser` virando link |
+| **Prefixo completo** | `compatdata/<appid>` inteiro, em `.insertplay/prefixes/<appid>` | só o link |
+
+- **Use "Saves".** O Proton recopia ~115 MB de DLLs para o prefixo **a cada abertura**. Com o prefixo completo num cartão lento, como um SDHC antigo a 0,4 MB/s, cada abertura levou minutos. No modo "Saves" essa cópia fica no SSD.
+  - "Saves" não leva o que o jogo grava no registro do Windows (`user.reg`), o que é raro para save. Em compensação, a configuração gráfica que fica no registro continua em cada aparelho. Medido com o Bully: os saves do Deck carregaram na Steam Machine, e a resolução ficou a de cada aparelho (800p no Deck, 4K na Machine). Num jogo que guarda a configuração em `Documents` ou `AppData`, ela vai junto.
+  - "Prefixo completo" leva o registro, mas só presta em cartão rápido (A1/A2).
+- **A escolha fica gravada no cartão** (`.insertplay/portable-saves.json`). Em outro aparelho com o plugin, os links são refeitos ao inserir, sem escolher de novo.
+- **Jogo que nunca rodou naquele aparelho**, no modo "Saves": o plugin cria só o caminho até `users/` com o link. O Proton monta o resto em volta, e o save aparece já na primeira abertura.
+- **O cartão precisa ser ext4** (o "Formatar" do Steam). Em exFAT/NTFS a escolha fica desabilitada.
+- **Opções de inicialização com `STEAM_COMPAT_DATA_PATH` ou `WINEPREFIX`** fazem o Proton usar outro prefixo e ignorar o link. O plugin avisa com um toast, mas não apaga as opções. Elas são guardadas por aparelho: tire-as em cada um.
+- **Mais de um candidato para o mesmo jogo** (SSD, cartão, cópia que um move deixa em `steamapps/compatdata`): vence quem tem os arquivos de usuário mais recentes. Uma pasta sem arquivos de usuário (recém-criada pelo Steam) nunca vence uma com save.
+  - Os outros viram backup, nunca são apagados: no SSD, `<caminho>.insertplay-backup-<data>`; no cartão, `.insertplay/backups/`.
+  - Se o perdedor tinha save, um toast avisa.
+- **Jogo aberto**: o plugin não mexe nele. A passada roda a cada 30 s e a cada mudança de biblioteca, antes do "Iniciar ao inserir".
+- **Sair de um modo** (desligar, ou trocar de modo) copia o que está no cartão de volta para o SSD. A cópia do cartão fica.
+- **Jogo movido para fora do cartão**: o link vira cópia no SSD.
+- **Jogo desinstalado**: só o link sai.
+- **Cartão removido**: o link quebrado é apagado na passada seguinte.
+- **Aparelho com versão anterior a 0.5.0** ignora `.insertplay` e usa o prefixo do SSD daquele aparelho. Ao atualizar, vale a regra do mais recente.
+- **Fora do escopo**: o shader cache (`shadercache/<appid>`), que fica no aparelho, e os cartões InsertPlay (atalho não-Steam), cujo script de configuração já mantém o prefixo no cartão.
+
 ## Desenvolvimento no Windows
 ```powershell
 npx -y pnpm@9 install
