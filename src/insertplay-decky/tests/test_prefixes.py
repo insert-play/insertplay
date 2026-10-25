@@ -458,3 +458,14 @@ def test_dxvk_cache_does_not_count_as_user_data(env):
     os.utime(cache, (NOW, NOW))
     assert run(env, mode="userdata") == {APPID: "linked"}
     assert save_in(card) == card
+
+
+def test_read_only_card_is_not_ok(tmp_path, env):
+    """Cartão do Metro no Deck: ext4 com erro, remontado só leitura (`emergency_ro`)."""
+    mounts = tmp_path / "mounts"
+    point = env["mount"].replace(" ", "\\040")
+    mounts.write_text(f"/dev/sda1 {point} ext4 rw,nosuid,nodev,noatime,errors=remount-ro,emergency_ro 0 0\n", encoding="utf-8")
+    status = prefixes.status(env["mount"], str(mounts))
+    assert status["fsOk"] is False and "somente leitura" in status["reason"]
+    mounts.write_text(f"/dev/sda1 {point} ext4 ro,nosuid 0 0\n", encoding="utf-8")
+    assert prefixes.status(env["mount"], str(mounts))["fsOk"] is False

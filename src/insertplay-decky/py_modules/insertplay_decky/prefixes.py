@@ -98,30 +98,40 @@ def _unescape(field: str) -> str:
     return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
 
 
-def fs_type(mount: str, mounts_file: str = "/proc/mounts"):
-    """Sistema de arquivos do ponto de montagem mais específico que contém `mount`."""
+def _mount_entry(mount: str, mounts_file: str):
+    """(sistema de arquivos, opções) do ponto de montagem mais específico que contém `mount`."""
     real = os.path.realpath(mount)
-    best, kind = "", None
+    best, entry = "", (None, ())
     try:
         with open(mounts_file, encoding="utf-8") as f:
             for line in f:
                 parts = line.split()
-                if len(parts) < 3:
+                if len(parts) < 4:
                     continue
                 point = _unescape(parts[1])
                 inside = real == point or real.startswith(point.rstrip(os.sep) + os.sep)
                 if inside and len(point) > len(best):
-                    best, kind = point, parts[2]
+                    best, entry = point, (parts[2], tuple(parts[3].split(",")))
     except OSError:
-        return None
-    return kind
+        pass
+    return entry
+
+
+def fs_type(mount: str, mounts_file: str = "/proc/mounts"):
+    """Sistema de arquivos do ponto de montagem mais específico que contém `mount`."""
+    return _mount_entry(mount, mounts_file)[0]
 
 
 def status(mount: str, mounts_file: str = "/proc/mounts") -> dict:
-    kind = fs_type(mount, mounts_file)
-    ok = kind in SUPPORTED_FS
-    reason = None if ok else f"o cartão é {kind or 'desconhecido'}; precisa ser ext4 (formatado pelo Steam)"
-    return {"mode": get_mode(mount), "fsOk": ok, "fsType": kind, "reason": reason}
+    kind, options = _mount_entry(mount, mounts_file)
+    reason = None
+    if kind not in SUPPORTED_FS:
+        reason = f"o cartão é {kind or 'desconhecido'}; precisa ser ext4 (formatado pelo Steam)"
+    elif "ro" in options or "emergency_ro" in options:
+        # Medido no Deck: ext4 com erro (bitmap com checksum errado) é remontado só
+        # leitura segundos depois de montar; `/proc/mounts` mostra `emergency_ro`.
+        reason = "o cartão está somente leitura (erro no sistema de arquivos; rode e2fsck)"
+    return {"mode": get_mode(mount), "fsOk": reason is None, "fsType": kind, "reason": reason}
 
 
 def _user_data_mtime(users: str):
