@@ -17,6 +17,7 @@ Regras:
 - só mexemos em symlink que nós criamos (destino em `.insertplay/prefixes/` ou
   `.insertplay/users/`)."""
 import os
+import re
 import shutil
 import stat
 import time
@@ -92,8 +93,9 @@ def card_userdata(mount: str, appid: int) -> str:
 
 
 def _unescape(field: str) -> str:
-    """`/proc/mounts` escreve espaço como `\\040` (`/run/media/deck/Call\\040of\\040Juarez\\040G`)."""
-    return field.replace("\\040", " ").replace("\\011", "\t").replace("\\012", "\n").replace("\\134", "\\")
+    """`/proc/mounts` escreve espaço como `\\040` (`/run/media/deck/Call\\040of\\040Juarez\\040G`).
+    Uma passada só: `\\134040` é barra invertida seguida de "040", não espaço."""
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
 
 
 def fs_type(mount: str, mounts_file: str = "/proc/mounts"):
@@ -214,6 +216,10 @@ def sync_app(layout: Layout, mount: str, libraries: list, appid: int, steam_root
     # `steamuser` cairia dentro do destino dele
     if layout.inner and os.path.islink(os.path.join(compatdata(steam_root), str(appid))):
         return "foreign"
+    # o contrário: prefixo inteiro cujo `steamuser` é link de outro cartão (modo userdata).
+    # Copiado com os links, os saves deste cartão iriam para o outro.
+    if not layout.inner and os.path.islink(os.path.join(ssd, STEAMUSER)):
+        return "foreign"
     if os.path.islink(ssd) and os.readlink(ssd) == dest and layout.valid(dest):
         for path in lefts:
             _card_backup(mount, path, appid, now)
@@ -240,10 +246,18 @@ def sync_app(layout: Layout, mount: str, libraries: list, appid: int, steam_root
     conflict = any(m is not None and m != newest for path, _, m in scored if path != winner)
 
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    if where != "card" and layout.valid(dest):
+    # destino que não venceu sai do caminho, válido ou não (pasta sem `pfx`, cópia
+    # parcial): o rename por cima dele falharia em toda passada
+    if where != "card" and os.path.lexists(dest):
         _card_backup(mount, dest, appid, now)
     if where == "ssd":
         _copy(ssd, dest)
+        # A cópia do prefixo inteiro num cartão lento leva minutos. Se o jogo abriu no
+        # meio e gravou, a cópia já está velha: descartamos (é nossa) e a próxima passada,
+        # com o jogo fechado, tenta de novo. A pasta do SSD fica intacta.
+        if _user_data_mtime(layout.users_dir(ssd)) != newest:
+            shutil.rmtree(dest)
+            return "changed"
     elif where == "leftover":
         os.rename(winner, dest)
     for left in lefts:
@@ -284,13 +298,12 @@ def _links_to(steam_root: str, mount: str) -> dict:
 
 
 def _restore(link: str, src: str) -> None:
-    """Troca o link por uma cópia do que está no cartão (que fica intacto)."""
-    partial = link + ".insertplay-partial"
-    if os.path.lexists(partial):
-        shutil.rmtree(partial)
-    shutil.copytree(src, partial, symlinks=True)
+    """Troca o link por uma cópia do que está no cartão (que fica intacto). O link só sai
+    depois de a cópia estar inteira ao lado."""
+    staged = link + ".insertplay-restore"
+    _copy(src, staged)
     os.remove(link)
-    os.rename(partial, link)
+    os.rename(staged, link)
 
 
 def sync(mount: str, libraries: list, appids: list, running: list, elsewhere: list, steam_root: str, now=None) -> dict:
@@ -303,7 +316,10 @@ def sync(mount: str, libraries: list, appids: list, running: list, elsewhere: li
       desinstalado, só perde o link. O cartão nunca é apagado."""
     mode = get_mode(mount)
     if mode == "off":
-        return {}
+        # Desligado em outro aparelho: os links que este aparelho ainda tem para o cartão
+        # viram cópia, senão o jogo seguiria gravando no cartão e, sem o cartão, o save
+        # sumiria deste aparelho. Sem links, não faz nada.
+        return _release_all(mount, running, steam_root)
     layout = LAYOUTS[mode]
     now = time.time() if now is None else now
     running, elsewhere = set(running), set(elsewhere)
@@ -368,7 +384,8 @@ def set_mode(mount: str, mode: str, libraries: list, appids: list, running: list
     results = {}
     if current != "off":
         results = _release_all(mount, running, steam_root)
-        if "running" in results.values():
+        # jogo aberto ou cópia de volta que falhou: o modo fica, para tentar de novo
+        if any(r == "running" or r.startswith("error") for r in results.values()):
             return results
     _write_mode(mount, mode, version)
     if mode != "off":

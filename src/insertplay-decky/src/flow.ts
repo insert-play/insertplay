@@ -202,6 +202,9 @@ interface SteamCard {
   card: boolean;
   /** Também é cartão InsertPlay (ou o backend não soube dizer): o outro fluxo notifica. */
   silent: boolean;
+  /** O backend achou o ponto de montagem (mídia em /run/media). Sem isso, o save portátil
+   *  não vale: o backend recusa caminhos fora de mídia montada. */
+  onMedia: boolean;
   apps: number[];
 }
 
@@ -238,6 +241,7 @@ async function checkSteamLibraries(): Promise<void> {
       label: card?.label ?? library.path.split("/").pop() ?? library.path,
       card: !library.fixed || Boolean(card?.removable),
       silent: !card || card.insertplay,
+      onMedia: Boolean(card),
       apps: library.apps,
     });
   }
@@ -326,7 +330,7 @@ export interface PortableCard {
 export function steamCardsPresent(): PortableCard[] {
   const out = new Map<string, PortableCard>();
   for (const [path, card] of steamCards ?? []) {
-    if (!card.card) continue;
+    if (!card.card || !card.onMedia) continue;
     const seen = out.get(card.mount) ?? { mount: card.mount, label: card.label, libraries: [], apps: [] };
     seen.libraries.push(path);
     seen.apps = [...new Set([...seen.apps, ...card.apps])];
@@ -338,8 +342,10 @@ export function steamCardsPresent(): PortableCard[] {
 const RESULT_TEXT: Record<string, string> = {
   migrated: "save levado para o cartão",
   conflict: "havia outro save; o mais antigo foi guardado como backup",
-  restored: "saiu do cartão; save copiado para o aparelho",
+  restored: "save copiado de volta para o aparelho",
 };
+
+const reportedPortableErrors = new Set<string>();
 
 /** Jogos já avisados nesta sessão de que as opções de inicialização trocam o prefixo. */
 const warnedCompatPath = new Set<number>();
@@ -369,6 +375,10 @@ async function announcePortable(card: PortableCard, results: PortableResults): P
   for (const [id, result] of Object.entries(results)) {
     const name = appName(Number(id));
     if (result.startsWith("error")) {
+      // o mesmo erro volta a cada passada (30 s): avisa e registra uma vez por sessão
+      const key = `${card.mount}|${id}|${result}`;
+      if (reportedPortableErrors.has(key)) continue;
+      reportedPortableErrors.add(key);
       await logAdd("error", `portable ${card.label} ${id}: ${result}`);
       toaster.toast({ title: TITLE, body: `Save portátil de ${name} falhou: ${result.slice(7)}`, duration: 10000 });
     } else if (RESULT_TEXT[result]) {
@@ -397,7 +407,18 @@ async function syncPortable(): Promise<void> {
 
 /** Passada periódica: o Steam recria o prefixo no SSD ~20 s depois de um move, e o jogo
  *  que roda pela primeira vez cria um prefixo comum que só depois pode ir para o cartão. */
-export const portableTick = () => enqueue(syncPortable).catch((err) => report("Save portátil", err));
+let portableTicking = false;
+export const portableTick = () => {
+  // Uma migração lenta (prefixo inteiro num cartão lento) leva minutos. Empilhar um tick a
+  // cada 30 s na fila única atrasaria a inserção de cartões InsertPlay por todos eles.
+  if (portableTicking) return Promise.resolve();
+  portableTicking = true;
+  return enqueue(syncPortable)
+    .catch((err) => report("Save portátil", err))
+    .finally(() => {
+      portableTicking = false;
+    });
+};
 
 /** Escolha de modo em andamento (`done: false`) ou já aplicada e ainda não relida pelo
  *  painel (`done: true`). Fica aqui, fora do componente: o menu do seletor e o modal de

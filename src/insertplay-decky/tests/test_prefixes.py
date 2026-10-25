@@ -374,3 +374,73 @@ def test_fs_type_handles_spaces(tmp_path):
     mounts = tmp_path / "mounts"
     mounts.write_text(f"/dev/mmcblk0p1 {str(mount).replace(' ', chr(92) + '040')} ext4 rw 0 0\n", encoding="utf-8")
     assert prefixes.fs_type(str(mount), str(mounts)) == "ext4"
+
+
+# ---- achados da revisão ---------------------------------------------------------
+
+
+def test_off_on_another_device_releases_this_devices_links(env):
+    """Desligado no outro aparelho: o link que este ainda tem vira cópia, senão o save
+    sumiria daqui quando o cartão saísse."""
+    card = make_userdata(prefixes.card_userdata(env["mount"], APPID), NOW - 100)
+    make_prefix(ssd(env))
+    run(env, mode="userdata")
+    prefixes._write_mode(env["mount"], "off", "0.5.0")  # o que o outro aparelho gravou
+    assert prefixes.sync(env["mount"], env["libraries"], [APPID], [], [], env["steam"]) == {APPID: "restored"}
+    assert not os.path.islink(ssd_user(env))
+    assert save_in(ssd_user(env)) == card
+
+
+def test_failed_copy_back_keeps_the_mode(env, monkeypatch):
+    make_userdata(prefixes.card_userdata(env["mount"], APPID), NOW - 100)
+    make_prefix(ssd(env))
+    run(env, mode="userdata")
+
+    def full_disk(src, dest):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(prefixes, "_copy", full_disk)
+    assert set_mode(env, "off")[APPID].startswith("error")
+    assert prefixes.get_mode(env["mount"]) == "userdata"  # tenta de novo depois
+    assert os.path.islink(ssd_user(env))  # o link ficou: o jogo continua com o save
+
+
+def test_copy_is_discarded_when_the_game_saves_during_it(env, monkeypatch):
+    original = make_prefix(ssd(env), save_mtime=NOW - 100)
+    real_copy = prefixes._copy
+
+    def slow_copy(src, dest):
+        real_copy(src, dest)
+        save = os.path.join(src, STEAMUSER, "Documents", "save.dat")
+        os.utime(save, (NOW - 5, NOW - 5))  # o jogo abriu e salvou no meio da cópia
+
+    monkeypatch.setattr(prefixes, "_copy", slow_copy)
+    assert run(env) == {APPID: "changed"}
+    assert not os.path.islink(ssd(env))  # SSD intacto
+    assert save_of(ssd(env)) == original
+    assert not os.path.exists(prefixes.card_prefix(env["mount"], APPID))
+
+
+def test_invalid_card_destination_goes_to_backups(env):
+    original = make_prefix(ssd(env), save_mtime=NOW - 100)
+    broken = prefixes.card_prefix(env["mount"], APPID)
+    os.makedirs(broken)  # sem `pfx`: só `version` gravado pelo link, por exemplo
+    with open(os.path.join(broken, "version"), "w") as f:
+        f.write("11.0-100\n")
+    assert run(env) == {APPID: "migrated"}
+    assert save_of(broken) == original
+    assert len(backups(env)) == 1
+
+
+def test_prefix_mode_refuses_a_steamuser_linked_to_another_card(env, tmp_path):
+    make_prefix(ssd(env), save_mtime=NOW - 100)
+    other = make_userdata(str(tmp_path / "B" / ".insertplay" / "users" / str(APPID) / "steamuser"), NOW)
+    shutil.rmtree(ssd_user(env))
+    os.symlink(other, ssd_user(env))
+    assert run(env) == {APPID: "foreign"}
+    assert not os.path.exists(prefixes.card_prefix(env["mount"], APPID))
+
+
+def test_unescape_is_a_single_pass():
+    assert prefixes._unescape("/run/media/deck/A\134040B") == "/run/media/deck/A\040B"
+    assert prefixes._unescape("/run/media/deck/Call\040of\040Juarez\040G") == "/run/media/deck/Call of Juarez G"
