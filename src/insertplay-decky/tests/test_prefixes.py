@@ -444,3 +444,17 @@ def test_prefix_mode_refuses_a_steamuser_linked_to_another_card(env, tmp_path):
 def test_unescape_is_a_single_pass():
     assert prefixes._unescape("/run/media/deck/A\134040B") == "/run/media/deck/A\040B"
     assert prefixes._unescape("/run/media/deck/Call\040of\040Juarez\040G") == "/run/media/deck/Call of Juarez G"
+
+
+def test_dxvk_cache_does_not_count_as_user_data(env):
+    """Metro: o cache do DXVK é regravado a cada execução. Sem save, o aparelho que rodou
+    por último não pode vencer quem tem save."""
+    card = make_userdata(prefixes.card_userdata(env["mount"], APPID), NOW - 1000)
+    make_prefix(ssd(env))
+    cache = os.path.join(ssd_user(env), "AppData", "Local", "dxvk", "game.dxvk.bin")
+    os.makedirs(os.path.dirname(cache))
+    with open(cache, "w") as f:
+        f.write("cache")
+    os.utime(cache, (NOW, NOW))
+    assert run(env, mode="userdata") == {APPID: "linked"}
+    assert save_in(card) == card

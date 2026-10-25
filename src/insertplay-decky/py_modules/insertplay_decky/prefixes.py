@@ -125,13 +125,17 @@ def status(mount: str, mounts_file: str = "/proc/mounts") -> dict:
 
 
 def _user_data_mtime(users: str):
-    """mtime mais recente dos arquivos de usuário (fora de `AppData/Local/Temp`), ou None
+    """mtime mais recente dos arquivos de usuário (fora de `AppData/Local/Temp` e
+    `AppData/Local/dxvk`), ou None
     se não há nenhum. Medido: o prefixo que o Steam cria num move ou instalação não tem
     arquivo nenhum ali; o de um jogo jogado tem o save ou as configurações. Sem isso, o
     prefixo vazio recém-criado venceria o save por ser o mais novo."""
     newest = None
     for root, dirs, files in os.walk(users):
-        if os.path.basename(root) == "Temp" and os.path.basename(os.path.dirname(root)) == "Local":
+        # `Temp` e o cache do DXVK (`AppData/Local/dxvk/*.dxvk.bin`, regravado a cada
+        # execução) não são do usuário: com eles, o aparelho que rodou por último venceria
+        # mesmo sem save nenhum. Continuam sendo copiados, só não contam.
+        if os.path.basename(root) in ("Temp", "dxvk") and os.path.basename(os.path.dirname(root)) == "Local":
             dirs[:] = []
             continue
         for name in files:
