@@ -1,6 +1,7 @@
 import { toaster } from "@decky/api";
 import {
   Card,
+  LibraryCard,
   PortableMode,
   PortableResults,
   PortableStatus,
@@ -205,6 +206,8 @@ interface SteamCard {
   /** O backend achou o ponto de montagem (mídia em /run/media). Sem isso, o save portátil
    *  não vale: o backend recusa caminhos fora de mídia montada. */
   onMedia: boolean;
+  /** Resposta do backend para a biblioteca, guardada só quando achou o cartão. */
+  lookup: LibraryCard | null;
   apps: number[];
 }
 
@@ -231,19 +234,24 @@ async function checkSteamLibraries(): Promise<void> {
   }
   for (const library of libraries.filter((l) => l.mounted)) {
     const known = previous?.get(library.path);
-    if (known) {
-      next.set(library.path, { ...known, apps: library.apps });
-      continue;
-    }
-    const card = await libraryCard(library.path);
-    next.set(library.path, {
+    // Só a resposta positiva do backend fica guardada. Medido no Deck: depois de formatar
+    // pelo Steam, a biblioteca nova aparece no mesmo segundo em que o kernel monta o
+    // cartão; consultado nesse instante, o backend não achava o ponto de montagem e o
+    // cartão ficava para sempre sem badge e sem save portátil.
+    const card = known?.onMedia ? known.lookup : await libraryCard(library.path);
+    const entry: SteamCard = {
       mount: card?.mount ?? library.path,
       label: card?.label ?? library.path.split("/").pop() ?? library.path,
       card: !library.fixed || Boolean(card?.removable),
       silent: !card || card.insertplay,
       onMedia: Boolean(card),
+      lookup: card,
       apps: library.apps,
-    });
+    };
+    // Reclassificar uma biblioteca já vista não é inserção: o retrato anterior passa a
+    // ter a mesma classificação, e só os appids são comparados.
+    if (known) previous?.set(library.path, { ...entry, apps: known.apps });
+    next.set(library.path, entry);
   }
   steamCards = next;
   // Antes do auto-launch: o jogo do cartão tem que abrir já com o prefixo do cartão.
