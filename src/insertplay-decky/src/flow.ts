@@ -399,7 +399,7 @@ async function elsewhereOf(card: PortableCard): Promise<number[]> {
 async function syncPortable(): Promise<void> {
   const running = runningAppids();
   if (!running) return;
-  await portableUnlinkDangling();
+  await portableUnlinkDangling(running);
   for (const card of steamCardsPresent()) {
     const results = await portableSync(card.mount, card.libraries, card.apps, running, await elsewhereOf(card));
     if (results) await announcePortable(card, results);

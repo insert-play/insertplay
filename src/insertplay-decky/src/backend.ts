@@ -105,4 +105,5 @@ export const portableSync = callable<
   [mount: string, libraries: string[], appids: number[], running: number[], elsewhere: number[]],
   PortableResults | null
 >("portable_sync");
-export const portableUnlinkDangling = callable<[], number[] | null>("portable_unlink_dangling");
+/** Jogo aberto fica com o link: o cartão pode voltar no meio da partida. */
+export const portableUnlinkDangling = callable<[running: number[]], number[] | null>("portable_unlink_dangling");

@@ -17,6 +17,12 @@ NOW = 1_800_000_000.0
 STEAMUSER = os.path.join("pfx", "drive_c", "users", "steamuser")
 
 
+@pytest.fixture(autouse=True)
+def no_live_games(monkeypatch):
+    """Nenhum jogo rodando no /proc do teste, a não ser que o teste diga outro."""
+    monkeypatch.setattr(prefixes, "LIVE_APPIDS", lambda: set())
+
+
 @pytest.fixture
 def env(tmp_path):
     mount = tmp_path / "media" / "Bully"
@@ -469,3 +475,117 @@ def test_read_only_card_is_not_ok(tmp_path, env):
     assert status["fsOk"] is False and "somente leitura" in status["reason"]
     mounts.write_text(f"/dev/sda1 {point} ext4 ro,nosuid 0 0\n", encoding="utf-8")
     assert prefixes.status(env["mount"], str(mounts))["fsOk"] is False
+
+
+# ---- revisão do Copilot na PR #14 ----------------------------------------------
+
+
+@pytest.mark.parametrize("old, new", [("userdata", "prefix"), ("prefix", "userdata")])
+def test_mode_switched_on_another_device_replaces_the_old_link(env, old, new):
+    """O outro aparelho trocou o modo do cartão. O link do modo antigo daqui vira cópia e o
+    novo modo assume, em vez de `foreign` para sempre."""
+    make_prefix(ssd(env), save_mtime=NOW - 100)
+    run(env, mode=old)
+    prefixes._write_mode(env["mount"], new, "0.5.0")  # gravado pelo outro aparelho
+    result = prefixes.sync(env["mount"], env["libraries"], [APPID], [], [], env["steam"], now=NOW)
+    assert result[APPID] in ("migrated", "linked", "conflict")
+    if new == "prefix":
+        assert os.readlink(ssd(env)) == prefixes.card_prefix(env["mount"], APPID)
+        assert not os.path.islink(os.path.join(prefixes.card_prefix(env["mount"], APPID), STEAMUSER))
+    else:
+        assert not os.path.islink(ssd(env))
+        assert os.readlink(ssd_user(env)) == prefixes.card_userdata(env["mount"], APPID)
+
+
+def test_mode_switch_waits_for_a_running_game(env, monkeypatch):
+    make_prefix(ssd(env), save_mtime=NOW - 100)
+    run(env, mode="userdata")
+    prefixes._write_mode(env["mount"], "prefix", "0.5.0")
+    monkeypatch.setattr(prefixes, "LIVE_APPIDS", lambda: {APPID})
+    assert prefixes.sync(env["mount"], env["libraries"], [APPID], [], [], env["steam"], now=NOW) == {APPID: "running"}
+    assert os.path.islink(ssd_user(env))  # o link antigo segue até o jogo fechar
+
+
+def test_game_detected_live_is_not_touched(env, monkeypatch):
+    """A lista do frontend disse que nada estava aberto, mas o /proc tem o jogo."""
+    make_prefix(ssd(env), save_mtime=NOW - 100)
+    monkeypatch.setattr(prefixes, "LIVE_APPIDS", lambda: {APPID})
+    assert run(env) == {APPID: "running"}
+    assert not os.path.islink(ssd(env))
+
+
+def test_migration_is_abandoned_when_the_game_starts_during_the_copy(env, monkeypatch):
+    original = make_prefix(ssd(env), save_mtime=NOW - 100)
+    live = set()
+    monkeypatch.setattr(prefixes, "LIVE_APPIDS", lambda: set(live))
+    real_copy = prefixes._copy
+
+    def copy_then_launch(src, dest):
+        real_copy(src, dest)
+        live.add(APPID)
+
+    monkeypatch.setattr(prefixes, "_copy", copy_then_launch)
+    assert run(env) == {APPID: "running"}
+    assert not os.path.islink(ssd(env))
+    assert save_of(ssd(env)) == original
+    assert not os.path.exists(prefixes.card_prefix(env["mount"], APPID))
+
+
+def test_restore_keeps_the_link_when_the_save_changes_during_the_copy(env, monkeypatch):
+    card = make_userdata(prefixes.card_userdata(env["mount"], APPID), NOW - 100)
+    make_prefix(ssd(env))
+    run(env, mode="userdata")
+    real_copy = prefixes._copy
+
+    def copy_while_saving(src, dest):
+        real_copy(src, dest)
+        save = os.path.join(card, "Documents", "save.dat")
+        os.utime(save, (NOW - 5, NOW - 5))  # o jogo gravou pelo link durante a cópia
+
+    monkeypatch.setattr(prefixes, "_copy", copy_while_saving)
+    assert set_mode(env, "off") == {APPID: "changed"}
+    assert prefixes.get_mode(env["mount"]) == "userdata"  # tenta de novo depois
+    assert os.path.islink(ssd_user(env))
+
+
+def test_interrupted_restore_stage_does_not_block_the_next_one(env):
+    card = make_userdata(prefixes.card_userdata(env["mount"], APPID), NOW - 100)
+    make_prefix(ssd(env))
+    run(env, mode="userdata")
+    stale = ssd_user(env) + ".insertplay-restore"
+    shutil.copytree(card, stale, symlinks=True)  # cópia pronta, troca não aconteceu
+    assert set_mode(env, "off") == {APPID: "restored"}
+    assert save_in(ssd_user(env)) == card
+    users = os.path.dirname(ssd_user(env))
+    assert any(n.startswith("steamuser.insertplay-restore.old") for n in os.listdir(users))
+
+
+def test_newer_save_left_by_desktop_steam_wins_over_the_card(env):
+    """Steam do modo desktop usa `steamapps/compatdata` da biblioteca: um save feito lá é
+    mais novo que o do cartão e não pode virar backup em silêncio."""
+    card = make_prefix(prefixes.card_prefix(env["mount"], APPID), save_mtime=NOW - 1000)
+    run(env)
+    desktop = make_prefix(leftover(env), save_mtime=NOW - 10)
+    assert run(env) == {APPID: "conflict"}
+    assert save_of(prefixes.card_prefix(env["mount"], APPID)) == desktop
+    [backup] = backups(env)
+    assert save_of(os.path.join(env["mount"], ".insertplay", "backups", backup)) == card
+
+
+def test_unlink_dangling_keeps_a_running_games_link(env, monkeypatch):
+    make_userdata(prefixes.card_userdata(env["mount"], APPID), NOW - 100)
+    make_prefix(ssd(env))
+    run(env, mode="userdata")
+    os.rename(env["mount"], env["mount"] + "-out")  # cartão tirado no meio do jogo
+    assert prefixes.unlink_dangling(env["steam"], [APPID]) == []
+    monkeypatch.setattr(prefixes, "LIVE_APPIDS", lambda: {APPID})
+    assert prefixes.unlink_dangling(env["steam"]) == []
+    assert os.path.islink(ssd_user(env))
+
+
+def test_live_appids_reads_steamappid_from_proc(tmp_path):
+    for pid, env in (("10", b"HOME=/home/deck\0SteamAppId=12200\0"), ("11", b"PATH=/usr/bin\0"), ("self", b"")):
+        os.makedirs(tmp_path / pid)
+        (tmp_path / pid / "environ").write_bytes(env)
+    os.makedirs(tmp_path / "12")  # sem environ legível
+    assert prefixes.live_appids(str(tmp_path)) == {12200}

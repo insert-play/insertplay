@@ -240,13 +240,19 @@ class Plugin:
     async def portable_sync(self, mount: str, libraries: list, appids: list, running: list, elsewhere: list) -> dict:
         """Uma passada num cartão. Desligado, não faz nada (devolve {})."""
         real, libs = _steam_card(mount, libraries)
+        status = await asyncio.to_thread(prefixes.status, real)
+        # Cartão sem escrita (ext4 remontado só leitura, por exemplo) com o modo ligado: não
+        # liga nada, senão o jogo ficaria com o prefixo ou o save num lugar onde não grava.
+        # Desligado, a passada segue: ela só copia do cartão de volta para o SSD.
+        if status["mode"] != "off" and not status["fsOk"]:
+            return {}
         results = await asyncio.to_thread(prefixes.sync, real, libs, appids, running, elsewhere, _steam_root())
         self._log_portable(real, results)
         return results
 
     @guarded(lambda: None)
-    async def portable_unlink_dangling(self) -> list:
-        removed = await asyncio.to_thread(prefixes.unlink_dangling, _steam_root())
+    async def portable_unlink_dangling(self, running: list = ()) -> list:
+        removed = await asyncio.to_thread(prefixes.unlink_dangling, _steam_root(), running)
         if removed:
             self.log.add("portable", f"unlinked (card absent): {', '.join(map(str, removed))}")
         return removed

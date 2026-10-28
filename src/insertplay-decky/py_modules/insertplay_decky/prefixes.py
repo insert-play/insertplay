@@ -198,6 +198,37 @@ def _copy(src: str, dest: str) -> None:
     os.rename(partial, dest)
 
 
+def live_appids(proc_root: str = "/proc") -> set:
+    """Appids com processo vivo agora. O Steam põe `SteamAppId=<appid>` no ambiente dos
+    processos do jogo (medido no `environ` do Proton do Bully na Steam Machine). A lista
+    do frontend é tirada no começo da passada; isto vale na hora de cada troca."""
+    found = set()
+    try:
+        pids = [n for n in os.listdir(proc_root) if n.isdigit()]
+    except OSError:
+        return found
+    for pid in pids:
+        try:
+            with open(os.path.join(proc_root, pid, "environ"), "rb") as f:
+                env = f.read()
+        except OSError:  # processo de outro usuário ou que acabou de sair
+            continue
+        for var in env.split(b"\0"):
+            if var.startswith(b"SteamAppId="):
+                value = var[len(b"SteamAppId="):]
+                if value.isdigit() and int(value) > 0:
+                    found.add(int(value))
+    return found
+
+
+# trocado nos testes
+LIVE_APPIDS = live_appids
+
+
+def _running(appid: int, running=()) -> bool:
+    return appid in running or appid in LIVE_APPIDS()
+
+
 def _ours(link: str, layout: Layout) -> bool:
     return os.path.islink(link) and layout.mark in os.readlink(link)
 
@@ -215,7 +246,8 @@ def _leftovers(libraries: list, appid: int) -> list:
     return [os.path.join(lib, "steamapps", "compatdata", str(appid)) for lib in libraries]
 
 
-def sync_app(layout: Layout, mount: str, libraries: list, appid: int, steam_root: str, now: float) -> str:
+def sync_app(layout: Layout, mount: str, libraries: list, appid: int, steam_root: str, now: float,
+             running=()) -> str:
     """Deixa o caminho do SSD (`layout.ssd`) apontando para o cartão.
 
     Candidatos: o que já está no cartão, a parte correspondente das cópias que um move
@@ -235,9 +267,21 @@ def sync_app(layout: Layout, mount: str, libraries: list, appid: int, steam_root
     if not layout.inner and os.path.islink(os.path.join(ssd, STEAMUSER)):
         return "foreign"
     if os.path.islink(ssd) and os.readlink(ssd) == dest and layout.valid(dest):
-        for path in lefts:
-            _card_backup(mount, path, appid, now)
-        return "leftover" if lefts else "ok"
+        # Com o link no lugar, a cópia em `steamapps/compatdata` costuma ser a que o move
+        # SSD → cartão fez seguindo o link: sai para os backups. Mas o Steam do modo desktop
+        # usa justamente essa pasta. Se ela tem save mais novo que o do cartão, decide a
+        # escolha do mais recente, com aviso de conflito.
+        current = _user_data_mtime(layout.users_dir(dest))
+        newer = False
+        for left in lefts:
+            inner = os.path.join(left, layout.inner) if layout.inner else left
+            m = _user_data_mtime(layout.users_dir(inner)) if layout.valid(inner) else None
+            if m is not None and (current is None or m > current):
+                newer = True
+        if not newer:
+            for path in lefts:
+                _card_backup(mount, path, appid, now)
+            return "leftover" if lefts else "ok"
 
     candidates = []  # (caminho, onde) em ordem de preferência sem dados
     if layout.valid(dest):
@@ -259,6 +303,10 @@ def sync_app(layout: Layout, mount: str, libraries: list, appid: int, steam_root
     # mesma data mais recente (uma cópia do mesmo save), o backup é silencioso.
     conflict = any(m is not None and m != newest for path, _, m in scored if path != winner)
 
+    # o frontend mandou a lista de jogos abertos no começo da passada; confere de novo
+    # antes da primeira mudança
+    if _running(appid, running):
+        return "running"
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     # destino que não venceu sai do caminho, válido ou não (pasta sem `pfx`, cópia
     # parcial): o rename por cima dele falharia em toda passada
@@ -272,7 +320,10 @@ def sync_app(layout: Layout, mount: str, libraries: list, appid: int, steam_root
         if _user_data_mtime(layout.users_dir(ssd)) != newest:
             shutil.rmtree(dest)
             return "changed"
-    elif where == "leftover":
+        if _running(appid, running):  # abriu durante a cópia: a pasta do SSD está em uso
+            shutil.rmtree(dest)
+            return "running"
+    if where == "leftover":
         os.rename(winner, dest)
     for left in lefts:
         if os.path.lexists(left):
@@ -311,13 +362,25 @@ def _links_to(steam_root: str, mount: str) -> dict:
     return out
 
 
-def _restore(link: str, src: str) -> None:
+def _restore(link: str, src: str, layout: Layout, appid: int, running=()) -> str:
     """Troca o link por uma cópia do que está no cartão (que fica intacto). O link só sai
-    depois de a cópia estar inteira ao lado."""
+    depois de a cópia estar inteira ao lado e conferida: se o jogo abriu ou gravou durante
+    a cópia, ela é descartada e o link fica. Devolve `restored`, `running` ou `changed`."""
+    if _running(appid, running):
+        return "running"
     staged = link + ".insertplay-restore"
+    # uma restauração interrompida entre a cópia e a troca deixa a cópia pronta aqui; ela
+    # vira backup em vez de travar toda tentativa seguinte
+    if os.path.lexists(staged):
+        os.rename(staged, _free_name(staged + ".old"))
+    before = _user_data_mtime(layout.users_dir(src))
     _copy(src, staged)
+    if _user_data_mtime(layout.users_dir(src)) != before or _running(appid, running):
+        shutil.rmtree(staged)
+        return "changed"
     os.remove(link)
     os.rename(staged, link)
+    return "restored"
 
 
 def sync(mount: str, libraries: list, appids: list, running: list, elsewhere: list, steam_root: str, now=None) -> dict:
@@ -336,14 +399,32 @@ def sync(mount: str, libraries: list, appids: list, running: list, elsewhere: li
         return _release_all(mount, running, steam_root)
     layout = LAYOUTS[mode]
     now = time.time() if now is None else now
-    running, elsewhere = set(running), set(elsewhere)
+    running = set(running) | LIVE_APPIDS()
+    elsewhere = set(elsewhere)
     out = {}
+    # Modo trocado em outro aparelho ("Saves" <-> "Prefixo completo"): o link do modo
+    # antigo deste aparelho volta a ser cópia antes de aplicar o novo. Sem isso o novo modo
+    # via o link velho como alheio (`foreign`) e o jogo seguia nos dados antigos.
+    for appid, (kind, link) in sorted(_links_to(steam_root, mount).items()):
+        if kind is layout:
+            continue
+        try:
+            src = kind.card(mount, appid)
+            result = _restore(link, src, kind, appid, running) if kind.valid(src) else "unlinked"
+            if result == "unlinked":
+                os.remove(link)
+        except OSError as exc:
+            result = f"error: {exc}"
+        if result != "restored":
+            out[appid] = result  # jogo aberto ou falha: o novo modo espera esse jogo
     for appid in sorted(set(appids)):
+        if appid in out:
+            continue
         if appid in running:
             out[appid] = "running"
             continue
         try:
-            out[appid] = sync_app(layout, mount, libraries, appid, steam_root, now)
+            out[appid] = sync_app(layout, mount, libraries, appid, steam_root, now, running)
         except OSError as exc:
             out[appid] = f"error: {exc}"
     for appid, (kind, link) in sorted(_links_to(steam_root, mount).items()):
@@ -352,8 +433,7 @@ def sync(mount: str, libraries: list, appids: list, running: list, elsewhere: li
         try:
             src = kind.card(mount, appid)
             if appid in elsewhere and kind.valid(src):
-                _restore(link, src)
-                out[appid] = "restored"
+                out[appid] = _restore(link, src, kind, appid, running)
             else:
                 os.remove(link)
                 out[appid] = "unlinked"
@@ -366,7 +446,8 @@ def _release_all(mount: str, running: list, steam_root: str) -> dict:
     """Cada link para o cartão vira cópia no SSD. Com um jogo do cartão aberto, não mexe
     em nada (devolve `running` para ele)."""
     links = _links_to(steam_root, mount)
-    busy = sorted(set(links) & set(running))
+    running = set(running) | LIVE_APPIDS()
+    busy = sorted(set(links) & running)
     if busy:
         return {appid: "running" for appid in busy}
     out = {}
@@ -374,8 +455,7 @@ def _release_all(mount: str, running: list, steam_root: str) -> dict:
         src = layout.card(mount, appid)
         try:
             if layout.valid(src):
-                _restore(link, src)
-                out[appid] = "restored"
+                out[appid] = _restore(link, src, layout, appid, running)
             else:
                 os.remove(link)
                 out[appid] = "unlinked"
@@ -399,7 +479,7 @@ def set_mode(mount: str, mode: str, libraries: list, appids: list, running: list
     if current != "off":
         results = _release_all(mount, running, steam_root)
         # jogo aberto ou cópia de volta que falhou: o modo fica, para tentar de novo
-        if any(r == "running" or r.startswith("error") for r in results.values()):
+        if any(r in ("running", "changed") or r.startswith("error") for r in results.values()):
             return results
     _write_mode(mount, mode, version)
     if mode != "off":
@@ -407,9 +487,12 @@ def set_mode(mount: str, mode: str, libraries: list, appids: list, running: list
     return results
 
 
-def unlink_dangling(steam_root: str) -> list:
+def unlink_dangling(steam_root: str, running=()) -> list:
     """Tira os nossos links cujo cartão não está montado (link quebrado). Medido:
-    inofensivo para o Steam, mas atrapalharia reinstalar o jogo no SSD com o cartão fora."""
+    inofensivo para o Steam, mas atrapalharia reinstalar o jogo no SSD com o cartão fora.
+    Jogo aberto fica com o link: o cartão pode voltar, e a passada normal não mexe em jogo
+    aberto para refazê-lo."""
+    running = set(running) | LIVE_APPIDS()
     folder = compatdata(steam_root)
     removed = []
     try:
@@ -417,7 +500,7 @@ def unlink_dangling(steam_root: str) -> list:
     except OSError:
         return removed
     for name in sorted(names):
-        if not name.isdigit():
+        if not name.isdigit() or int(name) in running:
             continue
         for layout in LAYOUTS.values():
             link = layout.ssd(steam_root, int(name))
