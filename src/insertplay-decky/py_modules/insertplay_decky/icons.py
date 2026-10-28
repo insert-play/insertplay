@@ -4,12 +4,14 @@ Medido no Deck (2026-10-27): o Steam guarda só o *caminho* do ícone de um atal
 carrega sob demanda. Com o arquivo no cartão, o atalho fica sem ícone quando o Steam
 reinicia com o cartão fora, e uma falha num caminho só passa no próximo reinício. Por
 isso o ícone é copiado para o SSD, com o hash do conteúdo no nome: um ícone novo no
-cartão vira um caminho novo, sem esbarrar na falha guardada de um caminho antigo.
+cartão vira um caminho novo, sem esbarrar no que o Steam guardou de um caminho antigo.
 """
+import glob
 import hashlib
 import os
 import shutil
 import struct
+import time
 
 # steamid64 = este valor + id da conta (a pasta em userdata/)
 STEAMID64_BASE = 76561197960265728
@@ -73,13 +75,32 @@ def _ours(path: str, icons_dir: str) -> bool:
     return os.path.dirname(os.path.normpath(path)) == os.path.normpath(icons_dir)
 
 
-def target_path(source: str, guid: str, icons_dir: str) -> str:
+def content_hash(source: str) -> str:
     sha = hashlib.sha256()
     with open(source, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             sha.update(chunk)
+    return sha.hexdigest()[:HASH_CHARS]
+
+
+def target_path(current, source: str, guid: str, icons_dir: str, now=time.time) -> str:
+    """Caminho da cópia de `source` no SSD: `<guid>-<hash>-<geração>.<ext>`.
+
+    Mesmo conteúdo já aplicado → o caminho atual, e não há o que fazer. Conteúdo novo →
+    sempre um caminho inédito, mesmo que o conteúdo já tenha sido usado antes: o Steam
+    não relê um caminho que já carregou na sessão (A → B → A ficaria em B até reiniciar)."""
+    digest = content_hash(source)
+    if current and _ours(current, icons_dir):
+        stem = os.path.splitext(os.path.basename(current))[0]
+        if stem == f"{guid}-{digest}" or stem.startswith(f"{guid}-{digest}-"):
+            return current
     ext = os.path.splitext(source)[1].lower() or ".png"
-    return os.path.join(icons_dir, f"{guid}-{sha.hexdigest()[:HASH_CHARS]}{ext}")
+    generation = int(now() * 1000)
+    while True:
+        path = os.path.join(icons_dir, f"{guid}-{digest}-{generation:x}{ext}")
+        if not os.path.exists(path):
+            return path
+        generation += 1
 
 
 def plan(current, target: str, icons_dir: str) -> bool:
@@ -102,18 +123,29 @@ def stage(source: str, target: str) -> None:
     os.replace(tmp, target)
 
 
-def prune(icons_dir: str, keep: dict) -> list:
-    """Apaga os ícones que nenhum atalho usa mais: versões antigas de um guid (`keep`
-    guarda o caminho atual de cada um) e guids fora do registro. Devolve os nomes."""
+def referenced_icons(steam_root: str) -> set:
+    """Ícones que algum atalho de alguma conta Steam usa. A pasta de cópias é do
+    aparelho, não da conta: uma versão antiga pode estar em uso na outra conta.
+    Lança se um `shortcuts.vdf` não puder ser lido: na dúvida, nada é apagado."""
+    used = set()
+    for path in glob.glob(os.path.join(steam_root, "userdata", "*", "config", "shortcuts.vdf")):
+        used.update(os.path.normpath(icon) for icon in shortcut_icons(path).values() if icon)
+    return used
+
+
+def prune(icons_dir: str, keep: set) -> list:
+    """Apaga as cópias fora de `keep` (caminhos em uso). A versão substituída só sai numa
+    chamada seguinte, depois que o Steam gravou a nova no `shortcuts.vdf`: se o
+    `SetShortcutIcon` falhar, o atalho não fica apontando para um arquivo apagado."""
     removed = []
     try:
         names = os.listdir(icons_dir)
     except FileNotFoundError:
         return removed
+    keep = {os.path.normpath(path) for path in keep}
     for name in names:
-        guid = name[:36]
-        path = os.path.join(icons_dir, name)
-        if guid in keep and (keep[guid] is None or os.path.normpath(keep[guid]) == os.path.normpath(path)):
+        path = os.path.normpath(os.path.join(icons_dir, name))
+        if path in keep:
             continue
         try:
             os.remove(path)

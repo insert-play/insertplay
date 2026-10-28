@@ -187,9 +187,16 @@ def test_shortcut_icon_copies_to_ssd_and_respects_user_icons(main, tmp_path):
     (card / "steam-shortcut.json").write_text("{}", encoding="utf-8")
     source = card / "steam-artwork" / "icon.png"
     source.write_bytes(b"png")
-    config = tmp_path / "home" / ".local" / "share" / "Steam" / "userdata" / "108436075" / "config"
+    userdata = tmp_path / "home" / ".local" / "share" / "Steam" / "userdata"
+    config = userdata / "108436075" / "config"
+    other = userdata / "385089570" / "config"
     config.mkdir(parents=True)
+    other.mkdir(parents=True)
     steamid, appid = "76561198068701803", 2483608115
+    icons_dir = tmp_path / "data" / "icons"
+
+    def set_icon(folder, path):
+        (folder / "shortcuts.vdf").write_bytes(vdf([(appid, path)]))
 
     async def call(path=source, guid=GUID):
         return await plugin.shortcut_icon(steamid, appid, guid, str(path))
@@ -198,28 +205,40 @@ def test_shortcut_icon_copies_to_ssd_and_respects_user_icons(main, tmp_path):
 
     async def scenario():
         await plugin._main()
-        no_vdf = await call()  # sem o arquivo, não dá para saber de quem é o ícone
-        (config / "shortcuts.vdf").write_bytes(vdf([(appid, "")]))
-        first = await call()
-        (config / "shortcuts.vdf").write_bytes(vdf([(appid, first["path"])]))
-        again = await call()
+        steps = {"no_vdf": await call()}  # sem o arquivo, não dá para saber de quem é o ícone
+        set_icon(config, "")
+        set_icon(other, "")
+        steps["first"] = await call()
+        set_icon(config, steps["first"]["path"])
+        set_icon(other, steps["first"]["path"])  # a outra conta também usa esta versão
+        steps["again"] = await call()
         source.write_bytes(b"new png")
-        changed = await call()
-        (config / "shortcuts.vdf").write_bytes(vdf([(appid, "/grid/user_icon.png")]))
-        user = await call()
-        outside = await call(path=tmp_path / "home" / "x.png")
-        bad_guid = await call(guid="../../etc")
+        steps["changed"] = await call()
+        # o Steam ainda não gravou a nova: a antiga continua no disco
+        steps["files_before_steam"] = sorted(os.listdir(icons_dir))
+        set_icon(config, steps["changed"]["path"])
+        await call()
+        steps["files_other_account"] = sorted(os.listdir(icons_dir))
+        set_icon(other, "/grid/user_icon.png")
+        await call()
+        steps["files_after"] = sorted(os.listdir(icons_dir))
+        set_icon(config, "/grid/user_icon.png")
+        steps["user"] = await call()
+        steps["outside"] = await call(path=tmp_path / "home" / "x.png")
+        steps["bad_guid"] = await call(guid="../../etc")
         await plugin._unload()
-        return no_vdf, first, again, changed, user, outside, bad_guid
+        return steps
 
-    no_vdf, first, again, changed, user, outside, bad_guid = asyncio.run(scenario())
-    icons_dir = tmp_path / "data" / "icons"
-    assert no_vdf is None
+    steps = asyncio.run(scenario())
+    first, changed = steps["first"], steps["changed"]
+    name = lambda r: os.path.basename(r["path"])  # noqa: E731
+    assert steps["no_vdf"] is None
     assert first["apply"] is True and first["current"] == ""
     assert os.path.dirname(first["path"]) == str(icons_dir)
-    assert again["apply"] is False and again["path"] == first["path"]
+    assert steps["again"]["apply"] is False and steps["again"]["path"] == first["path"]
     assert changed["apply"] is True and changed["path"] != first["path"]
-    # a versão antiga sai da pasta; só fica a nova
-    assert os.listdir(icons_dir) == [os.path.basename(changed["path"])]
-    assert user["apply"] is False and user["current"] == "/grid/user_icon.png"
-    assert outside is None and bad_guid is None
+    assert steps["files_before_steam"] == sorted([name(first), name(changed)])
+    assert steps["files_other_account"] == sorted([name(first), name(changed)])
+    assert steps["files_after"] == [name(changed)]
+    assert steps["user"]["apply"] is False and steps["user"]["current"] == "/grid/user_icon.png"
+    assert steps["outside"] is None and steps["bad_guid"] is None

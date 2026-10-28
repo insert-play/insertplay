@@ -154,6 +154,17 @@ class Plugin:
         with open(real, "rb") as f:
             return base64.b64encode(f.read()).decode("ascii")
 
+    def _prune_icons(self, icons_dir: str, keep: set) -> None:
+        """Limpeza é enfeite: um `shortcuts.vdf` ilegível só adia, nunca derruba a RPC."""
+        try:
+            used = icons.referenced_icons(_steam_root())
+        except Exception as exc:
+            decky.logger.warning("InsertPlay: icon cleanup skipped: %s", exc)
+            return
+        removed = icons.prune(icons_dir, used | keep)
+        if removed:
+            self.log.add("icon", f"removed unused: {', '.join(removed)}")
+
     # None = "não sei": o frontend não mexe no ícone
     @guarded(lambda: None)
     async def shortcut_icon(self, steamid: str, appid: int, guid: str, source: str) -> dict:
@@ -166,19 +177,15 @@ class Plugin:
             raise ValueError(f"invalid guid {guid!r}")
         guid = guid.lower()
         icons_dir = os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "icons")
-        target = await asyncio.to_thread(icons.target_path, real, guid, icons_dir)
         # sem o shortcuts.vdf não dá para saber de quem é o ícone atual: lança e não aplica
         current = (await asyncio.to_thread(icons.shortcut_icons, icons.shortcuts_vdf(_steam_root(), steamid))).get(
             int(appid)
         )
+        target = await asyncio.to_thread(icons.target_path, current, real, guid, icons_dir)
         apply = icons.plan(current, target, icons_dir)
         if apply:
             await asyncio.to_thread(icons.stage, real, target)
-        keep = {g: None for g in self.registry.all()}
-        keep[guid] = target
-        removed = await asyncio.to_thread(icons.prune, icons_dir, keep)
-        if removed:
-            self.log.add("icon", f"removed unused: {', '.join(removed)}")
+        await asyncio.to_thread(self._prune_icons, icons_dir, {target} if apply else set())
         return {"path": target, "apply": apply, "current": current}
 
     # None = "não sei": o frontend trata como cartão InsertPlay e não notifica nada

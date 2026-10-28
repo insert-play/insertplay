@@ -38,7 +38,7 @@ export const currentCards = callable<[], Card[] | null>("current_cards");
 export const artworkBase64 = callable<[path: string], string>("artwork_base64");
 
 export interface ShortcutIcon {
-  /** Cópia no SSD (`~/homebrew/data/InsertPlay/icons/<guid>-<hash>.<ext>`). */
+  /** Cópia no SSD (`~/homebrew/data/InsertPlay/icons/<guid>-<hash>-<geração>.<ext>`). */
   path: string;
   /** Aplicar com `SetShortcutIcon`. Falso quando já está aplicado ou o ícone é do usuário. */
   apply: boolean;
