@@ -10,8 +10,8 @@ import decky
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "py_modules"))
 
-from insertplay_decky import cards, plugin_package, prefixes  # noqa: E402
-from insertplay_decky.manifest import CardError, load_card  # noqa: E402
+from insertplay_decky import cards, icons, plugin_package, prefixes  # noqa: E402
+from insertplay_decky.manifest import GUID_RE, CardError, load_card  # noqa: E402
 from insertplay_decky.store import EventLog, Registry, Settings  # noqa: E402
 
 POLL_SECONDS = 1.0
@@ -153,6 +153,40 @@ class Plugin:
             raise PermissionError(f"{path} is a card, not a file")
         with open(real, "rb") as f:
             return base64.b64encode(f.read()).decode("ascii")
+
+    def _prune_icons(self, icons_dir: str, keep: set) -> None:
+        """Limpeza é enfeite: um `shortcuts.vdf` ilegível só adia, nunca derruba a RPC."""
+        try:
+            used = icons.referenced_icons(_steam_root())
+        except Exception as exc:
+            decky.logger.warning("InsertPlay: icon cleanup skipped: %s", exc)
+            return
+        removed = icons.prune(icons_dir, used | keep)
+        if removed:
+            self.log.add("icon", f"removed unused: {', '.join(removed)}")
+
+    # None = "não sei": o frontend não mexe no ícone
+    @guarded(lambda: None)
+    async def shortcut_icon(self, steamid: str, appid: int, guid: str, source: str) -> dict:
+        """Copia o ícone do cartão para o SSD e diz se o frontend deve aplicá-lo com
+        `SetShortcutIcon` (issue #17). Não aplica sobre um ícone escolhido pelo usuário."""
+        real = _on_mounted_card(self.mounted, source)
+        if real in self.mounted or not os.path.isfile(real):
+            raise PermissionError(f"{source} is not a file on a card")
+        if not GUID_RE.match(guid or ""):
+            raise ValueError(f"invalid guid {guid!r}")
+        guid = guid.lower()
+        icons_dir = os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "icons")
+        # sem o shortcuts.vdf não dá para saber de quem é o ícone atual: lança e não aplica
+        current = (await asyncio.to_thread(icons.shortcut_icons, icons.shortcuts_vdf(_steam_root(), steamid))).get(
+            int(appid)
+        )
+        target = await asyncio.to_thread(icons.target_path, current, real, guid, icons_dir)
+        apply = icons.plan(current, target, icons_dir)
+        if apply:
+            await asyncio.to_thread(icons.stage, real, target)
+        await asyncio.to_thread(self._prune_icons, icons_dir, {target} if apply else set())
+        return {"path": target, "apply": apply, "current": current}
 
     # None = "não sei": o frontend trata como cartão InsertPlay e não notifica nada
     @guarded(lambda: None)

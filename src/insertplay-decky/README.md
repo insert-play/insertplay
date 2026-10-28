@@ -8,10 +8,11 @@ O plugin **substitui o InsertPlay legado** (CLI em C#, `insertplay.service` e os
 - `main.py` + `py_modules/insertplay_decky/` (backend Python):
   - verifica `/run/media/*` e `/run/media/*/*` a cada 1 s;
   - lê `steam-shortcut.json` e `shortcut-identity.json` sem escrever no cartão;
-  - avisa o frontend com `card_inserted` e `card_removed`.
+  - avisa o frontend com `card_inserted` e `card_removed`;
+  - copia o ícone do atalho para o SSD (`~/homebrew/data/InsertPlay/icons/`): o Steam guarda só o caminho, e no cartão o ícone sumiria com ele fora (issue #17).
 - `src/` (frontend, roda dentro do Steam):
   - cria ou atualiza o atalho com `SteamClient.Apps.*`;
-  - aplica as artes, oculta e mostra o atalho e inicia o jogo;
+  - aplica as artes e o ícone (sem trocar um ícone escolhido pelo usuário), oculta e mostra o atalho e inicia o jogo;
   - desenha o badge de cartão SD nas capas da biblioteca (`src/steam-badges.tsx`, depende do DOM do Steam).
 - Registro `guid → appid` em `~/homebrew/settings/InsertPlay/registry.json`.
 - Log de eventos em `~/homebrew/data/InsertPlay/events.jsonl`, também visível no painel.

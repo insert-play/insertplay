@@ -10,6 +10,8 @@ export interface Card {
   startDir?: string;
   launchOptions?: string;
   artwork?: Record<string, string>;
+  /** Ícone do atalho, no cartão. */
+  icon?: string | null;
 }
 
 export interface RegistryRecord {
@@ -34,6 +36,20 @@ export interface LogEntry {
 /** `null` = o backend ainda não terminou a primeira varredura; não é "nenhum cartão". */
 export const currentCards = callable<[], Card[] | null>("current_cards");
 export const artworkBase64 = callable<[path: string], string>("artwork_base64");
+
+export interface ShortcutIcon {
+  /** Cópia no SSD (`~/homebrew/data/InsertPlay/icons/<guid>-<hash>-<geração>.<ext>`). */
+  path: string;
+  /** Aplicar com `SetShortcutIcon`. Falso quando já está aplicado ou o ícone é do usuário. */
+  apply: boolean;
+  /** Ícone atual no `shortcuts.vdf`; `null` = atalho ainda fora do arquivo. */
+  current: string | null;
+}
+
+/** `null` = falha no backend (detalhe no log): não mexe no ícone. */
+export const shortcutIcon = callable<[steamid: string, appid: number, guid: string, source: string], ShortcutIcon | null>(
+  "shortcut_icon",
+);
 /** `null` = falha no backend; nunca tratar como registro vazio (geraria duplicados). */
 export const registryAll = callable<[], Record<string, RegistryRecord> | null>("registry_all");
 export const registryPut = callable<[guid: string, record: Partial<RegistryRecord>], RegistryRecord | null>(

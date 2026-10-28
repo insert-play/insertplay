@@ -55,10 +55,29 @@ Consequências no código:
 Atalhos não-Steam têm `app_type === 1073741824` e `BIsShortcut() === true`, e aparecem em `appStore.allApps`.
 
 **Existem e ainda não foram usadas:**
-- `SteamClient.Apps.SetShortcutIcon`: candidata para o ícone do atalho, fora da POC por enquanto;
 - `GetShortcutDataForPath`;
 - `LaunchNonSteamApp`;
 - `SetShortcutSortAs`.
+
+## Ícone dos atalhos (issue #17, medido 2026-10-27, SteamOS 3.9.5)
+
+Usado por `ensureIcon` (`src/flow.ts`) e pela RPC `shortcut_icon` (`main.py`, lógica em `py_modules/insertplay_decky/icons.py`). Atalhos de teste `IP Teste…` e o cartão do NFS Underground.
+
+| Chamada / situação | Resultado |
+|---|---|
+| `SteamClient.Apps.SetShortcutIcon(appid, caminho)` | O Steam guarda **só o caminho** (campo `icon` do `shortcuts.vdf`) e lê o arquivo sob demanda. O overview recebe `icon_data` (PNG em base64), `icon_data_format` e `icon_hash` em menos de 2,5 s, sem reiniciar. Caminho `""` limpa o campo no `shortcuts.vdf`, mas o `icon_data` antigo fica no overview até o reinício. |
+| Gravação no `shortcuts.vdf` | ~0,16 s depois da chamada (mtime do arquivo). Por isso o backend lê o arquivo para saber o ícone atual. |
+| Caminho do ícone no frontend | Não existe: nem o overview nem `appDetailsStore.GetAppDetails` trazem o caminho. Só o `shortcuts.vdf` (`userdata/<conta>/config/`). A conta vem de `App.m_CurrentUser.strSteamID` (steamid64 − 76561197960265728). |
+| Ícone num caminho do cartão, Steam reiniciado com o cartão fora | Atalho sem ícone. Com o cartão de volta, nem `RequestIconDataForApp` nem um novo `SetShortcutIcon` **com o mesmo caminho** recarregam até reiniciar. Por isso o ícone é copiado para `~/homebrew/data/InsertPlay/icons/<guid>-<sha256 curto>-<geração>.<ext>`. |
+| Ícone no SSD, Steam reiniciado com o cartão fora | O ícone continua (`RequestIconDataForApp` → `icon_data`). |
+| Caminho já carregado na sessão | Voltar para um caminho que o Steam já leu nesta sessão não troca o `icon_data`. Por isso todo conteúdo novo ganha um caminho inédito (hash + geração), mesmo voltando a um ícone já usado (A → B → A); o mesmo conteúdo mantém o caminho. |
+| Inserção com o ícone do cartão trocado | Caminho novo aplicado e `icon_data` trocado em segundos, sem reiniciar. A cópia antiga só sai numa chamada seguinte, quando nenhum `shortcuts.vdf` (de nenhuma conta) a usa mais. |
+| Ícone fora da pasta do plugin no atalho (como o do SteamGridDB) | O plugin não aplica o dele. O SteamGridDB não usa `SetShortcutIcon`: ele edita o `shortcuts.vdf` direto e guarda o ícone em `userdata/<conta>/config/grid/<appid>_icon.<ext>`. |
+| Reconciliação no início do Steam, cartão dentro, atalho sem ícone | Aplica e carrega. |
+
+**Quando o ícone só aparece depois do próximo reinício** (o caminho já fica certo no `shortcuts.vdf`, e o reinício seguinte carrega do SSD):
+- Na sessão aberta por um `deploy` (o webhelper é relançado), nenhum `icon_data` chegou ao frontend para atalhos que já existiam, nem com `RequestIconDataForApp`. Um atalho criado nessa sessão recebeu.
+- Atalho do NFS **sem ícone** e com o **cartão fora** quando o Steam iniciou: nessa sessão ele recusou qualquer caminho, mesmo inédito e mesmo depois de o cartão voltar. A causa não foi identificada. Testado e descartado: atalho oculto, `RunGame` logo depois, as chamadas de `updateShortcut` logo antes, e pasta de início inexistente (um atalho de teste sem ícone e com pasta de início inexistente aceitou). Só um dos dois fatores não basta: com ícone no início e cartão fora, ou sem ícone e cartão dentro, aplicou. Afeta atalhos criados antes do ícone existir; depois do primeiro ícone, o caso não se repete.
 
 ## Bibliotecas Steam no cartão (medido 2026-10-24, SteamOS 3.9.5)
 

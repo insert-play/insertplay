@@ -14,8 +14,8 @@ IDENTITY_NAME = "shortcut-identity.json"
 GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 SD_ROOT = "{SD_ROOT}"
 
-# Tipos que o Steam aceita em SetCustomArtworkForApp. O ícone fica de fora da POC:
-# não há chamada SteamClient confirmada para ele.
+# Tipos que o Steam aceita em SetCustomArtworkForApp. O ícone vai à parte: o Steam
+# guarda só o caminho dele (SetShortcutIcon), então ele é copiado para o SSD (icons.py).
 ARTWORK_KINDS = ("capsule", "hero", "logo", "horizontal")
 
 
@@ -94,6 +94,7 @@ def load_card(mount: str) -> dict:
         found = _artwork_path(mount, _get(artwork_def, kind) if isinstance(artwork_def, dict) else None, kind)
         if found:
             artwork[kind] = found
+    icon = _artwork_path(mount, _get(artwork_def, "icon") if isinstance(artwork_def, dict) else None, "icon")
 
     return {
         "guid": guid,
@@ -102,4 +103,5 @@ def load_card(mount: str) -> dict:
         "startDir": resolve_placeholder(str(_get(launch, "startDir") or mount), mount),
         "launchOptions": launch_options,
         "artwork": artwork,
+        "icon": icon,
     }

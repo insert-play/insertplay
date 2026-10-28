@@ -176,3 +176,69 @@ def test_portable_sync_does_not_activate_on_a_read_only_card(main, tmp_path, mon
 
     assert asyncio.run(scenario()) == {}
     assert not (ssd / "pfx" / "drive_c" / "users" / "steamuser").is_symlink()
+
+
+def test_shortcut_icon_copies_to_ssd_and_respects_user_icons(main, tmp_path):
+    from test_icons import GUID, vdf
+
+    main.decky.DECKY_USER_HOME = str(tmp_path / "home")
+    card = tmp_path / "media" / "SD1"
+    (card / "steam-artwork").mkdir(parents=True)
+    (card / "steam-shortcut.json").write_text("{}", encoding="utf-8")
+    source = card / "steam-artwork" / "icon.png"
+    source.write_bytes(b"png")
+    userdata = tmp_path / "home" / ".local" / "share" / "Steam" / "userdata"
+    config = userdata / "108436075" / "config"
+    other = userdata / "385089570" / "config"
+    config.mkdir(parents=True)
+    other.mkdir(parents=True)
+    steamid, appid = "76561198068701803", 2483608115
+    icons_dir = tmp_path / "data" / "icons"
+
+    def set_icon(folder, path):
+        (folder / "shortcuts.vdf").write_bytes(vdf([(appid, path)]))
+
+    async def call(path=source, guid=GUID):
+        return await plugin.shortcut_icon(steamid, appid, guid, str(path))
+
+    plugin = main.Plugin()
+
+    async def scenario():
+        await plugin._main()
+        steps = {"no_vdf": await call()}  # sem o arquivo, não dá para saber de quem é o ícone
+        set_icon(config, "")
+        set_icon(other, "")
+        steps["first"] = await call()
+        set_icon(config, steps["first"]["path"])
+        set_icon(other, steps["first"]["path"])  # a outra conta também usa esta versão
+        steps["again"] = await call()
+        source.write_bytes(b"new png")
+        steps["changed"] = await call()
+        # o Steam ainda não gravou a nova: a antiga continua no disco
+        steps["files_before_steam"] = sorted(os.listdir(icons_dir))
+        set_icon(config, steps["changed"]["path"])
+        await call()
+        steps["files_other_account"] = sorted(os.listdir(icons_dir))
+        set_icon(other, "/grid/user_icon.png")
+        await call()
+        steps["files_after"] = sorted(os.listdir(icons_dir))
+        set_icon(config, "/grid/user_icon.png")
+        steps["user"] = await call()
+        steps["outside"] = await call(path=tmp_path / "home" / "x.png")
+        steps["bad_guid"] = await call(guid="../../etc")
+        await plugin._unload()
+        return steps
+
+    steps = asyncio.run(scenario())
+    first, changed = steps["first"], steps["changed"]
+    name = lambda r: os.path.basename(r["path"])  # noqa: E731
+    assert steps["no_vdf"] is None
+    assert first["apply"] is True and first["current"] == ""
+    assert os.path.dirname(first["path"]) == str(icons_dir)
+    assert steps["again"]["apply"] is False and steps["again"]["path"] == first["path"]
+    assert changed["apply"] is True and changed["path"] != first["path"]
+    assert steps["files_before_steam"] == sorted([name(first), name(changed)])
+    assert steps["files_other_account"] == sorted([name(first), name(changed)])
+    assert steps["files_after"] == [name(changed)]
+    assert steps["user"]["apply"] is False and steps["user"]["current"] == "/grid/user_icon.png"
+    assert steps["outside"] is None and steps["bad_guid"] is None
