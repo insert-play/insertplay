@@ -15,11 +15,13 @@ import {
   portableUnlinkDangling,
   registryAll,
   registryPut,
+  shortcutIcon,
 } from "./backend";
 import {
   addShortcut,
   appName,
   applyArtwork,
+  currentSteamId,
   gameRunning,
   isHidden,
   launchOptions,
@@ -29,6 +31,7 @@ import {
   runGame,
   runSteamGame,
   setHidden,
+  setShortcutIcon,
   shortcutExists,
   updateShortcut,
   waitForLibrary,
@@ -93,6 +96,7 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
     if (failed.length) await logAdd("error", `${card.appName}: artwork failed: ${failed.join("; ")}`);
     artworkApplied = failed.length === 0;
   }
+  if (card.icon) await ensureIcon(card, appid);
   await saveRecord(card.guid, { appid, appName: card.appName, artworkApplied });
   setHidden(appid, false);
 
@@ -104,6 +108,23 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
     toaster.toast({ title: TITLE, body: `${card.appName} disponível` });
   }
   return appid;
+}
+
+/** Ícone do atalho a partir da cópia no SSD (issue #17). Roda a cada inserção, não só
+ *  na criação: um ícone novo no cartão vira um caminho novo. O backend decide se aplica
+ *  (não sobrescreve um ícone escolhido pelo usuário). Falha não para o fluxo. */
+async function ensureIcon(card: Card, appid: number): Promise<void> {
+  try {
+    const steamid = currentSteamId();
+    if (!steamid) throw new Error("unknown Steam account");
+    const icon = await shortcutIcon(steamid, appid, card.guid!, card.icon!);
+    if (!icon) throw new Error("backend refused (see log)");
+    if (!icon.apply) return;
+    setShortcutIcon(appid, icon.path);
+    await logAdd("icon", `${card.appName}: ${icon.path}`);
+  } catch (err) {
+    await logAdd("error", `${card.appName}: icon failed: ${err instanceof Error ? err.message : err}`);
+  }
 }
 
 /** Aplica a configuração "ocultar ao remover" a todo atalho registrado cujo cartão não

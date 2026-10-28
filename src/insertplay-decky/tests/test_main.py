@@ -176,3 +176,50 @@ def test_portable_sync_does_not_activate_on_a_read_only_card(main, tmp_path, mon
 
     assert asyncio.run(scenario()) == {}
     assert not (ssd / "pfx" / "drive_c" / "users" / "steamuser").is_symlink()
+
+
+def test_shortcut_icon_copies_to_ssd_and_respects_user_icons(main, tmp_path):
+    from test_icons import GUID, vdf
+
+    main.decky.DECKY_USER_HOME = str(tmp_path / "home")
+    card = tmp_path / "media" / "SD1"
+    (card / "steam-artwork").mkdir(parents=True)
+    (card / "steam-shortcut.json").write_text("{}", encoding="utf-8")
+    source = card / "steam-artwork" / "icon.png"
+    source.write_bytes(b"png")
+    config = tmp_path / "home" / ".local" / "share" / "Steam" / "userdata" / "108436075" / "config"
+    config.mkdir(parents=True)
+    steamid, appid = "76561198068701803", 2483608115
+
+    async def call(path=source, guid=GUID):
+        return await plugin.shortcut_icon(steamid, appid, guid, str(path))
+
+    plugin = main.Plugin()
+
+    async def scenario():
+        await plugin._main()
+        no_vdf = await call()  # sem o arquivo, não dá para saber de quem é o ícone
+        (config / "shortcuts.vdf").write_bytes(vdf([(appid, "")]))
+        first = await call()
+        (config / "shortcuts.vdf").write_bytes(vdf([(appid, first["path"])]))
+        again = await call()
+        source.write_bytes(b"new png")
+        changed = await call()
+        (config / "shortcuts.vdf").write_bytes(vdf([(appid, "/grid/user_icon.png")]))
+        user = await call()
+        outside = await call(path=tmp_path / "home" / "x.png")
+        bad_guid = await call(guid="../../etc")
+        await plugin._unload()
+        return no_vdf, first, again, changed, user, outside, bad_guid
+
+    no_vdf, first, again, changed, user, outside, bad_guid = asyncio.run(scenario())
+    icons_dir = tmp_path / "data" / "icons"
+    assert no_vdf is None
+    assert first["apply"] is True and first["current"] == ""
+    assert os.path.dirname(first["path"]) == str(icons_dir)
+    assert again["apply"] is False and again["path"] == first["path"]
+    assert changed["apply"] is True and changed["path"] != first["path"]
+    # a versão antiga sai da pasta; só fica a nova
+    assert os.listdir(icons_dir) == [os.path.basename(changed["path"])]
+    assert user["apply"] is False and user["current"] == "/grid/user_icon.png"
+    assert outside is None and bad_guid is None

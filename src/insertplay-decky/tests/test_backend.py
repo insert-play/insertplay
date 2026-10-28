@@ -129,6 +129,21 @@ def test_load_card_artwork_falls_back_to_default_location(tmp_path):
     assert set(art) == {"capsule", "hero", "logo"}
 
 
+def test_load_card_icon_from_manifest_or_default(tmp_path):
+    mount = make_card(tmp_path, art=("capsule", "icon"))
+    card = load_card(str(mount))
+    assert card["icon"] == os.path.normpath(str(mount / "steam-artwork" / "icon.png"))
+    assert "icon" not in card["artwork"]  # não passa por SetCustomArtworkForApp
+
+    manifest = json.loads(json.dumps(MANIFEST))
+    manifest["shortcut"]["artwork"]["icon"] = "{SD_ROOT}/art/game.ico"
+    mount = make_card(tmp_path, name="SD2", manifest=manifest, art=())
+    (mount / "art").mkdir()
+    (mount / "art" / "game.ico").write_bytes(b"ico")
+    assert load_card(str(mount))["icon"] == os.path.normpath(str(mount / "art" / "game.ico"))
+    assert load_card(str(make_card(tmp_path, name="SD3", art=())))["icon"] is None
+
+
 def test_load_card_without_identity_is_refused(tmp_path):
     mount = make_card(tmp_path, guid=None)
     with pytest.raises(CardError, match="shortcut-identity.json"):

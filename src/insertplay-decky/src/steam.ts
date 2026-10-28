@@ -132,6 +132,18 @@ export async function applyArtwork(
   return failed;
 }
 
+/** Ícone de um atalho. O Steam guarda só o caminho e lê o arquivo sob demanda (medido
+ *  no Deck, 2026-10-27): por isso o caminho tem que ficar no SSD, nunca no cartão. */
+export function setShortcutIcon(appid: number, path: string): void {
+  method(client()?.Apps, "SetShortcutIcon", "SteamClient.Apps.SetShortcutIcon")(appid, path);
+}
+
+/** steamid64 da conta logada; `null` = não deu para saber. */
+export function currentSteamId(): string | null {
+  const id = (globalThis as any).App?.m_CurrentUser?.strSteamID;
+  return typeof id === "string" && /^\d+$/.test(id) ? id : null;
+}
+
 export interface SteamLibrary {
   path: string;
   mounted: boolean;
