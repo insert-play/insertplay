@@ -9,6 +9,7 @@
 // spike de novo depois de uma atualização do Steam.
 
 declare const appStore: any;
+declare const appDetailsStore: any;
 declare const collectionStore: any;
 declare const SteamUIStore: any;
 // Tipado como `any` de propósito: nem todas as versões de @decky/ui declaram o global,
@@ -140,22 +141,28 @@ export interface SteamLibrary {
   apps: number[];
 }
 
+/** A biblioteca interna do Steam (`~/.local/share/Steam`) é sempre a de índice 0 (medido
+ *  no Deck e na Steam Machine, 2026-10-25). Não é `bIsDefaultFolder`: essa marca é o local
+ *  padrão de instalação e vai para o cartão quando o usuário o escolhe ao instalar. Com
+ *  ela, um cartão escolhido como padrão sumia: sem badge e sem save portátil. */
+const isInternal = (folder: any): boolean => folder?.nFolderIndex === 0;
+
 /** Lista de bibliotecas já carregada. Medido no Deck ao reiniciar o Steam: ela vem
  *  vazia no começo e, ~3 s depois, aparece inteira de uma vez e sem aviso do Steam.
- *  A pasta padrão sempre existe, então lista sem ela = ainda carregando. Usar a lista
- *  vazia como retrato faria o cartão já inserido parecer inserção no próximo aviso. */
+ *  A biblioteca interna sempre existe, então lista sem ela = ainda carregando. Usar a
+ *  lista vazia como retrato faria o cartão já inserido parecer inserção no próximo aviso. */
 async function installFolders(timeoutMs = 60_000): Promise<any[]> {
   const get = method(client()?.InstallFolder, "GetInstallFolders", "SteamClient.InstallFolder.GetInstallFolders");
   const start = Date.now();
   for (;;) {
     const folders: any[] = await get();
-    if (Array.isArray(folders) && folders.some((f) => f?.bIsDefaultFolder)) return folders;
+    if (Array.isArray(folders) && folders.some(isInternal)) return folders;
     if (Date.now() - start > timeoutMs) throw new Error("Steam library folders did not finish loading");
     await new Promise((r) => setTimeout(r, 250));
   }
 }
 
-/** Bibliotecas Steam além da pasta padrão, montadas ou não, com os appids instalados.
+/** Bibliotecas Steam além da interna, montadas ou não, com os appids instalados.
  *
  *  Medido no Deck (2026-10-24, SteamOS 3.9.5): cada biblioteca que o Steam já viu vira
  *  uma pasta em `GetInstallFolders()`, montada ou não. A do cartão no leitor tem
@@ -164,11 +171,22 @@ async function installFolders(timeoutMs = 60_000): Promise<any[]> {
 export async function steamLibraries(): Promise<SteamLibrary[]> {
   const folders = await installFolders();
   return folders
-    .filter((f) => f && !f.bIsDefaultFolder && f.strFolderPath)
+    .filter((f) => f && !isInternal(f) && f.strFolderPath)
     .map((f) => ({
       path: String(f.strFolderPath),
       mounted: Boolean(f.bIsMounted),
       fixed: Boolean(f.bIsFixed),
+      apps: (f.vecApps ?? []).map((a: any) => Number(a?.nAppID)).filter((appid: number) => appid > 0),
+    }));
+}
+
+/** Appids instalados em cada biblioteca montada, inclusive a interna (SSD). */
+export async function mountedLibraries(): Promise<{ path: string; apps: number[] }[]> {
+  const folders = await installFolders();
+  return folders
+    .filter((f) => f?.strFolderPath && (f.bIsMounted || isInternal(f)))
+    .map((f) => ({
+      path: String(f.strFolderPath),
       apps: (f.vecApps ?? []).map((a: any) => Number(a?.nAppID)).filter((appid: number) => appid > 0),
     }));
 }
@@ -206,4 +224,53 @@ export function appName(appid: number): string {
 export function gameRunning(): boolean {
   const running = typeof SteamUIStore === "undefined" ? undefined : SteamUIStore?.RunningApps;
   return !Array.isArray(running) || running.length > 0;
+}
+
+/** Appids dos jogos abertos. `null` = não sei (store ausente ou item sem appid): o save
+ *  portátil não mexe em prefixo nenhum na dúvida. */
+export function runningAppids(): number[] | null {
+  const running = typeof SteamUIStore === "undefined" ? undefined : SteamUIStore?.RunningApps;
+  if (!Array.isArray(running)) return null;
+  const ids = running.map((app: any) => Number(app?.appid));
+  return ids.every((id) => id > 0) ? ids : null;
+}
+
+/** Opções de inicialização do jogo (`undefined` = não deu para saber).
+ *
+ *  Medido (2026-10-25): `appDetailsStore.GetAppDetails(appid)` só tem dados depois que o
+ *  Steam carrega os detalhes, o que acontece ao abrir a página do jogo. Sem cache,
+ *  `SteamClient.Apps.RegisterForAppDetails` força a carga: o callback chegou em ~40 ms com
+ *  `strLaunchOptions`. O texto é guardado por aparelho. */
+export function launchOptions(appid: number): Promise<string | undefined> {
+  try {
+    const cached = typeof appDetailsStore === "undefined" ? undefined : appDetailsStore?.GetAppDetails?.(appid);
+    if (typeof cached?.strLaunchOptions === "string") return Promise.resolve(cached.strLaunchOptions);
+  } catch {
+    // segue para a carga
+  }
+  return new Promise((resolve) => {
+    let registration: any = null;
+    let finished = false;
+    const finish = (value: string | undefined) => {
+      if (finished) return;
+      finished = true;
+      try {
+        registration?.unregister?.();
+      } catch {
+        // nada a desfazer
+      }
+      resolve(value);
+    };
+    try {
+      registration = client()?.Apps?.RegisterForAppDetails?.(appid, (details: any) =>
+        finish(typeof details?.strLaunchOptions === "string" ? details.strLaunchOptions : undefined),
+      );
+    } catch {
+      return finish(undefined);
+    }
+    // o callback pode ter vindo antes de `registration` existir
+    if (finished) registration?.unregister?.();
+    else if (!registration) finish(undefined);
+    else setTimeout(() => finish(undefined), 3000);
+  });
 }

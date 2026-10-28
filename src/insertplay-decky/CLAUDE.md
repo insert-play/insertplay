@@ -11,7 +11,8 @@ Plugin Decky Loader (POC) do InsertPlay. Visão geral, layout e preparação man
 
 Regras da Steam Machine (prod):
 - Por padrão, só leitura: `check`, `eval` de consulta, `logs`, `screenshot`, `panel`, `rpc` de leitura.
-- O plugin chega nela **pelo fluxo real**: zip do cartão ou "Install Plugin from ZIP File" do Decky, não por `deploy`. Ela serve para validar o que o usuário final vai ver.
+- O fluxo real de instalação (zip do cartão / "Install Plugin from ZIP File" do Decky) já foi validado nela. Para testar uma versão nova, o `deploy --device machine --confirm-prod` por SSH também vale.
+- **Confira o estado antes de qualquer instalação ou teste:** ela fica em outro ambiente e alguém pode estar jogando nela. Antes de `deploy`, `restart`, `remove` ou de pedir para abrir um jogo, rode `check` e `eval "SteamUIStore.RunningApps.map(a => a.display_name)"`. Com jogo aberto, não faça nada e pergunte ao usuário: o deploy reinicia o Decky no meio da partida de alguém.
 - `deploy`, `remove`, `restart`, `stage-card`, `setup-access` e `legacy-uninstall` exigem `--confirm-prod`. Só use depois de combinar com o usuário **naquela sessão**.
 - Não rode o `spike.mjs` nela: ele cria atalhos de teste.
 - Ela tem plugins que o Deck não tem (SteamGridDB, PlayCount). Algo que funciona no Deck pode se comportar diferente lá. Non-Steam Badges e MicroSDeck foram desinstalados em 2026-10-24: o badge de cartão do próprio InsertPlay os substitui.

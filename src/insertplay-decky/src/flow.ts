@@ -1,12 +1,18 @@
 import { toaster } from "@decky/api";
 import {
   Card,
+  PortableMode,
+  PortableResults,
+  PortableStatus,
   RegistryRecord,
   artworkBase64,
   currentCards,
   getSettings,
   libraryCard,
   logAdd,
+  portableSet,
+  portableSync,
+  portableUnlinkDangling,
   registryAll,
   registryPut,
 } from "./backend";
@@ -16,6 +22,9 @@ import {
   applyArtwork,
   gameRunning,
   isHidden,
+  launchOptions,
+  mountedLibraries,
+  runningAppids,
   steamLibraries,
   runGame,
   runSteamGame,
@@ -193,6 +202,9 @@ interface SteamCard {
   card: boolean;
   /** Também é cartão InsertPlay (ou o backend não soube dizer): o outro fluxo notifica. */
   silent: boolean;
+  /** O backend achou o ponto de montagem (mídia em /run/media). Sem isso, o save portátil
+   *  não vale: o backend recusa caminhos fora de mídia montada. */
+  onMedia: boolean;
   apps: number[];
 }
 
@@ -229,10 +241,14 @@ async function checkSteamLibraries(): Promise<void> {
       label: card?.label ?? library.path.split("/").pop() ?? library.path,
       card: !library.fixed || Boolean(card?.removable),
       silent: !card || card.insertplay,
+      onMedia: Boolean(card),
       apps: library.apps,
     });
   }
   steamCards = next;
+  // Antes do auto-launch: o jogo do cartão tem que abrir já com o prefixo do cartão.
+  // Falha aqui não pode tirar a notificação da inserção.
+  await syncPortable().catch((err) => report("Save portátil", err));
   if (previous === null) {
     // sem esta linha, um cartão que faltou no retrato só aparece como "remoção perdida"
     const cards = [...next.values()]
@@ -301,6 +317,165 @@ export const onSteamLibrariesChanged = () =>
   enqueue(checkSteamLibraries)
     .catch((err) => report("Biblioteca Steam no cartão", err))
     .finally(refreshBadges);
+
+/** Cartão com biblioteca Steam inserido agora, juntando as bibliotecas do mesmo cartão. */
+export interface PortableCard {
+  mount: string;
+  label: string;
+  libraries: string[];
+  apps: number[];
+}
+
+/** Cartões Steam presentes no último retrato (vazio antes do primeiro). */
+export function steamCardsPresent(): PortableCard[] {
+  const out = new Map<string, PortableCard>();
+  for (const [path, card] of steamCards ?? []) {
+    if (!card.card || !card.onMedia) continue;
+    const seen = out.get(card.mount) ?? { mount: card.mount, label: card.label, libraries: [], apps: [] };
+    seen.libraries.push(path);
+    seen.apps = [...new Set([...seen.apps, ...card.apps])];
+    out.set(card.mount, seen);
+  }
+  return [...out.values()];
+}
+
+const RESULT_TEXT: Record<string, string> = {
+  migrated: "save levado para o cartão",
+  conflict: "havia outro save; o mais antigo foi guardado como backup",
+  restored: "save copiado de volta para o aparelho",
+};
+
+const reportedPortableErrors = new Set<string>();
+
+/** Jogos já avisados nesta sessão de que as opções de inicialização trocam o prefixo. */
+const warnedCompatPath = new Set<number>();
+
+/** `STEAM_COMPAT_DATA_PATH` (ou `WINEPREFIX`) nas opções de inicialização faz o Proton
+ *  usar outro prefixo e ignorar o link. Medido na Steam Machine: com a opção de um teste
+ *  antigo, o Bully abriu sem os saves do cartão e gravou ~115 MB de DLLs no prefixo da
+ *  raiz do cartão. A opção é do usuário: avisamos, não apagamos. */
+async function warnPrefixOverride(card: PortableCard, results: PortableResults): Promise<void> {
+  for (const id of Object.keys(results)) {
+    const appid = Number(id);
+    if (warnedCompatPath.has(appid)) continue;
+    if (!/STEAM_COMPAT_DATA_PATH|WINEPREFIX/.test((await launchOptions(appid)) ?? "")) continue;
+    warnedCompatPath.add(appid);
+    await logAdd("portable", `${card.label} ${appid}: launch options override the prefix`);
+    toaster.toast({
+      title: TITLE,
+      body: `${appName(appid)}: as opções de inicialização mudam o prefixo do Proton. O save portátil não vale para este jogo enquanto elas existirem.`,
+      duration: 10000,
+    });
+  }
+}
+
+/** Toast do que mudou numa passada. "ok", "none", "leftover" e "unlinked" vão só para o
+ *  log do backend: acontecem sem o usuário precisar saber. */
+async function announcePortable(card: PortableCard, results: PortableResults): Promise<void> {
+  await warnPrefixOverride(card, results);
+  for (const [id, result] of Object.entries(results)) {
+    const name = appName(Number(id));
+    if (result.startsWith("error")) {
+      // o mesmo erro volta a cada passada (30 s): avisa e registra uma vez por sessão
+      const key = `${card.mount}|${id}|${result}`;
+      if (reportedPortableErrors.has(key)) continue;
+      reportedPortableErrors.add(key);
+      await logAdd("error", `portable ${card.label} ${id}: ${result}`);
+      toaster.toast({ title: TITLE, body: `Save portátil de ${name} falhou: ${result.slice(7)}`, duration: 10000 });
+    } else if (RESULT_TEXT[result]) {
+      toaster.toast({ title: TITLE, body: `${name}: ${RESULT_TEXT[result]}` });
+    }
+  }
+}
+
+/** Jogos instalados em outras bibliotecas (SSD ou outro cartão): um jogo que saiu deste
+ *  cartão para lá ganha cópia do prefixo no SSD em vez de só perder o link. */
+async function elsewhereOf(card: PortableCard): Promise<number[]> {
+  return (await mountedLibraries()).filter((l) => !card.libraries.includes(l.path)).flatMap((l) => l.apps);
+}
+
+/** Uma passada do save portátil em todos os cartões Steam presentes (o backend ignora os
+ *  desligados). Sem saber quais jogos estão abertos, não mexe em nada. */
+async function syncPortable(): Promise<void> {
+  const running = runningAppids();
+  if (!running) return;
+  await portableUnlinkDangling(running);
+  for (const card of steamCardsPresent()) {
+    const results = await portableSync(card.mount, card.libraries, card.apps, running, await elsewhereOf(card));
+    if (results) await announcePortable(card, results);
+  }
+}
+
+/** Passada periódica: o Steam recria o prefixo no SSD ~20 s depois de um move, e o jogo
+ *  que roda pela primeira vez cria um prefixo comum que só depois pode ir para o cartão. */
+let portableTicking = false;
+export const portableTick = () => {
+  // Uma migração lenta (prefixo inteiro num cartão lento) leva minutos. Empilhar um tick a
+  // cada 30 s na fila única atrasaria a inserção de cartões InsertPlay por todos eles.
+  if (portableTicking) return Promise.resolve();
+  portableTicking = true;
+  return enqueue(syncPortable)
+    .catch((err) => report("Save portátil", err))
+    .finally(() => {
+      portableTicking = false;
+    });
+};
+
+/** Escolha de modo em andamento (`done: false`) ou já aplicada e ainda não relida pelo
+ *  painel (`done: true`). Fica aqui, fora do componente: o menu do seletor e o modal de
+ *  confirmação abrem por cima do Quick Access e o painel é montado de novo. Guardado no
+ *  componente, o "aplicando" sumia e o seletor voltava ao modo antigo (visto no Deck). */
+export interface PortableChange {
+  mode: PortableMode;
+  done: boolean;
+}
+const portableChanges = new Map<string, PortableChange>();
+const portableListeners = new Set<() => void>();
+
+export const portableChange = (mount: string): PortableChange | null => portableChanges.get(mount) ?? null;
+
+/** O painel já leu o modo aplicado: a mudança acabou. */
+export function settlePortableChange(mount: string): void {
+  if (portableChanges.get(mount)?.done) portableChanges.delete(mount);
+}
+
+/** Avisa quando uma mudança começa ou termina. Devolve o cancelamento. */
+export function onPortableChange(callback: () => void): () => void {
+  portableListeners.add(callback);
+  return () => void portableListeners.delete(callback);
+}
+
+function trackPortable(mount: string, change: PortableChange | null): void {
+  if (change) portableChanges.set(mount, change);
+  else portableChanges.delete(mount);
+  portableListeners.forEach((callback) => callback());
+}
+
+/** Escolha do painel. Devolve o status novo, ou `null` se falhou (já avisado). */
+export const setPortable = (card: PortableCard, mode: PortableMode) => {
+  trackPortable(card.mount, { mode, done: false });
+  return runSetPortable(card, mode).then((status) => {
+    // não mudou (falha, ou jogo do cartão aberto): o seletor volta ao modo de antes
+    trackPortable(card.mount, status?.mode === mode ? { mode, done: true } : null);
+    return status;
+  });
+};
+
+const runSetPortable = (card: PortableCard, mode: PortableMode) =>
+  enqueue(async (): Promise<PortableStatus> => {
+    const running = runningAppids();
+    if (!running) throw new Error("não deu para saber quais jogos estão abertos");
+    const result = await portableSet(card.mount, mode, card.libraries, card.apps, running, await elsewhereOf(card));
+    if (!result) throw new Error("veja o log de eventos");
+    if (result.status.mode !== mode && Object.values(result.results).includes("running")) {
+      toaster.toast({ title: TITLE, body: `Feche o jogo do cartão ${card.label} antes de mudar o save portátil` });
+    }
+    await announcePortable(card, result.results);
+    return result.status;
+  }).catch(async (err) => {
+    await report(`Save portátil de ${card.label}`, err);
+    return null;
+  });
 
 /** Estado inicial ao carregar o plugin: mostra o que está inserido, aplica "ocultar ao
  *  remover" ao resto, não inicia nada. */
