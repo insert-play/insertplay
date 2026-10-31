@@ -1,8 +1,8 @@
 """Leitura do manifesto e da identidade do cartão.
 
-Porta da lógica de InstallSdShortcutUseCase.cs: placeholder `{SD_ROOT}`, artes com
-fallback e `--guid` anexado às opções de inicialização. Só leitura: a POC nunca
-escreve no cartão — criar a identidade continua sendo trabalho do CLI.
+Placeholder `{SD_ROOT}`, artwork with fallback and `--guid` appended to the launch
+options. Read-only: the plugin never writes the manifest or the identity; cards are
+prepared by hand (docs/card-format.md, card-template/).
 """
 import json
 import os
@@ -35,7 +35,7 @@ def _read_json(path: str) -> dict:
 
 
 def _get(data: dict, key: str):
-    """O CLI desserializa sem diferenciar maiúsculas; aceitamos `appName` e `AppName`."""
+    """Keys are case-insensitive, as in the cards the legacy CLI wrote: `appName` and `AppName` both work."""
     if key in data:
         return data[key]
     lowered = key.lower()
@@ -56,7 +56,7 @@ def read_guid(mount: str) -> str:
             if not GUID_RE.match(guid):
                 raise CardError(f"invalid guid in {path}: {guid!r}")
             return guid.lower()
-    raise CardError(f"{IDENTITY_NAME} not found; prepare the card with build-sd-card.sh")
+    raise CardError(f"{IDENTITY_NAME} not found; see docs/card-format.md in the InsertPlay repository")
 
 
 def _artwork_path(mount: str, value, kind: str):

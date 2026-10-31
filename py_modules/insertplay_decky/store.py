@@ -28,8 +28,8 @@ def _save(path: str, data) -> None:
 
 
 class Registry:
-    """`guid → {appid, appName, artworkApplied}`. O appid vem do Steam (AddShortcut),
-    não do AppIdCalculator do CLI, por isso precisa ser guardado."""
+    """`guid → {appid, appName, artworkApplied}`. The appid comes from Steam
+    (AddShortcut) and can't be computed in advance, so it has to be stored."""
 
     def __init__(self, path: str):
         self.path = path

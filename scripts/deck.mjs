@@ -3,7 +3,7 @@
 //
 // Aparelho: `--device <nome>` (em qualquer posição) ou INSERTPLAY_DEVICE; sem isso, o
 // "default" do config (o Steam Deck de dev). Em aparelho com "role": "prod" os comandos
-// que mudam o aparelho (deploy, remove, restart, stage-card, setup-access, legacy-uninstall) exigem
+// que mudam o aparelho (deploy, remove, restart, stage-card, setup-access) exigem
 // `--confirm-prod`.
 //
 //   node scripts/deck.mjs check              diagnóstico: ssh, Steam (CEF), Decky, acesso de deploy
@@ -17,7 +17,6 @@
 //   node scripts/deck.mjs panel [nome]       abre o painel do InsertPlay no Quick Access e captura
 //   node scripts/deck.mjs rpc <método> [args JSON...]  chama o backend do plugin pelo Decky
 //   node scripts/deck.mjs setup-access       envia o instalador do acesso sem senha (ver README)
-//   node scripts/deck.mjs legacy-uninstall   envia o desinstalador do InsertPlay legado (CLI + serviço)
 //   node scripts/deck.mjs stage-card <rótulo> [--version X]   build + grava o zip do plugin no
 //                                            cartão montado (insertplay/decky/InsertPlay.zip)
 import { spawnSync } from "node:child_process";
@@ -31,7 +30,7 @@ const CONFIG_PATH = join(ROOT, "deck.config.json");
 const STAGE = "/tmp/insertplay-decky";
 const DEPLOY = "/etc/insertplay-dev/deploy-plugin.sh";
 
-const MUTATING = new Set(["deploy", "remove", "restart", "stage-card", "setup-access", "legacy-uninstall"]);
+const MUTATING = new Set(["deploy", "remove", "restart", "stage-card", "setup-access"]);
 
 /** Config de um aparelho: `{ name, host, user, role }`. Aceita o formato antigo
  *  (`{ host, user }` na raiz), tratado como o aparelho "deck". */
@@ -103,14 +102,12 @@ function npx(args) {
   return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
-/** Atalhos do InsertPlay em cada conta Steam do aparelho, lidos (só leitura) do shortcuts.vdf.
- *  O plugin cria atalhos pelo Steam, que grava o exe entre aspas, com opções terminando em
- *  `--guid <uuid>`; o CLI legado gravava o vdf direto, com o exe sem aspas. Legado é o que
- *  menciona InsertPlay ou `--guid` fora desse formato, ou aponta para ~/.local/share/insertplay.
- *  Atalhos no formato do plugin cujo appid não está no registro (ex.: criados em outra conta
- *  Steam do mesmo aparelho) saem à parte. Imprime `<legado> <fora-do-registro>`, cada um
- *  como `<userdata>:<qtd>` separados por vírgula, ou `-`. */
-const LEGACY_SHORTCUTS_PY = String.raw`
+/** Plugin shortcuts the registry doesn't know, per Steam account on the device, read
+ *  (read-only) from shortcuts.vdf. The plugin creates shortcuts through Steam, which stores the
+ *  exe in quotes, with launch options ending in `--guid <uuid>`. A shortcut in that format whose
+ *  appid is missing from the registry was usually created under another Steam account of the
+ *  same device (issue #8). Prints `<userdata>:<count>` entries separated by commas, or `-`. */
+const ORPHAN_SHORTCUTS_PY = String.raw`
 import glob, json, os, re, struct
 home = os.path.expanduser("~")
 PLUGIN_OPTS = re.compile(r"--guid [0-9a-f-]{36}$")
@@ -135,26 +132,20 @@ def parse(buf):
             elif t == 2: d[k] = struct.unpack_from("<I", buf, i)[0]; i += 4
             else: raise ValueError(t)
     return obj()
-legacy, orphans = [], []
+orphans = []
 for path in sorted(glob.glob(home + "/.local/share/Steam/userdata/*/config/shortcuts.vdf")):
     uid = path.split("/")[-3]
     try:
         shortcuts = parse(open(path, "rb").read()).values()
     except Exception:
-        legacy.append(uid + ":ilegivel"); continue
-    n_legacy = n_orphan = 0
+        orphans.append(uid + ":unreadable"); continue
+    n_orphan = 0
     for s in shortcuts:
         exe, opts = s.get("exe", ""), s.get("launchoptions", "").strip()
-        blob = (exe + " " + opts).lower()
-        if "insertplay" not in blob and "--guid" not in opts:
-            continue
-        if exe.startswith('"') and PLUGIN_OPTS.search(opts) and "/.local/share/insertplay/" not in blob:
+        if exe.startswith('"') and PLUGIN_OPTS.search(opts):
             n_orphan += s.get("appid") not in owned
-        else:
-            n_legacy += 1
-    if n_legacy: legacy.append(f"{uid}:{n_legacy}")
     if n_orphan: orphans.append(f"{uid}:{n_orphan}")
-print(",".join(legacy) or "-", ",".join(orphans) or "-")`;
+print(",".join(orphans) or "-")`;
 
 async function check(cfg) {
   const rows = [];
@@ -164,31 +155,10 @@ async function check(cfg) {
     echo "loader=$(systemctl is-active plugin_loader)"
     echo "plugin=$( [ -f ~/homebrew/plugins/InsertPlay/plugin.json ] && echo instalado || echo ausente)"
     echo "deploy=$(sudo -n ${DEPLOY} >/dev/null 2>&1; [ $? -eq 2 ] && echo liberado || echo sem-acesso)"
-    legacy=""
-    # o mesmo inventário do uninstall.sh; -L pega link quebrado
-    for p in /etc/systemd/system/insertplay.service /etc/systemd/system/multi-user.target.wants/insertplay.service \\
-        /tmp/sd-monitor.lock ~/.local/share/insertplay ~/.local/share/insertplay.update.lock \\
-        ~/.local/bin/insertplay ~/.config/insertplay ~/.local/state/insertplay; do
-      { [ -e "$p" ] || [ -L "$p" ]; } && legacy="$legacy,\${p/#$HOME/\\~}"
-    done
-    state=$(systemctl show -p ActiveState --value insertplay.service 2>/dev/null)
-    case "$state" in ""|inactive) ;; *) legacy="$legacy,insertplay.service($state)" ;; esac
-    # /etc/polkit-1/rules.d só abre para o root: sem acesso, a regra não é verificável daqui
-    polkit=/etc/polkit-1/rules.d/49-insertplay-controller-sleep.rules
-    if [ -x /etc/polkit-1/rules.d ]; then
-      [ -e "$polkit" ] && legacy="$legacy,$polkit"
-      echo "legacy_polkit=verificado"
-    else
-      echo "legacy_polkit=sem-acesso"
-    fi
-    echo "legacy_files=\${legacy#,}"
-    read -r legacy_shortcuts orphan_shortcuts <<EOF
-$(python3 - <<'PY'
-${LEGACY_SHORTCUTS_PY}
+    echo "orphan_shortcuts=$(python3 - <<'PY'
+${ORPHAN_SHORTCUTS_PY}
 PY
-)
-EOF
-    echo "legacy_shortcuts=$legacy_shortcuts orphan_shortcuts=$orphan_shortcuts"
+)"
   `, { capture: true });
   const facts = Object.fromEntries(s.out.split(/\s+/).filter((x) => x.includes("=")).map((x) => x.split("=")));
   add("ssh sem senha", s.code === 0, s.code === 0 ? `SteamOS ${facts.os} (${facts.device})` : s.err);
@@ -199,9 +169,6 @@ EOF
     else if (cfg.role === "prod") add("deploy sem senha", true, "não usado em prod");
     else add("deploy sem senha", false, "rode o setup-access (README)");
     add("plugin InsertPlay", true, facts.plugin);
-    const polkitNote = facts.legacy_polkit === "verificado" ? "" : " (regra de polkit só se vê como root)";
-    add("InsertPlay legado ausente", !facts.legacy_files, (facts.legacy_files || "nenhum arquivo do legado") + polkitNote);
-    add("atalhos legados ausentes", facts.legacy_shortcuts === "-", facts.legacy_shortcuts === "-" ? "nenhum (todas as contas)" : facts.legacy_shortcuts);
     // informativo: atalho do plugin que o registro não conhece (outra conta Steam, issue aberta)
     if (facts.orphan_shortcuts && facts.orphan_shortcuts !== "-") {
       add("atalhos do plugin fora do registro", true, facts.orphan_shortcuts);
@@ -256,7 +223,7 @@ function deploy(cfg, skipBuild) {
     `sudo rsync -a --delete ${STAGE}/ ~/homebrew/plugins/InsertPlay/ && sudo systemctl restart plugin_loader`]).code;
 }
 
-/** Grava o zip do plugin no cartão, como o build-sd-card.sh faria, usando o mesmo
+/** Grava o zip do plugin no cartão usando o mesmo
  *  write_card_package do plugin (valida o zip antes de substituir o anterior).
  *  `--version` troca a versão só no zip: serve para testar "cartão mais novo". */
 function stageCard(cfg, label, version) {
@@ -286,18 +253,6 @@ function setupAccess(cfg) {
   if (run("scp", ["-q", "-r", "-o", "BatchMode=yes", "scripts/deck-setup", `${target}:/tmp/insertplay-deck-setup`]).code !== 0) return 1;
   console.log("Instalador enviado. Agora rode (vai pedir a senha do deck):");
   console.log(`  ssh -t ${target} "sudo bash /tmp/insertplay-deck-setup/install-dev-access.sh"`);
-  return 0;
-}
-
-/** Envia o uninstall.sh do CLI legado; quem roda com sudo é o usuário (em prod não há
- *  liberação de sudo). Os atalhos legados saem pelo Steam, não por este script. */
-function legacyUninstall(cfg) {
-  const target = `${cfg.user}@${cfg.host}`;
-  const remote = "/tmp/insertplay-legacy-uninstall.sh";
-  const script = join(ROOT, "..", "insertplay-cli", "assets", "installer", "uninstall.sh");
-  if (run("scp", ["-q", "-o", "BatchMode=yes", script, `${target}:${remote}`]).code !== 0) return 1;
-  console.log("Desinstalador enviado. Agora rode (vai pedir a senha do deck):");
-  console.log(`  ssh -t ${target} "sudo bash ${remote} --purge"`);
   return 0;
 }
 
@@ -377,8 +332,6 @@ async function main() {
     }
     case "setup-access":
       return setupAccess(cfg);
-    case "legacy-uninstall":
-      return legacyUninstall(cfg);
     case "stage-card": {
       const i = rest.indexOf("--version");
       if (i >= 0 && (!rest[i + 1] || rest[i + 1].startsWith("--"))) throw new Error("--version precisa de um valor, ex.: --version 0.3.0");
@@ -402,7 +355,7 @@ async function main() {
       return 0;
     }
     default:
-      console.error("uso: node scripts/deck.mjs check|eval|ssh|deploy|restart|remove|logs|setup-access|legacy-uninstall|stage-card|screenshot|panel|rpc");
+      console.error("uso: node scripts/deck.mjs check|eval|ssh|deploy|restart|remove|logs|setup-access|stage-card|screenshot|panel|rpc");
       return 2;
   }
 }

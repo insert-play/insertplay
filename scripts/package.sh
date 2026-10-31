@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Gera out/InsertPlay.zip no formato que o Decky aceita em "Install Plugin from ZIP File":
-# exatamente uma pasta InsertPlay/ com plugin.json na raiz do zip. É o mesmo arquivo que o
-# build-sd-card.sh grava no cartão (insertplay/decky/InsertPlay.zip). O zip sai do
-# build_zip_from_dir do próprio plugin, que valida o pacote como o plugin fará no cartão.
+# Builds out/InsertPlay.zip in the format Decky accepts in "Install Plugin from ZIP File":
+# exactly one InsertPlay/ folder with plugin.json at the root of the zip. It is the file
+# attached to GitHub releases and copied to cards (insertplay/decky/InsertPlay.zip). The zip
+# comes from the plugin's own build_zip_from_dir, which validates the package the same way
+# the plugin does when it reads it from a card.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

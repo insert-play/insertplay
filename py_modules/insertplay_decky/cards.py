@@ -14,7 +14,7 @@ def default_media_roots() -> list:
 
 
 def manifest_path(mount: str):
-    """Mesma regra do ManifestPathResolver.cs: raiz primeiro, depois `insertplay/`."""
+    """Card root first, then `insertplay/` (layout of cards written by the legacy CLI)."""
     root = os.path.join(mount, MANIFEST_NAME)
     if os.path.isfile(root):
         return root
