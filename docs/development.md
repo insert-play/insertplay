@@ -44,6 +44,7 @@ Devices are listed in `deck.config.json` (not in git; copy `deck.config.example.
 | `logs [n]` | Decky journal lines about InsertPlay. |
 | `eval "<js>"` | Runs JS inside Steam (SharedJSContext). |
 | `screenshot [name]` / `panel [name]` | Captures Steam / the InsertPlay panel to `out/screens/`. |
+| `toasts [name]` | Captures the toast popup window to `out/screens/` (the screenshot misses it). |
 | `rpc <method> [args JSON…]` | Calls a `main.py` method through Decky. |
 | `ssh "<cmd>"` | Command on the device as `deck`. |
 | `stage-card <label> [--version X]` | Writes the plugin zip to a mounted card. |
