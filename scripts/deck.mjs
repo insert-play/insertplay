@@ -201,7 +201,7 @@ function upload(cfg, skipBuild) {
   }
   if (ssh(cfg, `rm -rf ${STAGE} && mkdir -p ${STAGE}/dist`).code !== 0) return 1;
   // same list as PACKAGE_ENTRIES (py_modules/insertplay_decky/plugin_package.py); dist goes below
-  const files = ["plugin.json", "package.json", "main.py", "NOTICE", "py_modules"];
+  const files = ["plugin.json", "package.json", "main.py", "LICENSE", "NOTICE", "py_modules"];
   const target = `${cfg.user}@${cfg.host}`;
   if (run("scp", ["-q", "-r", "-o", "BatchMode=yes", ...files, `${target}:${STAGE}/`]).code !== 0) return 1;
   if (run("scp", ["-q", "-o", "BatchMode=yes", "dist/index.js", `${target}:${STAGE}/dist/`]).code !== 0) return 1;

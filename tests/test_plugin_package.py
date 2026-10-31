@@ -18,6 +18,7 @@ def make_plugin_dir(root, version="0.2.0", flags=(), name="InsertPlay"):
     (plugin / "plugin.json").write_text(json.dumps({"name": name, "flags": list(flags)}), encoding="utf-8")
     (plugin / "package.json").write_text(json.dumps({"version": version}), encoding="utf-8")
     (plugin / "main.py").write_text("# main\n", encoding="utf-8")
+    (plugin / "LICENSE").write_text("license\n", encoding="utf-8")
     (plugin / "NOTICE").write_text("notice\n", encoding="utf-8")
     (plugin / "dist" / "index.js").write_text("// js\n", encoding="utf-8")
     (plugin / "py_modules" / "insertplay_decky" / "cards.py").write_text("# cards\n", encoding="utf-8")
@@ -73,7 +74,7 @@ def test_build_then_read_round_trip(tmp_path):
     assert info["version"] == "0.2.0" and len(info["sha256"]) == 64
     names = set(zipfile.ZipFile(dest).namelist())
     assert "InsertPlay/py_modules/insertplay_decky/cards.py" in names
-    assert "InsertPlay/NOTICE" in names
+    assert "InsertPlay/LICENSE" in names and "InsertPlay/NOTICE" in names
     assert not any("__pycache__" in n or n.endswith(".pyc") for n in names)
     assert "InsertPlay/stray.txt" not in names
     assert not os.path.exists(str(dest) + ".tmp")

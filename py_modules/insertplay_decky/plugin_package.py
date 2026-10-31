@@ -20,7 +20,7 @@ PLUGIN_NAME = "InsertPlay"
 CARD_PACKAGE = os.path.join("insertplay", "decky", f"{PLUGIN_NAME}.zip")
 # what goes into the package, from the project folder (package.sh) or the installed one (plugin);
 # `upload` in scripts/deck.mjs sends the same list
-PACKAGE_ENTRIES = ("plugin.json", "package.json", "main.py", "NOTICE", "py_modules", "dist")
+PACKAGE_ENTRIES = ("plugin.json", "package.json", "main.py", "LICENSE", "NOTICE", "py_modules", "dist")
 REQUIRED = ("plugin.json", "package.json", "main.py", "dist/index.js")
 # semver: major.minor.patch[-prerelease][+build]
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
