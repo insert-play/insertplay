@@ -1,79 +1,81 @@
-# insertplay-decky: guia para agentes de IA
+# InsertPlay: guide for AI agents
 
-Plugin Decky Loader (POC) do InsertPlay. Visão geral, layout e preparação manual do Deck estão em [README.md](README.md). Este arquivo diz **quais ferramentas usar para trabalhar com os aparelhos reais** e as regras para usá-las.
+Decky Loader plugin. Overview in [README.md](README.md); build, release and one-time device setup in [docs/development.md](docs/development.md); card format in [docs/card-format.md](docs/card-format.md). This file says **which tools to use to work with the real devices** and the rules for using them.
 
-## Aparelhos
+Language: docs, comments and dev-tool output are in English. Strings shown inside Steam (panel, toasts, event log) stay in Brazilian Portuguese until i18n ([#21](https://github.com/insert-play/insertplay/issues/21)); don't translate them piecemeal.
 
-| Nome (`--device`) | Aparelho | Papel |
+## Devices
+
+| Name (`--device`) | Device | Role |
 |---|---|---|
-| `deck` (padrão) | Steam Deck (Jupiter), na bancada | **Dev.** Ambiente principal: deploy, restart, testes destrutivos com atalhos `IP Teste…`. O usuário mexe nele fisicamente quando preciso. |
-| `machine` | Steam Machine (SteamOS, GPU Navi33), na sala gamer | **Prod.** Simula o uso real. Fica mais longe: peça intervenção física só quando necessário. |
+| `deck` (default) | Steam Deck (Jupiter), on the bench | **Dev.** Main environment: deploy, restart, destructive tests with `IP Teste…` shortcuts. The user handles it physically when needed. |
+| `machine` | Steam Machine (SteamOS, Navi33 GPU), in the gaming room | **Prod.** Simulates real use. It is farther away: ask for physical help only when necessary. |
 
-Regras da Steam Machine (prod):
-- Por padrão, só leitura: `check`, `eval` de consulta, `logs`, `screenshot`, `panel`, `rpc` de leitura.
-- O fluxo real de instalação (zip do cartão / "Install Plugin from ZIP File" do Decky) já foi validado nela. Para testar uma versão nova, o `deploy --device machine --confirm-prod` por SSH também vale.
-- **Confira o estado antes de qualquer instalação ou teste:** ela fica em outro ambiente e alguém pode estar jogando nela. Antes de `deploy`, `restart`, `remove` ou de pedir para abrir um jogo, rode `check` e `eval "SteamUIStore.RunningApps.map(a => a.display_name)"`. Com jogo aberto, não faça nada e pergunte ao usuário: o deploy reinicia o Decky no meio da partida de alguém.
-- `deploy`, `remove`, `restart`, `stage-card`, `setup-access` e `legacy-uninstall` exigem `--confirm-prod`. Só use depois de combinar com o usuário **naquela sessão**.
-- Não rode o `spike.mjs` nela: ele cria atalhos de teste.
-- Ela tem plugins que o Deck não tem (SteamGridDB, PlayCount). Algo que funciona no Deck pode se comportar diferente lá. Non-Steam Badges e MicroSDeck foram desinstalados em 2026-10-24: o badge de cartão do próprio InsertPlay os substitui.
-- Não altere atalhos que o plugin não criou. O InsertPlay legado (CLI + `insertplay.service`) foi removido dos dois aparelhos em 2026-10-24; se o `check` voltar a acusar legado, siga "Remover o InsertPlay legado" no README.
+Steam Machine (prod) rules:
+- Read-only by default: `check`, query `eval`, `logs`, `screenshot`, `panel`, read `rpc`.
+- The real install flow (card zip / Decky's "Install Plugin from ZIP File") was validated on it. To test a new version, `deploy --device machine --confirm-prod` over SSH also works.
+- **Check its state before any install or test:** it is in another room and someone may be playing. Before `deploy`, `restart`, `remove` or asking to open a game, run `check` and `eval "SteamUIStore.RunningApps.map(a => a.display_name)"`. With a game running, do nothing and ask the user: the deploy restarts Decky in the middle of someone's session.
+- `deploy`, `remove`, `restart`, `stage-card` and `setup-access` require `--confirm-prod`. Only use them after agreeing with the user **in that session**.
+- Don't run `spike.mjs` on it: it creates test shortcuts.
+- It has plugins the Deck doesn't (SteamGridDB, PlayCount). Something that works on the Deck may behave differently there. Non-Steam Badges and MicroSDeck were uninstalled on 2026-10-24: InsertPlay's own card badge replaces them.
+- Don't change shortcuts the plugin didn't create. The legacy InsertPlay (C# CLI + `insertplay.service`) was removed from both devices on 2026-10-24 and from this repository in #16.
 
-Os aparelhos ficam em `deck.config.json` (fora do git; modelo em `deck.config.example.json`): `{"default": "deck", "devices": {"deck": {"host", "user", "role"}, "machine": {...}}}`. O formato antigo, `{"host"}` na raiz, ainda vale como o aparelho `deck`. Todo comando aceita `--device <nome>`, em qualquer posição, ou a variável `INSERTPLAY_DEVICE`, e mostra no stderr qual aparelho está usando. Os IPs vêm de DHCP e podem mudar: se o `check` falhar na conexão, peça ao usuário o IP atual e atualize o arquivo.
+Devices live in `deck.config.json` (not in git; template in `deck.config.example.json`): `{"default": "deck", "devices": {"deck": {"host", "user", "role"}, "machine": {...}}}`. The old format, `{"host"}` at the root, still works as the `deck` device. Every command accepts `--device <name>`, in any position, or the `INSERTPLAY_DEVICE` variable, and prints on stderr which device it is using. IPs come from DHCP and can change: if `check` fails to connect, ask the user for the current IP and update the file.
 
-## Acesso aos aparelhos
+## Device access
 
-Pré-requisitos, feitos uma vez e à mão pelo usuário (README, passos 1 a 5 e "Acesso sem senha para a IA"):
-- SSH com chave para `deck@<ip>`;
-- Decky com "Allow Remote CEF Debugging";
-- a regra de sudo restrita instalada por `setup-access`.
+Prerequisites, done once and by hand by the user ([docs/development.md](docs/development.md), steps 1 to 5c):
+- SSH with a key to `deck@<ip>`;
+- Decky with "Allow Remote CEF Debugging";
+- the restricted sudo rule installed by `setup-access`.
 
-Todos os comandos rodam da pasta `insertplay-decky`, no Windows ou no WSL. Use `node scripts/deck.mjs <comando> [--device machine]`:
+All commands run from the repository root, on Windows or WSL. Use `node scripts/deck.mjs <command> [--device machine]`:
 
-| Comando | Para quê |
+| Command | What for |
 |---|---|
-| `check` | **Comece por aqui.** Diagnóstico: SSH, Decky ativo, deploy sem senha, plugin instalado, InsertPlay legado (arquivos e atalhos em todas as contas Steam), Steam via CEF. Também lista "atalhos do plugin fora do registro" (issue #8). |
-| `deploy [--skip-build]` | Build (falha se houver erro de TypeScript), envio para `/tmp/insertplay-decky` e instalação via `sudo -n /etc/insertplay-dev/deploy-plugin.sh deploy`, que reinicia o Decky. |
-| `logs [n]` | Últimas linhas do `journalctl -u plugin_loader` filtradas por "insertplay". |
-| `eval "<js>"` | Executa JS dentro do Steam (aba SharedJSContext, onde roda o frontend do plugin). Promises são aguardadas; o valor volta em JSON. |
-| `screenshot [nome]` | Salva a tela atual do Steam em `out/screens/<nome>.png`. Leia a imagem para conferir a interface. |
-| `panel [nome]` | Abre o Quick Access no painel do InsertPlay e captura. O Quick Access é outra janela do CEF (`QuickAccess_uid2`); o `screenshot` comum não o pega. Feche depois com `eval "(SteamUIStore.m_WindowStore ?? SteamUIStore.WindowStore).SteamUIWindows[0].MenuStore.CloseSideMenus()"`. |
-| `rpc <método> [args JSON…]` | Chama um método do `main.py` pelo Decky, como o frontend faz. Ex.: `rpc log_tail 5`, `rpc current_cards`. Internamente usa `DeckyBackend.call("loader/call_plugin_method", "InsertPlay", método, ...args)`: os argumentos vão **espalhados**; uma lista vira um argumento a mais. |
-| `ssh "<cmd>"` | Comando no Deck como usuário `deck`, sem TTY e sem senha. |
-| `stage-card <rótulo> [--version X]` | Build e gravação do zip do plugin no cartão montado (`insertplay/decky/InsertPlay.zip`), validado pelo mesmo `build_zip_from_dir` do plugin. `--version` muda a versão só no zip, para testar "cartão mais novo/antigo". |
-| `restart` / `remove` | Reiniciam o Decky / desinstalam o InsertPlay. |
-| `legacy-uninstall` | Envia o desinstalador do InsertPlay legado para `/tmp` e mostra o `ssh -t … sudo …` que **o usuário** roda (não há sudo para a IA fora do deploy). Atalhos legados saem pelo Steam (`RemoveShortcut`), nunca editando o `shortcuts.vdf`. |
+| `check` | **Start here.** Diagnostics: SSH, Decky running, passwordless deploy, plugin installed, Steam over CEF. Also lists "plugin shortcuts missing from the registry" (issue #8). |
+| `deploy [--skip-build]` | Build (fails on TypeScript errors), upload to `/tmp/insertplay-decky` and install via `sudo -n /etc/insertplay-dev/deploy-plugin.sh deploy`, which restarts Decky. |
+| `logs [n]` | Last lines of `journalctl -u plugin_loader` filtered by "insertplay". |
+| `eval "<js>"` | Runs JS inside Steam (SharedJSContext tab, where the plugin frontend runs). Promises are awaited; the value comes back as JSON. |
+| `screenshot [name]` | Saves the current Steam screen to `out/screens/<name>.png`. Read the image to check the UI. |
+| `panel [name]` | Opens Quick Access on the InsertPlay panel and captures it. Quick Access is another CEF window (`QuickAccess_uid2`); the plain `screenshot` doesn't catch it. Close it afterwards with `eval "(SteamUIStore.m_WindowStore ?? SteamUIStore.WindowStore).SteamUIWindows[0].MenuStore.CloseSideMenus()"`. |
+| `rpc <method> [args JSON…]` | Calls a `main.py` method through Decky, like the frontend does. E.g. `rpc log_tail 5`, `rpc current_cards`. Internally it uses `DeckyBackend.call("loader/call_plugin_method", "InsertPlay", method, ...args)`: arguments are **spread**; a list becomes one extra argument. |
+| `ssh "<cmd>"` | Command on the device as user `deck`, no TTY, no password. |
+| `stage-card <label> [--version X]` | Builds and writes the plugin zip to the mounted card (`insertplay/decky/InsertPlay.zip`), validated by the plugin's own `build_zip_from_dir`. `--version` changes the version only in the zip, to test "newer/older card". |
+| `restart` / `remove` | Restart Decky / uninstall InsertPlay. |
 
-Outros:
-- `node scripts/spike.mjs`: confirma as chamadas da API do Steam (ver [docs/steam-api-notes.md](docs/steam-api-notes.md)). Rode depois de atualização do Steam ou ao usar uma chamada nova.
-- `node scripts/cdp.mjs <ip> "<js>" [aba]`: CDP cru para qualquer aba (`QuickAccess_uid2`, `MainMenu_uid2`, `Steam — Modo Big Picture`).
+Others:
+- `node scripts/spike.mjs`: confirms the Steam API calls (see [docs/steam-api-notes.md](docs/steam-api-notes.md)). Run it after a Steam update or when using a new call.
+- `node scripts/cdp.mjs <ip> "<js>" [tab]`: raw CDP to any tab (`QuickAccess_uid2`, `MainMenu_uid2`, `Steam — Modo Big Picture`).
 
-Úteis no `eval`:
-- `SteamUIStore.Navigate("/library/app/<appid>")` e `SteamUIStore.Navigate("/library/home")` para levar a tela até o que você quer capturar;
+Useful in `eval`:
+- `SteamUIStore.Navigate("/library/app/<appid>")` and `SteamUIStore.Navigate("/library/home")` to bring the screen to what you want to capture;
 - `appStore.GetAppOverviewByAppID(id)`;
 - `collectionStore.BIsHidden(id)`.
 
-## Ciclo de desenvolvimento
+## Development cycle
 
-1. Lógica no backend vai em `py_modules/insertplay_decky/` (sem `import decky`), com teste em `tests/`: `uvx pytest tests -q`.
-2. `npx -y pnpm@9 typecheck` e depois `node scripts/deck.mjs deploy`.
-3. Verifique no aparelho com `logs`, `eval` no estado (`appStore`, `collectionStore`) e `screenshot`. Não declare "funciona" sem uma dessas evidências.
-4. Chamada nova do Steam: entra em `src/steam.ts`, é medida primeiro com `eval` no Deck e registrada em `docs/steam-api-notes.md`.
+1. Backend logic goes in `py_modules/insertplay_decky/` (no `import decky`), with a test in `tests/`: `uvx pytest tests -q`.
+2. `npx -y pnpm@9 typecheck`, then `node scripts/deck.mjs deploy`.
+3. Verify on the device with `logs`, `eval` on the state (`appStore`, `collectionStore`) and `screenshot`. Don't claim "it works" without one of these.
+4. A new Steam call goes in `src/steam.ts`, is measured first with `eval` on the Deck and recorded in `docs/steam-api-notes.md`.
+5. Releases: bump `version` in `package.json` and tag `vX.Y.Z` after the merge (docs/development.md). Creating a tag publishes a release: only with the user's go-ahead.
 
-## Regras
+## Rules
 
-- **O Deck é o aparelho pessoal do usuário.** A biblioteca dele tem centenas de jogos reais.
-  - Nunca remova, oculte ou altere atalhos ou jogos que não foram criados no teste em andamento.
-  - Atalho de teste leva nome claramente de teste (`IP Teste …`) e é removido no fim, também em caso de falha.
-- **O Deck tem duas contas Steam** (`wjsantos123`, 108436075, a principal; `dalilaviana`, 385089570). O registro do plugin é por aparelho (issue #8): com a outra conta ativa e um cartão inserido, o plugin cria atalho nela e sobrescreve o registro. Troque de conta só sem cartão, ou corrija depois com `rpc registry_put`.
-- Não mexa em outros plugins do Decky (`~/homebrew/plugins/*` além de `InsertPlay`).
-- Não inicie jogos reais do usuário. `RunGame` só em atalho de teste ou num cartão InsertPlay que o usuário pediu para testar.
-- Não tente obter root fora do `deploy-plugin.sh`, não peça a senha do usuário e não altere a regra de sudo. Se faltar permissão, explique e deixe o passo para o usuário.
-- **Atualização do SteamOS apaga a liberação de deploy** (`/etc/insertplay-dev`, `/etc/sudoers.d/zz-insertplay-dev`). Se o `check` mostrar "deploy sem senha: FALHOU", rode `setup-access` e peça ao usuário o comando `ssh -t … install-dev-access.sh`. Depois de uma atualização, rode também o `spike.mjs`: a API do Steam pode ter mudado.
-- O `deploy-plugin.sh` recusa `plugin.json` com a flag `root`. Não contorne isso; o backend precisa rodar como usuário comum.
-- Inserir e remover cartão SD é físico: peça ao usuário e confira com `logs` ou `eval`.
-- **Reiniciar o Steam** (para testar a inicialização): `eval "(SteamClient.User.StartRestart(false), true)"`.
-  - Confira antes que nenhum jogo está rodando (`SteamUIStore.RunningApps`).
-  - Espere uns 25 s entre reinícios. Reinícios em sequência rápida fizeram o **Decky se desligar** (`updater.do_shutdown`, serviço inativo, todos os plugins do usuário sem carregar).
-  - Depois de cada reinício confira `ssh "systemctl is-active plugin_loader"`; se estiver inativo, `deck.mjs restart`.
-- "Funcionou" exige evidência positiva: um atalho a menos ou a mais pode vir de um erro que interrompeu o fluxo. Leia `rpc log_tail` (a checagem inicial registra `reconcile`) além de contar o estado.
-- `pnpm build` termina com 0 mesmo com erro de TypeScript. O `deploy` já barra isso; num build manual, procure `plugin typescript` na saída.
+- **The Deck is the user's personal device.** Its library has hundreds of real games.
+  - Never remove, hide or change shortcuts or games that weren't created by the test in progress.
+  - Test shortcuts get clearly test names (`IP Teste …`) and are removed at the end, also on failure.
+- **The Deck has two Steam accounts** (`wjsantos123`, 108436075, the main one; `dalilaviana`, 385089570). The plugin registry is per device (issue #8): with the other account active and a card inserted, the plugin creates a shortcut in it and overwrites the registry. Switch accounts only without a card, or fix it afterwards with `rpc registry_put`.
+- Don't touch other Decky plugins (`~/homebrew/plugins/*` other than `InsertPlay`).
+- Don't start the user's real games. `RunGame` only on a test shortcut or an InsertPlay card the user asked to test.
+- Don't try to get root outside `deploy-plugin.sh`, don't ask for the user's password and don't change the sudo rule. If a permission is missing, explain and leave the step to the user.
+- **A SteamOS update wipes the deploy access** (`/etc/insertplay-dev`, `/etc/sudoers.d/zz-insertplay-dev`). If `check` shows "passwordless deploy: FAIL", run `setup-access` and give the user the `ssh -t … install-dev-access.sh` command. After an update, also run `spike.mjs`: the Steam API may have changed.
+- `deploy-plugin.sh` refuses a `plugin.json` with the `root` flag. Don't work around it; the backend must run as a regular user.
+- Inserting and removing an SD card is physical: ask the user and confirm with `logs` or `eval`.
+- **Restarting Steam** (to test startup): `eval "(SteamClient.User.StartRestart(false), true)"`.
+  - Check first that no game is running (`SteamUIStore.RunningApps`).
+  - Wait about 25 s between restarts. Restarts in quick succession made **Decky shut down** (`updater.do_shutdown`, service inactive, none of the user's plugins loading).
+  - After each restart check `ssh "systemctl is-active plugin_loader"`; if inactive, `deck.mjs restart`.
+- "It worked" needs positive evidence: one shortcut more or less can come from an error that cut the flow short. Read `rpc log_tail` (the startup check logs `reconcile`) besides counting state.
+- `pnpm build` exits 0 even with TypeScript errors. `deploy` and `package.sh` already catch that; on a manual build, look for `plugin typescript` in the output.

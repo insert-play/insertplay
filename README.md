@@ -1,206 +1,109 @@
-# InsertPlay: plugin Decky (POC)
+# InsertPlay
 
-Insira um cartão InsertPlay: o atalho do jogo aparece na biblioteca com as artes do próprio cartão e o jogo inicia. Remova o cartão: o atalho é ocultado (opção "Ocultar ao remover o cartão" no painel). Jogos no cartão inserido levam um badge de cartão SD na capa: os atalhos do InsertPlay e os jogos Steam instalados numa biblioteca do cartão. Um cartão com biblioteca Steam e sem manifesto InsertPlay também avisa ao entrar e sair e, com "Iniciar ao inserir", abre o jogo se o cartão tiver exatamente um e nenhum outro estiver aberto. Tudo isso sem reiniciar o Steam.
+A [Decky Loader](https://decky.xyz/) plugin that turns SD cards into game cartridges on SteamOS (Steam Deck, Steam Machine).
 
-O plugin **substitui o InsertPlay legado** (CLI em C#, `insertplay.service` e os atalhos criados no `shortcuts.vdf`). Se os dois rodarem juntos, o jogo é iniciado duas vezes. Num aparelho que tinha o legado, remova-o **antes** de instalar o plugin: veja [Remover o InsertPlay legado](#remover-o-insertplay-legado).
+![InsertPlay panel and a card game in the library](docs/images/insertplay.png)
 
-## Como funciona
-- `main.py` + `py_modules/insertplay_decky/` (backend Python):
-  - verifica `/run/media/*` e `/run/media/*/*` a cada 1 s;
-  - lê `steam-shortcut.json` e `shortcut-identity.json` sem escrever no cartão;
-  - avisa o frontend com `card_inserted` e `card_removed`;
-  - copia o ícone do atalho para o SSD (`~/homebrew/data/InsertPlay/icons/`): o Steam guarda só o caminho, e no cartão o ícone sumiria com ele fora (issue #17).
-- `src/` (frontend, roda dentro do Steam):
-  - cria ou atualiza o atalho com `SteamClient.Apps.*`;
-  - aplica as artes e o ícone (sem trocar um ícone escolhido pelo usuário), oculta e mostra o atalho e inicia o jogo;
-  - desenha o badge de cartão SD nas capas da biblioteca (`src/steam-badges.tsx`, depende do DOM do Steam).
-- Registro `guid → appid` em `~/homebrew/settings/InsertPlay/registry.json`.
-- Log de eventos em `~/homebrew/data/InsertPlay/events.jsonl`, também visível no painel.
+- **Insert an InsertPlay card** and its game shows up in the Steam library with the card's own artwork, and starts. **Remove the card** and the shortcut is hidden.
+- **SD card badge** on the covers of every game on the inserted card: InsertPlay shortcuts and Steam games installed in a library on the card.
+- **Steam games on a card**: a card with a Steam library and no InsertPlay manifest also gets a notification when inserted and removed and, with "Iniciar ao inserir" on, starts its game if the card has exactly one and no other game is running.
+- **Portable saves**: Steam games installed on a card can keep their saves on the card, so they follow it to another device.
+- No Steam restart needed for any of this.
 
-Requisito do cartão: ter `shortcut-identity.json`, que o `build-sd-card.sh` gera. Sem ele o cartão é recusado com mensagem no painel.
+> The plugin UI is in Brazilian Portuguese for now. Translation is tracked in [#21](https://github.com/insert-play/insertplay/issues/21). This README gives each UI label in Portuguese with its meaning.
 
-## Save portátil (jogos Steam no cartão, issue #13)
+## Install
 
-No Modo Jogo, o Steam guarda o prefixo do Proton (onde muitos jogos salvam) no SSD, mesmo para jogo instalado no cartão. Um jogo sem Steam Cloud, ou com o Cloud quebrado no SteamOS, deixa o save no aparelho. O **save portátil** leva esses dados para o cartão e, enquanto o cartão está inserido, liga o SSD a eles por symlink.
+InsertPlay is not on the Decky store. You install it from a release or from a card, through Decky's developer options. Decky Loader itself must already be installed.
 
-No painel, a seção **"Save portátil"** tem uma escolha por cartão com jogos Steam. A escolha vale para todos os jogos do cartão e só aparece com um cartão desses inserido:
+1. In Game Mode, press `…` → Decky icon → gear → **General**: turn on **Developer mode** (once).
+2. Decky settings → **Developer**, then one of:
+   - **Install Plugin from URL**: `https://github.com/insert-play/insertplay/releases/latest/download/InsertPlay.zip`; or
+   - **Install Plugin from ZIP File** → **Browse**: pick `InsertPlay.zip`, downloaded from the [releases](https://github.com/insert-play/insertplay/releases) or carried by a card. On a card it is in `insertplay/decky/`. In the file picker, press **↑** until `/`, then go to `run` → `media` → `deck` → `<card label>` → `insertplay` → `decky`.
+3. Accept the third-party plugin warning and confirm.
 
-| Modo | Vai para o cartão | Fica no SSD |
+InsertPlay shows up in the Decky menu (Quick Access).
+
+A script on the card that installs Decky and the plugin in one step is tracked in [#20](https://github.com/insert-play/insertplay/issues/20).
+
+## Update from a card
+
+A card can carry the plugin at `insertplay/decky/InsertPlay.zip`. The panel's **Plugin** section shows the installed version and, for each inserted card, the version it carries:
+
+| The card has | Button | What happens |
 |---|---|---|
-| **Desligado** (padrão) | nada | tudo |
-| **Saves** | `pfx/drive_c/users/steamuser` (Documents, AppData, Saved Games), em `.insertplay/users/<appid>/` | o resto do prefixo, com `steamuser` virando link |
-| **Prefixo completo** | `compatdata/<appid>` inteiro, em `.insertplay/prefixes/<appid>` | só o link |
+| a newer version | Atualizar plugin para vX (update plugin) | Decky asks for confirmation and replaces the plugin with the card's version. |
+| the same version | Reinstalar plugin do cartão (reinstall) | Same as above, same version. |
+| an older version or an invalid zip | Atualizar cartão para vX (update card) | Asks for confirmation and writes the installed version to the card. |
+| no package | Gravar plugin vX no cartão (write to card) | Writes the installed version to the card. |
 
-- **Use "Saves".** O Proton recopia ~115 MB de DLLs para o prefixo **a cada abertura**. Com o prefixo completo num cartão lento, como um SDHC antigo a 0,4 MB/s, cada abertura levou minutos. No modo "Saves" essa cópia fica no SSD.
-  - "Saves" não leva o que o jogo grava no registro do Windows (`user.reg`), o que é raro para save. Em compensação, a configuração gráfica que fica no registro continua em cada aparelho. Medido com o Bully: os saves do Deck carregaram na Steam Machine, e a resolução ficou a de cada aparelho (800p no Deck, 4K na Machine). Num jogo que guarda a configuração em `Documents` ou `AppData`, ela vai junto.
-  - "Prefixo completo" leva o registro, mas só presta em cartão rápido (A1/A2).
-- **A escolha fica gravada no cartão** (`.insertplay/portable-saves.json`). Em outro aparelho com o plugin, os links são refeitos ao inserir, sem escolher de novo.
-- **Jogo que nunca rodou naquele aparelho**, no modo "Saves": o plugin cria só o caminho até `users/` com o link. O Proton monta o resto em volta, e o save aparece já na primeira abertura.
-- **O cartão precisa ser ext4** (o "Formatar" do Steam). Em exFAT/NTFS a escolha fica desabilitada.
-- **Opções de inicialização com `STEAM_COMPAT_DATA_PATH` ou `WINEPREFIX`** fazem o Proton usar outro prefixo e ignorar o link. O plugin avisa com um toast, mas não apaga as opções. Elas são guardadas por aparelho: tire-as em cada um.
-- **Mais de um candidato para o mesmo jogo** (SSD, cartão, cópia que um move deixa em `steamapps/compatdata`): vence quem tem os arquivos de usuário mais recentes. Uma pasta sem arquivos de usuário (recém-criada pelo Steam) nunca vence uma com save.
-  - Os outros viram backup, nunca são apagados: no SSD, `<caminho>.insertplay-backup-<data>`; no cartão, `.insertplay/backups/`.
-  - Se o perdedor tinha save, um toast avisa.
-- **Jogo aberto**: o plugin não mexe nele. A passada roda a cada 30 s e a cada mudança de biblioteca, antes do "Iniciar ao inserir".
-- **Sair de um modo** (desligar, ou trocar de modo) copia o que está no cartão de volta para o SSD. A cópia do cartão fica.
-- **Jogo movido para fora do cartão**: o link vira cópia no SSD.
-- **Jogo desinstalado**: só o link sai.
-- **Cartão removido**: o link quebrado é apagado na passada seguinte.
-- **Aparelho com versão anterior a 0.5.0** ignora `.insertplay` e usa o prefixo do SSD daquele aparelho. Ao atualizar, vale a regra do mais recente.
-- **Fora do escopo**: o shader cache (`shadercache/<appid>`), que fica no aparelho, e os cartões InsertPlay (atalho não-Steam), cujo script de configuração já mantém o prefixo no cartão.
+Inserting a card with a newer version shows a notification. The plugin never updates itself. The link between cards and shortcuts (`~/homebrew/settings/InsertPlay`) survives updates. If you had hidden or reordered InsertPlay in Decky's list, that goes back to the default, as with a store update.
 
-## Desenvolvimento no Windows
-```powershell
-npx -y pnpm@9 install
-npx -y pnpm@9 typecheck
-npx -y pnpm@9 build     # leia a saída: erro de TypeScript aparece como aviso e o build termina com código 0
-uvx pytest tests -q     # backend; o teste de symlink só roda em Linux/WSL
-node scripts/deck.mjs check     # diagnóstico da conexão com o Deck
-node scripts/deck.mjs deploy    # build + instala no Deck + reinicia o Decky
-```
-Todos os comandos do `deck.mjs` estão no topo de [scripts/deck.mjs](scripts/deck.mjs) e em [CLAUDE.md](CLAUDE.md). O zip para distribuição sai de `scripts/package.sh` (WSL), em `out/InsertPlay.zip`. Para testar o fluxo do cartão sem refazer o cartão: `node scripts/deck.mjs stage-card <rótulo> [--version X]`.
+## Make a card
 
-## Instalar e atualizar pelo cartão SD
+Cards are prepared by hand for now: a manifest, a guid and a launch script at the card root. See **[docs/card-format.md](docs/card-format.md)** and start from [`card-template/`](card-template/). The plugin never writes the manifest or the guid; a card without `shortcut-identity.json` is refused with a message in the panel.
 
-O cartão leva o próprio plugin em `insertplay/decky/InsertPlay.zip`. Não precisa de rede nem do Modo Desktop. Só o Decky Loader precisa estar instalado.
+## Panel settings
 
-### Gerar o pacote e colocar no cartão (no PC, WSL)
-```bash
-bash src/insertplay-decky/scripts/package.sh   # gera src/insertplay-decky/out/InsertPlay.zip
-bash src/build-sd-card.sh                      # copia o zip para insertplay/decky/ no cartão
-```
-- **A cada release, suba a `version` em `package.json`.** É por ela que o plugin decide se o cartão é mais novo.
-- Sem um zip novo, o `build-sd-card.sh` mantém o que já estava no cartão.
+- **Iniciar ao inserir** (start on insert): starts the card's game when the card is inserted.
+- **Ocultar ao remover o cartão** (hide when the card is removed): hides the shortcut while its card is out.
+- **Eventos** (events): what the plugin did recently. The same log is in `~/homebrew/data/InsertPlay/events.jsonl`.
 
-### Primeira instalação (no Deck, Modo de Jogo)
-1. Insira o cartão.
-2. Botão `...` → ícone do Decky → engrenagem → **Geral**: ligue **Developer mode** (só uma vez).
-3. Ainda nas configurações do Decky → **Desenvolvedor** → "Instalar Plugin a partir de um arquivo ZIP" → **Navegar**. Aceite o aviso de plugin de terceiros.
-4. No seletor, use o botão **↑** até chegar em `/` e entre em `run` → `media` → `deck` → `<nome do cartão>` → `insertplay` → `decky`.
-5. Toque em `InsertPlay.zip` e confirme **Instalar**.
+## Portable saves (Steam games on a card)
 
-### Atualizar (no Deck, painel do InsertPlay)
-A seção **Plugin** mostra a versão instalada e, para cada cartão inserido, a versão que ele traz:
+In Game Mode, Steam keeps the Proton prefix (where many games save) on the internal drive, even for a game installed on a card. A game without Steam Cloud, or with Cloud broken on SteamOS, leaves its save on the device. **Portable saves** move that data to the card and, while the card is inserted, link the internal drive to it with a symlink.
 
-| O cartão tem | Botão | O que acontece |
+The panel's **Save portátil** section has one choice per card with Steam games. It applies to every game on the card and only shows up while such a card is inserted:
+
+| Mode | Moved to the card | Stays on the device |
 |---|---|---|
-| versão mais nova | Atualizar plugin para vX | O Decky pede confirmação e troca o plugin pela versão do cartão. |
-| a mesma versão | Reinstalar plugin do cartão | Igual ao anterior, com a mesma versão. |
-| versão mais antiga, zip inválido | Atualizar cartão para vX | Pede confirmação e grava a versão instalada no cartão. |
-| nenhum pacote | Gravar plugin vX no cartão | Grava a versão instalada no cartão. |
+| **Desligado** (off, default) | nothing | everything |
+| **Saves** | `pfx/drive_c/users/steamuser` (Documents, AppData, Saved Games), in `.insertplay/users/<appid>/` | the rest of the prefix, with `steamuser` turned into a link |
+| **Prefixo completo** (full prefix) | the whole `compatdata/<appid>`, in `.insertplay/prefixes/<appid>` | just the link |
 
-Ao inserir um cartão com versão mais nova, aparece um aviso. O plugin nunca se atualiza sozinho.
+- **Use "Saves".** Proton copies ~115 MB of DLLs into the prefix **on every launch**. With the full prefix on a slow card, such as an old SDHC at 0.4 MB/s, each launch took minutes. In "Saves" mode that copy stays on the internal drive.
+  - "Saves" doesn't carry what the game writes to the Windows registry (`user.reg`), which is rare for saves. In exchange, graphics settings kept in the registry stay per device. Measured with Bully: the Deck's saves loaded on the Steam Machine, and the resolution stayed each device's own (800p on the Deck, 4K on the Machine). A game that keeps its settings in `Documents` or `AppData` takes them along.
+  - "Prefixo completo" carries the registry, but is only usable on a fast card (A1/A2).
+- **The choice is stored on the card** (`.insertplay/portable-saves.json`). On another device with the plugin, the links are recreated on insert without choosing again.
+- **A game that never ran on that device**, in "Saves" mode: the plugin creates just the path down to `users/` with the link. Proton builds the rest around it, and the save is there on the first launch.
+- **The card must be ext4** (Steam's "Format"). On exFAT/NTFS the choice is disabled.
+- **Launch options with `STEAM_COMPAT_DATA_PATH` or `WINEPREFIX`** make Proton use another prefix and ignore the link. The plugin warns with a notification but doesn't remove them. They are stored per device: remove them on each one.
+- **More than one candidate for the same game** (internal drive, card, the copy a move leaves in `steamapps/compatdata`): the one with the most recent user files wins. A folder with no user files (just created by Steam) never beats one with a save.
+  - The others become backups and are never deleted: on the internal drive, `<path>.insertplay-backup-<date>`; on the card, `.insertplay/backups/`.
+  - If the loser had a save, a notification says so.
+- **Running game**: the plugin leaves it alone. The pass runs every 30 s and on every library change, before "Iniciar ao inserir".
+- **Leaving a mode** (turning it off, or switching modes) copies what is on the card back to the internal drive. The card's copy stays.
+- **Game moved off the card**: the link becomes a copy on the internal drive.
+- **Game uninstalled**: only the link goes away.
+- **Card removed**: the broken link is deleted on the next pass.
+- **A device with a plugin older than 0.5.0** ignores `.insertplay` and uses its own prefix. After updating, the most-recent rule applies.
+- **Out of scope**: the shader cache (`shadercache/<appid>`), which stays on the device, and InsertPlay cards (non-Steam shortcuts), whose launch script already keeps the prefix on the card.
 
-O vínculo dos cartões com os atalhos (`~/homebrew/settings/InsertPlay`) é mantido na atualização. Se você tinha ocultado ou reordenado o InsertPlay na lista do Decky, isso volta ao padrão, como numa atualização pela loja.
+## How it works
 
-## Remover o InsertPlay legado
+- `main.py` + `py_modules/insertplay_decky/` (Python backend):
+  - scans `/run/media/*` and `/run/media/*/*` every second;
+  - reads `steam-shortcut.json` and `shortcut-identity.json` without writing to the card;
+  - tells the frontend with `card_inserted` and `card_removed`;
+  - copies the shortcut icon to the device (`~/homebrew/data/InsertPlay/icons/`): Steam stores only the path, and an icon on the card would vanish with the card (#17).
+- `src/` (frontend, runs inside Steam):
+  - creates or updates the shortcut with `SteamClient.Apps.*`;
+  - applies the artwork and the icon (never replacing an icon picked by the user), hides and shows the shortcut, and starts the game;
+  - draws the SD card badge on library covers (`src/steam-badges.tsx`, depends on Steam's DOM).
+- Registry `guid → appid` in `~/homebrew/settings/InsertPlay/registry.json`.
 
-O legado (CLI + serviço) deixava no aparelho:
-- o serviço `/etc/systemd/system/insertplay.service` e, se o "controller sleep" foi ligado, a regra `/etc/polkit-1/rules.d/49-insertplay-controller-sleep.rules`;
-- o CLI e os scripts em `~/.local/share/insertplay` e o lançador `~/.local/bin/insertplay`;
-- a configuração em `~/.config/insertplay` e os logs em `~/.local/state/insertplay`;
-- atalhos não-Steam gravados direto no `shortcuts.vdf` de cada conta Steam (ex.: "SD CARD", que lança `~/.local/share/insertplay/insertplay-start-bootstrap.sh`). Sem os arquivos acima, eles deixam de funcionar.
+The plugin relies on undocumented Steam client APIs (`SteamClient.*`); the calls in use and how they were measured are in [docs/steam-api-notes.md](docs/steam-api-notes.md). A Steam update can break them.
 
-Os cartões não dependem de nada disso: o plugin lança o `insertplay-start.sh` do próprio cartão.
+## Known limitations
 
-### Passo 1: no Windows (PowerShell, pasta `insertplay-decky`), ver o que existe
-```
-node scripts/deck.mjs check [--device machine]
-```
-As linhas **InsertPlay legado ausente** e **atalhos legados ausentes** mostram FALHOU com o que ainda existe (arquivos; `<userdata>:<qtd>` por conta Steam).
+- The shortcut registry is per device, but shortcuts are per Steam account: with two accounts on one device, a card can get a shortcut in each ([#8](https://github.com/insert-play/insertplay/issues/8)).
+- Steam's home screen doesn't refresh when a card is inserted or removed ([#5](https://github.com/insert-play/insertplay/issues/5)).
+- Steam sometimes doesn't read the games of a freshly mounted card ([#15](https://github.com/insert-play/insertplay/issues/15)).
 
-### Passo 2: no Windows, enviar o desinstalador e rodá-lo com sudo
-```
-node scripts/deck.mjs legacy-uninstall [--device machine --confirm-prod]
-```
-Ele copia `src/insertplay-cli/assets/installer/uninstall.sh` para `/tmp` no aparelho e mostra o comando a rodar, que pede a senha do `deck`:
-```
-ssh -t deck@<ip> "sudo bash /tmp/insertplay-legacy-uninstall.sh --purge"
-```
-Esperado: uma linha `removed:` ou `already absent:` por item e, no fim, `Done: N removed, M already absent.`. Pode rodar de novo sem problema: na segunda vez tudo aparece como `already absent`. Sem `--purge`, a configuração e os logs ficam.
+## Development
 
-### Passo 3: atalhos legados, pelo próprio Steam
-O script não mexe em atalhos. Com o Steam aberto **na conta que tem os atalhos** (no Modo de Jogo, troque de usuário se o aparelho tiver mais de uma conta), remova-os com `SteamClient.Apps.RemoveShortcut(<appid>)` via `deck.mjs eval`, ou pela própria biblioteca (Gerenciar → Remover atalho do jogo). Nunca edite o `shortcuts.vdf` à mão nem com o Steam aberto.
+See [docs/development.md](docs/development.md).
 
-Legado é o atalho que lança algo de `~/.local/share/insertplay` ou que menciona InsertPlay/`--guid` com o executável **sem aspas** (o CLI gravava o vdf direto). Atalhos do plugin têm o executável entre aspas (`"/bin/bash"`) e opções terminando em `--guid <uuid>`. Não remova esses.
+## License
 
-### Passo 4: no Windows, conferir
-```
-node scripts/deck.mjs check [--device machine]
-```
-As duas linhas devem dar OK. Faça isso em todas as contas Steam do aparelho: o `check` lê o `shortcuts.vdf` de todas.
-
-## Preparar o Steam Deck (uma vez)
-
-Tudo passa pela rede (Wi-Fi). O Deck e o PC precisam estar na mesma rede. Nenhum passo usa pendrive.
-
-### Passo 1: no Deck (Modo Desktop → Konsole)
-```bash
-passwd                              # define uma senha para o usuário deck (se ainda não tiver)
-sudo systemctl enable --now sshd    # liga o servidor SSH
-ip -4 addr show | grep inet         # mostra o IP; use o que começa com 192.168... ou 10...
-```
-Anote o IP, por exemplo `192.168.0.42`. Nos comandos abaixo, troque `<ip>` por ele.
-
-### Passo 2: no Windows (PowerShell), testar a conexão
-```powershell
-ssh deck@<ip>
-```
-- Na primeira vez ele pergunta `Are you sure you want to continue connecting?`. Digite `yes`.
-- Depois pede a senha definida no passo 1.
-- Se aparecer o prompt `(deck@steamdeck ~)$`, funcionou. Digite `exit` para voltar ao Windows.
-
-### Passo 3: no Windows, parar de digitar a senha a cada deploy (opcional)
-Sem este passo tudo funciona, mas o deploy pede a senha do Deck umas 3 vezes. A ideia é gerar uma chave no Windows e mandá-la para o Deck pela própria conexão SSH:
-```powershell
-# gera a chave (aperte Enter em todas as perguntas); pule se já existir ~\.ssh\id_ed25519.pub
-ssh-keygen -t ed25519
-
-# envia a chave pública para o Deck (pede a senha uma última vez)
-type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh deck@<ip> "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
-```
-Teste com `ssh deck@<ip>`: agora deve entrar sem pedir senha. O `sudo` do deploy continua pedindo a senha, e isso é normal.
-
-### Passo 4: no Deck, instalar o Decky
-- Se o Deck tinha o InsertPlay legado, remova-o antes: [Remover o InsertPlay legado](#remover-o-insertplay-legado).
-- Instale o Decky Loader (instalador oficial, pelo navegador do Modo Desktop).
-- Volte ao Modo de Jogo. No menu `...` (Quick Access) → ícone do Decky → engrenagem: ligue **Developer mode** e depois, em Developer, **Allow Remote CEF Debugging**.
-
-### Passo 5: no Windows, abrir o console do Steam do Deck
-No Chrome ou Edge: `chrome://inspect` → **Configure…** → adicione `<ip>:8081` → Done. Em alguns segundos aparece a lista de abas do Deck; clique em **inspect** na **SharedJSContext**.
-
-A janela que abre é o DevTools **do Steam do Deck**: tudo o que roda ali roda dentro do Steam, como se fosse o plugin. Durante os testes do plugin, deixe-o aberto: os erros do frontend aparecem em vermelho na aba **Console**. Se o Steam do Deck reiniciar, volte ao `chrome://inspect` e clique em **inspect** de novo.
-
-### Passo 5b: no Windows, configurar o IP e conferir tudo
-Copie `deck.config.example.json` para `deck.config.json` e coloque os IPs: `deck` é o Steam Deck de desenvolvimento (padrão) e `machine` é a Steam Machine usada como produção. Esse arquivo não vai para o git. Para usar outro aparelho, acrescente `--device machine` a qualquer comando. Depois:
-```powershell
-node scripts/deck.mjs check
-```
-Aparece uma tabela OK/FALHOU: SSH, Decky, Steam via CEF, etc. A linha "deploy sem senha" só fica OK depois do passo seguinte.
-
-### Passo 5c: acesso sem senha para a IA (uma vez)
-Para a IA (ou você) instalar e testar o plugin sem digitar a senha a cada vez, instale no Deck um script fixo que o `sudo` libera **só para instalar o InsertPlay e reiniciar o Decky**. Não é um sudo geral: o script recusa qualquer plugin que peça root. No Windows:
-```powershell
-node scripts/deck.mjs setup-access
-ssh -t deck@<ip> "sudo bash /tmp/insertplay-deck-setup/install-dev-access.sh"
-```
-O primeiro comando envia o instalador. O segundo pede a senha do deck uma vez e instala. Rode `node scripts/deck.mjs check` de novo: "deploy sem senha" deve ficar OK.
-
-Para desfazer, no Deck: `sudo rm -rf /etc/insertplay-dev /etc/sudoers.d/zz-insertplay-dev`.
-
-O script valida e instala uma cópia privada do root, nunca os arquivos que o usuário `deck` ainda pode alterar. Limite conhecido: `~/homebrew` pertence ao `deck` por design do Decky, e com essa posse o `deck` já controla o que o Decky (root) carrega no boot. O script não cria esse risco, mas também não o elimina. Use essa liberação só no aparelho de desenvolvimento.
-
-Rode `setup-access` e o comando `ssh -t … install-dev-access.sh` de novo quando:
-- **o SteamOS atualizar**: a atualização apaga `/etc/insertplay-dev` e `/etc/sudoers.d/zz-insertplay-dev` (medido na 3.8.28 → 3.9.5). O `check` mostra "deploy sem senha: FALHOU";
-- `scripts/deck-setup/` mudar: o Deck usa a cópia instalada em `/etc/insertplay-dev`.
-
-As funções do Steam que o plugin usa já foram conferidas no seu Deck com `node scripts/spike.mjs` (resultado em [docs/steam-api-notes.md](docs/steam-api-notes.md)). Rode de novo depois de atualizações do Steam.
-
-### Passo 6: instalar o plugin
-```powershell
-node scripts/deck.mjs deploy
-```
-O plugin aparece no menu do Decky (Quick Access) como **InsertPlay**. Logs do plugin: `node scripts/deck.mjs logs`.
-
-## Fora da POC
-Ícone do atalho (`SetShortcutIcon` existe e é candidato), ocultar/mostrar manualmente, i18n, criar a identidade do cartão.
+[BSD-3-Clause](LICENSE). Parts are adapted from [decky-nonsteam-sync](https://github.com/JoseArkadio/decky-nonsteam-sync); see [NOTICE](NOTICE).
