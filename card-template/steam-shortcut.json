@@ -1,0 +1,18 @@
+{
+	"schemaVersion": 1,
+	"shortcut": {
+		"appName": "My Game",
+		"launch": {
+			"exe": "/bin/bash",
+			"args": "\"{SD_ROOT}/insertplay-start.sh\"",
+			"startDir": "{SD_ROOT}"
+		},
+		"artwork": {
+			"icon": "steam-artwork/icon.png",
+			"capsule": "steam-artwork/capsule.png",
+			"horizontal": "steam-artwork/horizontal.png",
+			"hero": "steam-artwork/hero.png",
+			"logo": "steam-artwork/logo.png"
+		}
+	}
+}

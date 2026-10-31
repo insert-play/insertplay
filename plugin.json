@@ -1,0 +1,11 @@
+{
+  "name": "InsertPlay",
+  "author": "Wesley Santos",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["library", "non-steam", "sd-card", "saves"],
+    "description": "SD cards as game cartridges: insert an InsertPlay card and its game appears in the library with its artwork and starts; remove it and the game is hidden. Also badges games on the inserted card, notifies and auto-starts Steam games installed on a card, and can keep their saves on the card.",
+    "image": "https://raw.githubusercontent.com/insert-play/insertplay/main/docs/images/insertplay.png"
+  }
+}
