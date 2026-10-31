@@ -39,6 +39,7 @@ All commands run from the repository root, on Windows or WSL. Use `node scripts/
 | `eval "<js>"` | Runs JS inside Steam (SharedJSContext tab, where the plugin frontend runs). Promises are awaited; the value comes back as JSON. |
 | `screenshot [name]` | Saves the current Steam screen to `out/screens/<name>.png`. Read the image to check the UI. |
 | `panel [name]` | Opens Quick Access on the InsertPlay panel and captures it. Quick Access is another CEF window (`QuickAccess_uid2`); the plain `screenshot` doesn't catch it. Close it afterwards with `eval "(SteamUIStore.m_WindowStore ?? SteamUIStore.WindowStore).SteamUIWindows[0].MenuStore.CloseSideMenus()"`. |
+| `toasts [name]` | Captures the toast popup window (`notificationtoasts_uid2`) to `out/screens/<name>.png`. Run it within the toast's duration (5 s by default). |
 | `rpc <method> [args JSON…]` | Calls a `main.py` method through Decky, like the frontend does. E.g. `rpc log_tail 5`, `rpc current_cards`. Internally it uses `DeckyBackend.call("loader/call_plugin_method", "InsertPlay", method, ...args)`: arguments are **spread**; a list becomes one extra argument. |
 | `ssh "<cmd>"` | Command on the device as user `deck`, no TTY, no password. |
 | `stage-card <label> [--version X]` | Builds and writes the plugin zip to the mounted card (`insertplay/decky/InsertPlay.zip`), validated by the plugin's own `build_zip_from_dir`. `--version` changes the version only in the zip, to test "newer/older card". |

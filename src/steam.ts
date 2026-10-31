@@ -231,6 +231,19 @@ export function appName(appid: number): string {
   return apps()?.GetAppOverviewByAppID?.(appid)?.display_name || `app ${appid}`;
 }
 
+/** The game's icon as an `<img>` URL; `null` = none. Measured on the Deck (2026-10-31): a
+ *  shortcut gives a `data:` URI with its `SetShortcutIcon` icon, a Steam game gives the CDN
+ *  URL. Cosmetic: never throws. */
+export function appIcon(appid: number): string | null {
+  try {
+    const overview = apps()?.GetAppOverviewByAppID?.(appid);
+    const url = overview ? apps()?.GetIconURLForApp?.(overview) : null;
+    return typeof url === "string" && url ? url : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Some game is running now. When unsure (store missing), answers yes: the worst case is
  *  not auto-starting. */
 export function gameRunning(): boolean {

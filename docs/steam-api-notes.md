@@ -79,6 +79,16 @@ Used by `ensureIcon` (`src/flow.ts`) and by the `shortcut_icon` RPC (`main.py`, 
 - In the session opened by a `deploy` (the webhelper is relaunched), no `icon_data` reached the frontend for shortcuts that already existed, not even with `RequestIconDataForApp`. A shortcut created in that session did get it.
 - NFS shortcut **without icon** and with the **card out** when Steam started: in that session it refused any path, even a never-used one and even after the card came back. The cause was not identified. Tested and ruled out: hidden shortcut, `RunGame` right after, the `updateShortcut` calls right before, and a nonexistent start folder (a test shortcut without icon and with a nonexistent start folder accepted it). Only one of the two factors is not enough: with an icon at startup and the card out, or without an icon and the card in, it applied. Affects shortcuts created before the icon existed; after the first icon, the case does not recur.
 
+## Game icon in the toast (measured 2026-10-31, SteamOS 3.9.5, Decky `@decky/api` 1.1.3)
+
+Used by `appIcon` (`src/steam.ts`) and `gameLogo` (`src/flow.ts`) for the insertion and removal toasts.
+
+| Call / situation | Result |
+|---|---|
+| `appStore.GetIconURLForApp(overview)`, InsertPlay shortcut | `data:image/png;base64,…`, the icon applied by `SetShortcutIcon` (NFS Underground, 2483608115). Works offline. Right after a new `SetShortcutIcon` the old (or no) icon may still come back: `icon_data` takes up to 2.5 s (see above). |
+| `appStore.GetIconURLForApp(overview)`, Steam game | CDN URL `https://shared.steamstatic.com/community_assets/images/apps/<appid>/<icon_hash>.jpg` (AoE DE, 1017900). Offline it depends on the CEF cache; `gameLogo` hides the image if it fails to load. |
+| `toaster.toast({ …, logo: <img/> })` | Steam draws `logo` as the square left of the title, the image filling it with `width/height: 100%`. Toasts are drawn in their own CEF window, `notificationtoasts_uid2`: capture it with `deck.mjs toasts`, the plain `screenshot` misses it. Toasts fired together queue up and show one at a time. |
+
 ## Steam libraries on the card (measured 2026-10-24, SteamOS 3.9.5)
 
 Used by the card badge (`src/steam-badges.tsx`) to also mark Steam games installed on the card, not only InsertPlay shortcuts, and by the notification and auto-launch of those games (issue #10, `checkSteamLibraries` in `src/flow.ts`).
