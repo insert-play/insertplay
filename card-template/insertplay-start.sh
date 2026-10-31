@@ -8,7 +8,11 @@
 # See docs/card-format.md.
 set -e
 
-SD_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The card root is the mount point (the plugin's {SD_ROOT}), wherever this script lives on
+# the card; without findmnt, the script's own folder.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SD_ROOT="$(findmnt -n -o TARGET --target "$SCRIPT_DIR" 2>/dev/null || true)"
+SD_ROOT="${SD_ROOT:-$SCRIPT_DIR}"
 
 # --- guid check: keep it ---------------------------------------------------------------
 expected_guid=""
@@ -19,7 +23,10 @@ for ((i = 0; i < ${#args[@]}; i++)); do
 	fi
 done
 if [[ -n "$expected_guid" ]]; then
-	actual_guid="$(grep -Eo '"guid"[[:space:]]*:[[:space:]]*"[^"]+"' "$SD_ROOT/shortcut-identity.json" 2>/dev/null \
+	# same lookup as the plugin: card root first, then insertplay/ (older cards); any key case
+	identity="$SD_ROOT/shortcut-identity.json"
+	[[ -f "$identity" ]] || identity="$SD_ROOT/insertplay/shortcut-identity.json"
+	actual_guid="$(grep -Eio '"guid"[[:space:]]*:[[:space:]]*"[^"]+"' "$identity" 2>/dev/null \
 		| head -n 1 | sed -E 's/.*"([^"]+)"/\1/')"
 	if [[ "${actual_guid,,}" != "${expected_guid,,}" ]]; then
 		echo "[insertplay-start] wrong card: the shortcut expects guid=$expected_guid, this card has guid=${actual_guid:-<none>}" >&2

@@ -69,7 +69,9 @@ Without a valid `shortcut-identity.json`, the card is refused and the panel show
 
 The plugin starts the shortcut as `exe args --guid <guid>`. The template's [`insertplay-start.sh`](../card-template/insertplay-start.sh) does two things:
 
-1. **Guid check.** It compares `--guid` with the card's `shortcut-identity.json` and refuses to start if they differ. Without it, a shortcut left in the library could start whatever game is on the card currently inserted. Keep this block.
+The script takes the card root from the mount point (`findmnt`), the same `{SD_ROOT}` the plugin uses, so it works from any folder on the card.
+
+1. **Guid check.** It compares `--guid` with the card's `shortcut-identity.json` (looked up like the plugin does: card root first, then `insertplay/`) and refuses to start if they differ. Without it, a shortcut left in the library could start whatever game is on the card currently inserted. Keep this block.
 2. **Game.** It runs a Windows game with a Proton build and the Steam Linux Runtime copied to the card, and with the Wine prefix on the card (`prefix/`), so the saves travel with the card. Edit `GAME`, the Proton and runtime paths and, if the game needs them, `WINEDLLOVERRIDES`. Any other launcher works too (an emulator with a ROM, a native Linux game): replace this block.
 
 ## Plugin package on the card
