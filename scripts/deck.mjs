@@ -15,6 +15,7 @@
 //   node scripts/deck.mjs logs [lines]       Decky log filtered by InsertPlay
 //   node scripts/deck.mjs screenshot [name]  captures the Steam screen to out/screens/<name>.png
 //   node scripts/deck.mjs panel [name]       opens the InsertPlay panel in Quick Access and captures it
+//   node scripts/deck.mjs toasts [name]      captures the toast popup window (notificationtoasts)
 //   node scripts/deck.mjs rpc <method> [JSON args...]  calls the plugin backend through Decky
 //   node scripts/deck.mjs setup-access       sends the passwordless access installer (see docs/development.md)
 //   node scripts/deck.mjs stage-card <label> [--version X]   build + write the plugin zip to the
@@ -341,6 +342,9 @@ async function main() {
       return screenshot(cfg, rest[0]);
     case "panel":
       return panel(cfg, rest[0]);
+    case "toasts":
+      // toasts are drawn in their own CEF window; the plain screenshot misses them
+      return screenshot(cfg, rest[0] ?? "toasts", (t) => t.title.startsWith("notificationtoasts"));
     case "rpc": {
       if (!rest[0]) throw new Error("usage: deck.mjs rpc <method> [JSON args...]");
       const args = rest.slice(1).map((a) => JSON.parse(a));
@@ -355,7 +359,7 @@ async function main() {
       return 0;
     }
     default:
-      console.error("usage: node scripts/deck.mjs check|eval|ssh|deploy|restart|remove|logs|setup-access|stage-card|screenshot|panel|rpc");
+      console.error("usage: node scripts/deck.mjs check|eval|ssh|deploy|restart|remove|logs|setup-access|stage-card|screenshot|panel|toasts|rpc");
       return 2;
   }
 }

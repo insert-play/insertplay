@@ -1,4 +1,5 @@
 import { toaster } from "@decky/api";
+import { createElement } from "react";
 import {
   Card,
   PortableMode,
@@ -19,6 +20,7 @@ import {
 } from "./backend";
 import {
   addShortcut,
+  appIcon,
   appName,
   applyArtwork,
   currentSteamId,
@@ -39,6 +41,24 @@ import {
 import { showBadges } from "./steam-badges";
 
 const TITLE = "InsertPlay";
+
+/** Game icon for the toast's `logo` slot (the square left of the title). Without an icon,
+ *  or if the image fails to load (Steam game offline), the toast stays text only. */
+function gameLogo(appid: number | undefined) {
+  const src = appid === undefined ? null : appIcon(appid);
+  if (!src) return undefined;
+  return createElement("img", {
+    src,
+    style: { width: "100%", height: "100%", objectFit: "cover" },
+    onError: (e: { currentTarget: HTMLImageElement }) => {
+      e.currentTarget.style.visibility = "hidden";
+    },
+  });
+}
+
+/** Shortcut appid of each mounted InsertPlay card: `card_removed` only carries mount and
+ *  label. Filled by ensureCard, so the load-time reconciliation also fills it. */
+const cardApps = new Map<string, number>();
 
 /** Single queue: insertion, removal and reconciliation touch the same shortcut and the
  *  same registry. In parallel, a removal could hide the shortcut an insertion had
@@ -99,13 +119,15 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
   if (card.icon) await ensureIcon(card, appid);
   await saveRecord(card.guid, { appid, appName: card.appName, artworkApplied });
   setHidden(appid, false);
+  cardApps.set(card.mount, appid);
 
+  const logo = gameLogo(appid);
   if (launch && (await getSettings()).autoLaunch) {
-    toaster.toast({ title: TITLE, body: `Iniciando ${card.appName}…` });
+    toaster.toast({ title: TITLE, body: `Iniciando ${card.appName}…`, logo });
     await logAdd("launch", `${card.appName} (${appid})`);
     runGame(appid);
   } else {
-    toaster.toast({ title: TITLE, body: `${card.appName} disponível` });
+    toaster.toast({ title: TITLE, body: `${card.appName} disponível`, logo });
   }
   return appid;
 }
@@ -209,7 +231,9 @@ export const onRemoved = (card: { mount: string; label: string }) =>
   enqueue(async () => {
     await syncAbsent();
     await logAdd("hide", `${card.label} removed`);
-    toaster.toast({ title: TITLE, body: `Cartão ${card.label} removido` });
+    const appid = cardApps.get(card.mount);
+    cardApps.delete(card.mount);
+    toaster.toast({ title: TITLE, body: `Cartão ${card.label} removido`, logo: gameLogo(appid) });
   })
     .catch((err) => report(`Remoção de ${card.label}`, err))
     .finally(refreshBadges);
@@ -308,7 +332,9 @@ async function checkSteamLibraries(): Promise<void> {
     );
   for (const card of gone(before, after)) {
     await logAdd("steam", `${card.label} removed (${card.apps.join(", ")})`);
-    toaster.toast({ title: TITLE, body: `Cartão ${card.label} removido` });
+    const apps = [...new Set(card.apps)];
+    const logo = apps.length === 1 ? gameLogo(apps[0]) : undefined;
+    toaster.toast({ title: TITLE, body: `Cartão ${card.label} removido`, logo });
   }
   for (const card of gone(after, before)) await steamCardInserted(card);
 }
@@ -323,12 +349,13 @@ async function steamCardInserted(card: SteamCard): Promise<void> {
   }
   const [appid] = apps;
   const name = appName(appid);
+  const logo = gameLogo(appid);
   if ((await getSettings()).autoLaunch && !gameRunning()) {
-    toaster.toast({ title: TITLE, body: `Iniciando ${name}…` });
+    toaster.toast({ title: TITLE, body: `Iniciando ${name}…`, logo });
     await logAdd("launch", `${name} (${appid})`);
     runSteamGame(appid);
   } else {
-    toaster.toast({ title: TITLE, body: `${name} disponível` });
+    toaster.toast({ title: TITLE, body: `${name} disponível`, logo });
   }
 }
 
