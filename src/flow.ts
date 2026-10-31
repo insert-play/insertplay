@@ -49,6 +49,7 @@ function gameLogo(appid: number | undefined) {
   if (!src) return undefined;
   return createElement("img", {
     src,
+    alt: "",
     style: { width: "100%", height: "100%", objectFit: "cover" },
     onError: (e: { currentTarget: HTMLImageElement }) => {
       e.currentTarget.style.visibility = "hidden";
