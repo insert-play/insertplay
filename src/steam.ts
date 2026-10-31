@@ -1,19 +1,19 @@
-// O único arquivo que toca a API não documentada do Steam. Quando a Valve mudar um
-// método, o conserto fica aqui.
+// The only file that touches Steam's undocumented API. When Valve changes a
+// method, the fix goes here.
 //
-// Partes adaptadas de decky-nonsteam-sync (src/steam.ts),
+// Parts adapted from decky-nonsteam-sync (src/steam.ts),
 // Copyright (c) 2026, JoseArkadio — BSD 3-Clause.
 //
-// Medido no Deck (SteamOS 3.8.28, 2026-10-24) com scripts/spike.mjs: todas as chamadas
-// abaixo funcionam como usadas aqui. Resultados em docs/steam-api-notes.md; rode o
-// spike de novo depois de uma atualização do Steam.
+// Measured on the Deck (SteamOS 3.8.28, 2026-10-24) with scripts/spike.mjs: every call
+// below works as used here. Results in docs/steam-api-notes.md; run the
+// spike again after a Steam update.
 
 declare const appStore: any;
 declare const appDetailsStore: any;
 declare const collectionStore: any;
 declare const SteamUIStore: any;
-// Tipado como `any` de propósito: nem todas as versões de @decky/ui declaram o global,
-// e as assinaturas reais são as que o passo 0 medir no Deck.
+// Typed as `any` on purpose: not every @decky/ui version declares the global,
+// and the real signatures are the ones step 0 measures on the Deck.
 declare const SteamClient: any;
 
 const apps = (): any => (typeof appStore === "undefined" ? null : appStore);
@@ -33,15 +33,15 @@ export interface ShortcutSpec {
   launchOptions: string;
 }
 
-/** Espera o Steam terminar de carregar a biblioteca e as coleções.
+/** Waits for Steam to finish loading the library and the collections.
  *
- *  Medido no Deck ao reiniciar o Steam:
- *  - o Decky carrega o plugin ~0,5 s ANTES de `appStore.m_bIsInitialized`, e os atalhos
- *    só aparecem no `appStore` nesse instante. Perguntar antes respondia "o atalho não
- *    existe" e o plugin criava um duplicado;
- *  - as coleções carregam DEPOIS: `SetAppsAsHidden` → `GetCollection` lançava
- *    "reading 'get'". Testamos a própria coleção "hidden", que é o que usamos.
- *  Sem isso pronto não decidimos nada: lança em vez de seguir às cegas. */
+ *  Measured on the Deck when restarting Steam:
+ *  - Decky loads the plugin ~0.5 s BEFORE `appStore.m_bIsInitialized`, and shortcuts
+ *    only show up in `appStore` at that moment. Asking earlier answered "the shortcut does
+ *    not exist" and the plugin created a duplicate;
+ *  - the collections load AFTER that: `SetAppsAsHidden` → `GetCollection` threw
+ *    "reading 'get'". We test the "hidden" collection itself, which is what we use.
+ *  Until that is ready we decide nothing: throws instead of carrying on blindly. */
 function libraryReady(): boolean {
   if (!apps()?.m_bIsInitialized) return false;
   try {
@@ -74,19 +74,19 @@ export async function addShortcut(spec: ShortcutSpec): Promise<number> {
     spec.launchOptions,
   );
   if (!appid) throw new Error("AddShortcut returned no appid");
-  // Medido no nonsteam-sync: AddShortcut ignora o nome e usa o do executável. Aqui o
-  // exe é /bin/bash, então sem isso todo cartão viraria um tile chamado "bash".
+  // Measured in nonsteam-sync: AddShortcut ignores the name and uses the executable's. Here the
+  // exe is /bin/bash, so without this every card would become a tile named "bash".
   method(apps, "SetShortcutName", "SteamClient.Apps.SetShortcutName")(appid, spec.appName);
   method(apps, "SetShortcutLaunchOptions", "SteamClient.Apps.SetShortcutLaunchOptions")(appid, spec.launchOptions);
   return appid;
 }
 
-/** Reaplica nome, exe, pasta e opções. O ponto de montagem do cartão muda entre
- *  aparelhos e rótulos, e o atalho guarda o caminho fixo. */
+/** Reapplies name, exe, folder and options. The card's mount point changes between
+ *  devices and labels, and the shortcut stores a fixed path. */
 export function updateShortcut(appid: number, spec: ShortcutSpec): void {
   const apps = client()?.Apps;
   method(apps, "SetShortcutName", "SteamClient.Apps.SetShortcutName")(appid, spec.appName);
-  // Medido no nonsteam-sync: AddShortcut põe aspas no exe, SetShortcutExe grava literal.
+  // Measured in nonsteam-sync: AddShortcut quotes the exe, SetShortcutExe stores it verbatim.
   const quoted = spec.exe.startsWith('"') ? spec.exe : `"${spec.exe}"`;
   method(apps, "SetShortcutExe", "SteamClient.Apps.SetShortcutExe")(appid, quoted);
   apps?.SetShortcutStartDir?.(appid, startDirOf(spec.startDir));
@@ -105,11 +105,11 @@ export function isHidden(appid: number): boolean {
   return Boolean(collections()?.BIsHidden?.(appid));
 }
 
-// 0 = capa vertical, 1 = hero, 2 = logo, 3 = capa horizontal (medido no nonsteam-sync).
+// 0 = vertical capsule, 1 = hero, 2 = logo, 3 = horizontal capsule (measured in nonsteam-sync).
 const ASSET_TYPE: Record<string, number> = { capsule: 0, hero: 1, logo: 2, horizontal: 3 };
 
-/** Aplica as artes do cartão. Uma arte que falha não impede as outras;
- *  devolve a lista do que falhou. */
+/** Applies the card's artwork. One artwork failing does not block the others;
+ *  returns the list of what failed. */
 export async function applyArtwork(
   appid: number,
   artwork: Record<string, string>,
@@ -132,13 +132,13 @@ export async function applyArtwork(
   return failed;
 }
 
-/** Ícone de um atalho. O Steam guarda só o caminho e lê o arquivo sob demanda (medido
- *  no Deck, 2026-10-27): por isso o caminho tem que ficar no SSD, nunca no cartão. */
+/** A shortcut's icon. Steam stores only the path and reads the file on demand (measured
+ *  on the Deck, 2026-10-27): so the path must be on the SSD, never on the card. */
 export function setShortcutIcon(appid: number, path: string): void {
   method(client()?.Apps, "SetShortcutIcon", "SteamClient.Apps.SetShortcutIcon")(appid, path);
 }
 
-/** steamid64 da conta logada; `null` = não deu para saber. */
+/** steamid64 of the logged-in account; `null` = could not tell. */
 export function currentSteamId(): string | null {
   const id = (globalThis as any).App?.m_CurrentUser?.strSteamID;
   return typeof id === "string" && /^\d+$/.test(id) ? id : null;
@@ -147,22 +147,22 @@ export function currentSteamId(): string | null {
 export interface SteamLibrary {
   path: string;
   mounted: boolean;
-  /** `bIsFixed` do Steam. Só no Deck ele distingue o cartão: na Steam Machine, o cartão no
-   *  leitor USB vem como fixo (medido em 2026-10-24). Quem decide é `libraryCard`. */
+  /** Steam's `bIsFixed`. It only tells the card apart on the Deck: on the Steam Machine, the
+   *  card in the USB reader comes as fixed (measured on 2026-10-24). `libraryCard` decides. */
   fixed: boolean;
   apps: number[];
 }
 
-/** A biblioteca interna do Steam (`~/.local/share/Steam`) é sempre a de índice 0 (medido
- *  no Deck e na Steam Machine, 2026-10-25). Não é `bIsDefaultFolder`: essa marca é o local
- *  padrão de instalação e vai para o cartão quando o usuário o escolhe ao instalar. Com
- *  ela, um cartão escolhido como padrão sumia: sem badge e sem save portátil. */
+/** Steam's internal library (`~/.local/share/Steam`) is always index 0 (measured
+ *  on the Deck and the Steam Machine, 2026-10-25). Not `bIsDefaultFolder`: that flag is the
+ *  default install location and moves to the card when the user picks it on install. With
+ *  it, a card chosen as default vanished: no badge and no portable saves. */
 const isInternal = (folder: any): boolean => folder?.nFolderIndex === 0;
 
-/** Lista de bibliotecas já carregada. Medido no Deck ao reiniciar o Steam: ela vem
- *  vazia no começo e, ~3 s depois, aparece inteira de uma vez e sem aviso do Steam.
- *  A biblioteca interna sempre existe, então lista sem ela = ainda carregando. Usar a
- *  lista vazia como retrato faria o cartão já inserido parecer inserção no próximo aviso. */
+/** Library list once loaded. Measured on the Deck when restarting Steam: it comes
+ *  empty at first and, ~3 s later, shows up whole at once with no Steam notification.
+ *  The internal library always exists, so a list without it = still loading. Using the
+ *  empty list as a snapshot would make the inserted card look inserted on the next notice. */
 async function installFolders(timeoutMs = 60_000): Promise<any[]> {
   const get = method(client()?.InstallFolder, "GetInstallFolders", "SteamClient.InstallFolder.GetInstallFolders");
   const start = Date.now();
@@ -174,12 +174,12 @@ async function installFolders(timeoutMs = 60_000): Promise<any[]> {
   }
 }
 
-/** Bibliotecas Steam além da interna, montadas ou não, com os appids instalados.
+/** Steam libraries other than the internal one, mounted or not, with the installed appids.
  *
- *  Medido no Deck (2026-10-24, SteamOS 3.9.5): cada biblioteca que o Steam já viu vira
- *  uma pasta em `GetInstallFolders()`, montada ou não. A do cartão no leitor tem
- *  `bIsMounted: true`. As de cartões ausentes continuam na lista com `bIsMounted: false`
- *  e os appids que tinham: quem quer só o que está no leitor filtra por `mounted`. */
+ *  Measured on the Deck (2026-10-24, SteamOS 3.9.5): every library Steam has ever seen becomes
+ *  a folder in `GetInstallFolders()`, mounted or not. The one of the card in the reader has
+ *  `bIsMounted: true`. Those of absent cards stay in the list with `bIsMounted: false`
+ *  and the appids they had: callers that want only what is in the reader filter by `mounted`. */
 export async function steamLibraries(): Promise<SteamLibrary[]> {
   const folders = await installFolders();
   return folders
@@ -192,7 +192,7 @@ export async function steamLibraries(): Promise<SteamLibrary[]> {
     }));
 }
 
-/** Appids instalados em cada biblioteca montada, inclusive a interna (SSD). */
+/** Appids installed in each mounted library, including the internal one (SSD). */
 export async function mountedLibraries(): Promise<{ path: string; apps: number[] }[]> {
   const folders = await installFolders();
   return folders
@@ -203,14 +203,14 @@ export async function mountedLibraries(): Promise<{ path: string; apps: number[]
     }));
 }
 
-/** Avisa quando bibliotecas entram, saem ou mudam de conteúdo. Devolve o cancelamento.
- *  Medido no Deck: o aviso chega menos de 1 s depois de o cartão montar ou desmontar. */
+/** Notifies when libraries appear, disappear or change contents. Returns the unsubscribe function.
+ *  Measured on the Deck: the notification arrives less than 1 s after the card mounts or unmounts. */
 export function onInstallFoldersChanged(callback: () => void): () => void {
   const registration = client()?.InstallFolder?.RegisterForInstallFolderChanges?.(callback);
   return () => registration?.unregister?.();
 }
 
-/** gameid de atalho = (appid << 32) | 0x02000000. Prefere o valor que o Steam expõe. */
+/** Shortcut gameid = (appid << 32) | 0x02000000. Prefers the value Steam exposes. */
 function gameIdOf(appid: number): string {
   const fromStore = apps()?.GetAppOverviewByAppID?.(appid)?.m_gameid;
   if (fromStore) return String(fromStore);
@@ -221,8 +221,8 @@ export function runGame(appid: number): void {
   method(client()?.Apps, "RunGame", "SteamClient.Apps.RunGame")(gameIdOf(appid), "", -1, 100);
 }
 
-/** Jogo Steam: o overview não tem `m_gameid` (medido no Deck) e o gameid é o próprio
- *  appid, sem os bits de atalho. */
+/** Steam game: the overview has no `m_gameid` (measured on the Deck) and the gameid is the
+ *  appid itself, without the shortcut bits. */
 export function runSteamGame(appid: number): void {
   method(client()?.Apps, "RunGame", "SteamClient.Apps.RunGame")(String(appid), "", -1, 100);
 }
@@ -231,15 +231,15 @@ export function appName(appid: number): string {
   return apps()?.GetAppOverviewByAppID?.(appid)?.display_name || `app ${appid}`;
 }
 
-/** Algum jogo aberto agora. Na dúvida (store ausente), responde que sim: o pior caso é
- *  não iniciar sozinho. */
+/** Some game is running now. When unsure (store missing), answers yes: the worst case is
+ *  not auto-starting. */
 export function gameRunning(): boolean {
   const running = typeof SteamUIStore === "undefined" ? undefined : SteamUIStore?.RunningApps;
   return !Array.isArray(running) || running.length > 0;
 }
 
-/** Appids dos jogos abertos. `null` = não sei (store ausente ou item sem appid): o save
- *  portátil não mexe em prefixo nenhum na dúvida. */
+/** Appids of the running games. `null` = unknown (store missing or item without appid): when
+ *  unsure, portable saves touch no prefix at all. */
 export function runningAppids(): number[] | null {
   const running = typeof SteamUIStore === "undefined" ? undefined : SteamUIStore?.RunningApps;
   if (!Array.isArray(running)) return null;
@@ -247,18 +247,18 @@ export function runningAppids(): number[] | null {
   return ids.every((id) => id > 0) ? ids : null;
 }
 
-/** Opções de inicialização do jogo (`undefined` = não deu para saber).
+/** The game's launch options (`undefined` = could not tell).
  *
- *  Medido (2026-10-25): `appDetailsStore.GetAppDetails(appid)` só tem dados depois que o
- *  Steam carrega os detalhes, o que acontece ao abrir a página do jogo. Sem cache,
- *  `SteamClient.Apps.RegisterForAppDetails` força a carga: o callback chegou em ~40 ms com
- *  `strLaunchOptions`. O texto é guardado por aparelho. */
+ *  Measured (2026-10-25): `appDetailsStore.GetAppDetails(appid)` only has data after
+ *  Steam loads the details, which happens when the game's page is opened. Without a cache,
+ *  `SteamClient.Apps.RegisterForAppDetails` forces the load: the callback arrived in ~40 ms with
+ *  `strLaunchOptions`. The text is stored per device. */
 export function launchOptions(appid: number): Promise<string | undefined> {
   try {
     const cached = typeof appDetailsStore === "undefined" ? undefined : appDetailsStore?.GetAppDetails?.(appid);
     if (typeof cached?.strLaunchOptions === "string") return Promise.resolve(cached.strLaunchOptions);
   } catch {
-    // segue para a carga
+    // fall through to the load
   }
   return new Promise((resolve) => {
     let registration: any = null;
@@ -269,7 +269,7 @@ export function launchOptions(appid: number): Promise<string | undefined> {
       try {
         registration?.unregister?.();
       } catch {
-        // nada a desfazer
+        // nothing to undo
       }
       resolve(value);
     };
@@ -280,7 +280,7 @@ export function launchOptions(appid: number): Promise<string | undefined> {
     } catch {
       return finish(undefined);
     }
-    // o callback pode ter vindo antes de `registration` existir
+    // the callback may have arrived before `registration` existed
     if (finished) registration?.unregister?.();
     else if (!registration) finish(undefined);
     else setTimeout(() => finish(undefined), 3000);

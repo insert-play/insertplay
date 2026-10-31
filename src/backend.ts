@@ -10,7 +10,7 @@ export interface Card {
   startDir?: string;
   launchOptions?: string;
   artwork?: Record<string, string>;
-  /** Ícone do atalho, no cartão. */
+  /** Shortcut icon, on the card. */
   icon?: string | null;
 }
 
@@ -23,7 +23,7 @@ export interface RegistryRecord {
 
 export interface Settings {
   autoLaunch: boolean;
-  /** Oculta o atalho quando o cartão sai. Desligado, o atalho fica visível sem badge. */
+  /** Hides the shortcut when the card leaves. Off, the shortcut stays visible without a badge. */
   hideRemoved: boolean;
 }
 
@@ -33,24 +33,24 @@ export interface LogEntry {
   message: string;
 }
 
-/** `null` = o backend ainda não terminou a primeira varredura; não é "nenhum cartão". */
+/** `null` = the backend has not finished its first scan yet; it does not mean "no card". */
 export const currentCards = callable<[], Card[] | null>("current_cards");
 export const artworkBase64 = callable<[path: string], string>("artwork_base64");
 
 export interface ShortcutIcon {
-  /** Cópia no SSD (`~/homebrew/data/InsertPlay/icons/<guid>-<hash>-<geração>.<ext>`). */
+  /** Copy on the SSD (`~/homebrew/data/InsertPlay/icons/<guid>-<hash>-<generation>.<ext>`). */
   path: string;
-  /** Aplicar com `SetShortcutIcon`. Falso quando já está aplicado ou o ícone é do usuário. */
+  /** Apply with `SetShortcutIcon`. False when already applied or the icon is the user's. */
   apply: boolean;
-  /** Ícone atual no `shortcuts.vdf`; `null` = atalho ainda fora do arquivo. */
+  /** Current icon in `shortcuts.vdf`; `null` = shortcut not in the file yet. */
   current: string | null;
 }
 
-/** `null` = falha no backend (detalhe no log): não mexe no ícone. */
+/** `null` = backend failure (details in the log): leave the icon alone. */
 export const shortcutIcon = callable<[steamid: string, appid: number, guid: string, source: string], ShortcutIcon | null>(
   "shortcut_icon",
 );
-/** `null` = falha no backend; nunca tratar como registro vazio (geraria duplicados). */
+/** `null` = backend failure; never treat it as an empty registry (it would create duplicates). */
 export const registryAll = callable<[], Record<string, RegistryRecord> | null>("registry_all");
 export const registryPut = callable<[guid: string, record: Partial<RegistryRecord>], RegistryRecord | null>(
   "registry_put",
@@ -58,20 +58,20 @@ export const registryPut = callable<[guid: string, record: Partial<RegistryRecor
 export interface LibraryCard {
   mount: string;
   label: string;
-  /** Tem manifesto InsertPlay: o fluxo do cartão InsertPlay cuida dele. */
+  /** Has an InsertPlay manifest: the InsertPlay card flow handles it. */
   insertplay: boolean;
-  /** O kernel declara o disco removível (`/sys/.../removable`), como o leitor USB. */
+  /** The kernel reports the disk as removable (`/sys/.../removable`), like the USB reader. */
   removable: boolean;
 }
 
-/** Cartão de uma biblioteca Steam. `null` = fora de mídia montada ou falha no backend. */
+/** Card of a Steam library. `null` = outside mounted media or backend failure. */
 export const libraryCard = callable<[path: string], LibraryCard | null>("library_card");
 export const getSettings = callable<[], Settings>("get_settings");
 export const setSetting = callable<[key: keyof Settings, value: boolean], Settings>("set_setting");
 export const logAdd = callable<[kind: string, message: string], void>("log_add");
 export const logTail = callable<[count: number], LogEntry[]>("log_tail");
 
-/** Pacote do plugin no cartão comparado com a versão instalada. */
+/** Plugin package on the card compared with the installed version. */
 export type PackageRelation = "missing" | "invalid" | "newer" | "older" | "same";
 
 export interface CardPackage {
@@ -89,37 +89,37 @@ export interface PackageStatus {
   cards: CardPackage[];
 }
 
-/** `null` = falha no backend (detalhe no log de eventos). */
+/** `null` = backend failure (details in the event log). */
 export const packageStatus = callable<[], PackageStatus | null>("package_status");
 export const writePackageToCard = callable<[mount: string], CardPackage | null>("write_package_to_card");
 
-/** Desligado; só a pasta do usuário Windows (`steamuser`, onde ficam os saves); ou o
- *  prefixo inteiro (lento em cartão lento: o Proton recopia ~115 MB a cada abertura). */
+/** Off; only the Windows user folder (`steamuser`, where the saves live); or the
+ *  whole prefix (slow on a slow card: Proton re-copies ~115 MB on every launch). */
 export type PortableMode = "off" | "userdata" | "prefix";
 
 export interface PortableStatus {
-  /** Gravado no próprio cartão (`.insertplay/portable-saves.json`): vale em qualquer aparelho. */
+  /** Stored on the card itself (`.insertplay/portable-saves.json`): applies on any device. */
   mode: PortableMode;
-  /** Cartão ext4/btrfs/xfs. exFAT/NTFS não guardam um prefixo do Proton. */
+  /** ext4/btrfs/xfs card. exFAT/NTFS cannot hold a Proton prefix. */
   fsOk: boolean;
   fsType: string | null;
   reason: string | null;
 }
 
-/** Resultado por appid (a chave vem como string do JSON): ok, none, running, linked,
- *  migrated, conflict, leftover, restored, unlinked, foreign ou `error: …`. */
+/** Result per appid (the key comes as a string from JSON): ok, none, running, linked,
+ *  migrated, conflict, leftover, restored, unlinked, foreign or `error: …`. */
 export type PortableResults = Record<string, string>;
 
-/** `null` = falha no backend ou caminho recusado. */
+/** `null` = backend failure or path refused. */
 export const portableStatus = callable<[mount: string], PortableStatus | null>("portable_status");
 export const portableSet = callable<
   [mount: string, mode: PortableMode, libraries: string[], appids: number[], running: number[], elsewhere: number[]],
   { status: PortableStatus; results: PortableResults } | null
 >("portable_set");
-/** Cartão desligado devolve `{}`. */
+/** A card with the mode off returns `{}`. */
 export const portableSync = callable<
   [mount: string, libraries: string[], appids: number[], running: number[], elsewhere: number[]],
   PortableResults | null
 >("portable_sync");
-/** Jogo aberto fica com o link: o cartão pode voltar no meio da partida. */
+/** A running game keeps its link: the card may come back mid-session. */
 export const portableUnlinkDangling = callable<[running: number[]], number[] | null>("portable_unlink_dangling");

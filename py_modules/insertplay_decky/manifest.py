@@ -1,4 +1,4 @@
-"""Leitura do manifesto e da identidade do cartão.
+"""Reading the card's manifest and identity.
 
 Placeholder `{SD_ROOT}`, artwork with fallback and `--guid` appended to the launch
 options. Read-only: the plugin never writes the manifest or the identity; cards are
@@ -14,8 +14,8 @@ IDENTITY_NAME = "shortcut-identity.json"
 GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 SD_ROOT = "{SD_ROOT}"
 
-# Tipos que o Steam aceita em SetCustomArtworkForApp. O ícone vai à parte: o Steam
-# guarda só o caminho dele (SetShortcutIcon), então ele é copiado para o SSD (icons.py).
+# Kinds Steam accepts in SetCustomArtworkForApp. The icon is separate: Steam
+# stores only its path (SetShortcutIcon), so it is copied to the SSD (icons.py).
 ARTWORK_KINDS = ("capsule", "hero", "logo", "horizontal")
 
 
@@ -73,7 +73,7 @@ def _artwork_path(mount: str, value, kind: str):
 
 
 def load_card(mount: str) -> dict:
-    """Tudo o que o frontend precisa para criar ou atualizar o atalho deste cartão."""
+    """Everything the frontend needs to create or update this card's shortcut."""
     path = manifest_path(mount)
     if not path:
         raise CardError(f"manifest not found in {mount}")

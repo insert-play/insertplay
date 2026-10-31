@@ -1,5 +1,5 @@
-"""RPCs do main.py com um módulo `decky` falso: a espera pela primeira varredura e os
-fallbacks que não podem parecer "vazio"."""
+"""main.py RPCs with a fake `decky` module: waiting for the first scan and the
+fallbacks that must not look "empty"."""
 import asyncio
 import importlib
 import logging
@@ -27,7 +27,7 @@ def main(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(ROOT)
     sys.modules.pop("main", None)
     module = importlib.import_module("main")
-    # nenhuma varredura de verdade em /run/media durante o teste
+    # no real scan of /run/media during the test
     monkeypatch.setattr(module.cards, "default_media_roots", lambda: [str(tmp_path / "media")])
     yield module
     sys.modules.pop("main", None)
@@ -38,7 +38,7 @@ def test_rpc_waits_for_the_initial_scan(main):
         plugin = main.Plugin()
         early = asyncio.create_task(plugin.current_cards())
         await asyncio.sleep(0.2)
-        assert not early.done()  # sem varredura, não responde "nenhum cartão"
+        assert not early.done()  # without a scan, doesn't answer "no card"
         await plugin._main()
         result = await early
         await plugin._unload()
@@ -51,7 +51,7 @@ def test_unknown_state_is_none_not_empty(main, monkeypatch):
     monkeypatch.setattr(main, "READY_TIMEOUT_SECONDS", 0.2)
 
     async def scenario():
-        plugin = main.Plugin()  # _main nunca roda
+        plugin = main.Plugin()  # _main never runs
         return await plugin.current_cards(), await plugin.registry_all(), await plugin.registry_put("g", {})
 
     assert asyncio.run(scenario()) == (None, None, None)
@@ -102,7 +102,7 @@ def test_write_package_to_card_and_status(main, tmp_path):
     assert [c["relation"] for c in before["cards"]] == ["missing"]
     assert written["relation"] == "same" and written["version"] == "0.2.0"
     assert after["cards"][0]["zipPath"].endswith(os.path.join("insertplay", "decky", "InsertPlay.zip"))
-    # fora de um cartão, ou numa subpasta dele, é recusado (fallback None)
+    # outside a card, or in a subfolder of it, is refused (fallback None)
     assert outside is None and inside is None
 
 
@@ -124,13 +124,13 @@ def test_portable_enable_then_disable_round_trip(main, tmp_path, monkeypatch):
     (mount / "steamapps").mkdir(parents=True)
     ssd = tmp_path / "home" / ".local" / "share" / "Steam" / "steamapps" / "compatdata" / "12200"
     (ssd / "pfx" / "drive_c" / "users" / "steamuser").mkdir(parents=True)
-    (ssd / "pfx" / "drive_c" / "users" / "steamuser" / "save.dat").write_text("fase 3", encoding="utf-8")
+    (ssd / "pfx" / "drive_c" / "users" / "steamuser" / "save.dat").write_text("level 3", encoding="utf-8")
     main.decky.DECKY_USER_HOME = str(tmp_path / "home")
     main.decky.DECKY_PLUGIN_VERSION = "0.5.0"
     real = os.path.realpath(mount)
     monkeypatch.setattr(main.cards, "library_card", lambda path, roots: {"mount": real} if os.path.realpath(path) == real else None)
-    # `status()` lê `_mount_entry`; substituir só `fs_type` deixava o teste depender de onde
-    # o tmp_path do host está montado (tmpfs, overlayfs)
+    # `status()` reads `_mount_entry`; replacing only `fs_type` made the test depend on where
+    # the host's tmp_path is mounted (tmpfs, overlayfs)
     monkeypatch.setattr(main.prefixes, "_mount_entry", lambda m, mounts_file="/proc/mounts": ("ext4", ("rw",)))
     monkeypatch.setattr(main.prefixes, "LIVE_APPIDS", lambda: set())
 
@@ -147,8 +147,8 @@ def test_portable_enable_then_disable_round_trip(main, tmp_path, monkeypatch):
     assert on["results"] == {12200: "migrated"} and on["status"]["mode"] == "prefix"
     assert linked
     assert off["results"] == {12200: "restored"} and off["status"]["mode"] == "off"
-    assert (ssd / "pfx" / "drive_c" / "users" / "steamuser" / "save.dat").read_text(encoding="utf-8") == "fase 3"
-    assert (mount / ".insertplay" / "prefixes" / "12200" / "pfx").is_dir()  # cartão intacto
+    assert (ssd / "pfx" / "drive_c" / "users" / "steamuser" / "save.dat").read_text(encoding="utf-8") == "level 3"
+    assert (mount / ".insertplay" / "prefixes" / "12200" / "pfx").is_dir()  # card intact
 
 
 
@@ -158,13 +158,13 @@ def test_portable_sync_does_not_activate_on_a_read_only_card(main, tmp_path, mon
     (mount / "steamapps").mkdir(parents=True)
     ssd = tmp_path / "home" / ".local" / "share" / "Steam" / "steamapps" / "compatdata" / "12200"
     (ssd / "pfx" / "drive_c" / "users" / "steamuser").mkdir(parents=True)
-    (ssd / "pfx" / "drive_c" / "users" / "steamuser" / "save.dat").write_text("fase 3", encoding="utf-8")
+    (ssd / "pfx" / "drive_c" / "users" / "steamuser" / "save.dat").write_text("level 3", encoding="utf-8")
     main.decky.DECKY_USER_HOME = str(tmp_path / "home")
     main.decky.DECKY_PLUGIN_VERSION = "0.5.0"
     real = os.path.realpath(mount)
     monkeypatch.setattr(main.cards, "library_card", lambda path, roots: {"mount": real} if os.path.realpath(path) == real else None)
     monkeypatch.setattr(main.prefixes, "LIVE_APPIDS", lambda: set())
-    main.prefixes._write_mode(real, "userdata", "0.5.0")  # ligado em outro aparelho
+    main.prefixes._write_mode(real, "userdata", "0.5.0")  # turned on on another device
     monkeypatch.setattr(main.prefixes, "_mount_entry", lambda m, mounts_file="/proc/mounts": ("ext4", ("rw", "emergency_ro")))
 
     async def scenario():
@@ -205,16 +205,16 @@ def test_shortcut_icon_copies_to_ssd_and_respects_user_icons(main, tmp_path):
 
     async def scenario():
         await plugin._main()
-        steps = {"no_vdf": await call()}  # sem o arquivo, não dá para saber de quem é o ícone
+        steps = {"no_vdf": await call()}  # without the file, there's no telling whose icon it is
         set_icon(config, "")
         set_icon(other, "")
         steps["first"] = await call()
         set_icon(config, steps["first"]["path"])
-        set_icon(other, steps["first"]["path"])  # a outra conta também usa esta versão
+        set_icon(other, steps["first"]["path"])  # the other account uses this version too
         steps["again"] = await call()
         source.write_bytes(b"new png")
         steps["changed"] = await call()
-        # o Steam ainda não gravou a nova: a antiga continua no disco
+        # Steam hasn't written the new one yet: the old one stays on disk
         steps["files_before_steam"] = sorted(os.listdir(icons_dir))
         set_icon(config, steps["changed"]["path"])
         await call()

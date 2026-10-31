@@ -1,19 +1,19 @@
-// Badge de cartão SD na capa dos jogos que estão no cartão inserido: atalhos criados
-// pelo InsertPlay e jogos Steam instalados numa biblioteca do cartão.
+// SD card badge on the capsule of games that are on the inserted card: shortcuts created
+// by InsertPlay and Steam games installed in a library on the card.
 //
-// Segundo ponto que toca internals do Steam. Fica fora de steam.ts porque quebra por
-// outro motivo: aqui dependemos do DOM da biblioteca, não de métodos. Se a Valve mudar
-// o DOM, os badges somem e nada mais é afetado; por isso tudo fica em try/catch.
+// Second place that touches Steam internals. Kept out of steam.ts because it breaks for
+// a different reason: here we depend on the library DOM, not on methods. If Valve changes
+// the DOM, the badges disappear and nothing else is affected; hence everything is in try/catch.
 //
-// Adaptado de decky-nonsteam-sync (src/steam-badges.tsx),
-// Copyright (c) 2026, JoseArkadio — BSD 3-Clause. Medições de lá que valem aqui:
-// - a biblioteca visível vive numa janela CEF diferente da SharedJSContext, onde o
-//   plugin roda; achamos a janela por DFL.getGamepadNavigationTrees();
-// - o Steam remonta os cards ao rolar a lista, então um MutationObserver recoloca os
-//   badges;
-// - no Steam Machine (3840×2160), redesenhar a cada mutação travava a interface, que
-//   reiniciava em loop (SIGTRAP a cada ~80 s). Correção: uma passada por quadro e
-//   geometria lida só depois de todas as escritas.
+// Adapted from decky-nonsteam-sync (src/steam-badges.tsx),
+// Copyright (c) 2026, JoseArkadio — BSD 3-Clause. Measurements from there that hold here:
+// - the visible library lives in a CEF window other than SharedJSContext, where the
+//   plugin runs; we find the window via DFL.getGamepadNavigationTrees();
+// - Steam remounts the cards when the list scrolls, so a MutationObserver puts the
+//   badges back;
+// - on the Steam Machine (3840×2160), redrawing on every mutation froze the UI, which
+//   restarted in a loop (SIGTRAP every ~80 s). Fix: one pass per frame and
+//   geometry read only after all writes.
 
 declare const DFL: any;
 
@@ -25,13 +25,13 @@ let appids = new Set<string>();
 let doc: Document | null = null;
 let observer: MutationObserver | null = null;
 let frame = 0;
-/** Depois do stopBadges, nada desenha de novo. Um refresh que já estava a caminho
- *  (RPC em andamento, fila do flow.ts) recriaria observer e badges ao lado dos da
- *  próxima carga do plugin. Cada carga traz este módulo novo, então a flag não volta. */
+/** After stopBadges, nothing draws again. A refresh already on its way (RPC in
+ *  flight, flow.ts queue) would recreate the observer and badges next to those of the
+ *  next plugin load. Each load brings a fresh module, so the flag never resets. */
 let stopped = false;
 
-/** Desenhado aqui, não copiado do Font Awesome (que exige atribuição): corpo com o
- *  canto superior esquerdo cortado e quatro contatos. */
+/** Drawn here, not copied from Font Awesome (which requires attribution): body with the
+ *  top-left corner cut off and four contacts. */
 const ICON =
   '<svg viewBox="0 0 24 24" aria-hidden="true">' +
   '<path fill="currentColor" d="M9 2h8.5A2.5 2.5 0 0 1 20 4.5v15a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 19.5V7z"/>' +
@@ -45,14 +45,14 @@ function bigPictureDocument(): Document | null {
       if (candidate?.querySelector(CAPSULES)) return candidate;
     }
   } catch {
-    // sem DFL ou janela fechada: fica sem badge até o próximo gatilho
+    // no DFL or window closed: no badge until the next trigger
   }
   return null;
 }
 
-/** appid do card: `data-id` (medido no Deck: a tela inicial o expõe em todo card),
- *  depois as props do React, por fim a URL da capa. A URL vem por último porque capas
- *  da loja usam um hash no caminho, sem o appid. */
+/** appid of the card: `data-id` (measured on the Deck: the home screen exposes it on every card),
+ *  then the React props, finally the capsule URL. The URL comes last because store
+ *  capsules use a hash in the path, without the appid. */
 function appidOf(capsule: Element): string | null {
   const dataId = capsule.getAttribute("data-id");
   if (dataId && !dataId.startsWith("placeholder")) return dataId;
@@ -64,7 +64,7 @@ function appidOf(capsule: Element): string | null {
       if (found) return String(found);
     }
   } catch {
-    // o formato das props mudou: sobra a imagem
+    // the props shape changed: the image is what is left
   }
   const src = capsule.querySelector("img")?.getAttribute("src") ?? "";
   return src.match(/\/(?:assets|customimages)\/(\d+)/)?.[1] ?? null;
@@ -74,12 +74,12 @@ function insertStyle(d: Document): void {
   if (d.getElementById(STYLE_ID)) return;
   const style = d.createElement("style");
   style.id = STYLE_ID;
-  // Mesmo visual do decky-nonsteam-badges (fundo quase transparente com blur): se os
-  // dois plugins estiverem instalados, os badges não brigam. O blur não foi a causa do
-  // travamento no Steam Machine; a causa era redesenhar a cada mutação.
-  // Canto ESQUERDO: medido no Deck, no card em foco o Steam desenha os ícones de status
-  // no canto inferior direito, por cima do badge. O esquerdo fica livre, e também não
-  // é o canto padrão do decky-nonsteam-badges (inferior direito).
+  // Same look as decky-nonsteam-badges (nearly transparent background with blur): if both
+  // plugins are installed, the badges do not clash. The blur was not the cause of the
+  // freeze on the Steam Machine; the cause was redrawing on every mutation.
+  // LEFT corner: measured on the Deck, on the focused card Steam draws the status icons
+  // in the bottom-right corner, over the badge. The left one stays free, and it is also not
+  // the default corner of decky-nonsteam-badges (bottom right).
   style.textContent = `.${CLASS}{position:absolute;left:6px;display:flex;padding:4px;border-radius:5px;
     background:#0000002e;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
     color:#e9e9e9;z-index:9999;pointer-events:none;line-height:0}
@@ -89,7 +89,7 @@ function insertStyle(d: Document): void {
   d.head?.appendChild(style);
 }
 
-/** Uma passada sobre os cards visíveis. Devolve quantos badges há no documento. */
+/** One pass over the visible cards. Returns how many badges are in the document. */
 function markAll(d: Document): number {
   const badges: HTMLElement[] = [];
   for (const capsule of Array.from(d.querySelectorAll(CAPSULES))) {
@@ -99,13 +99,13 @@ function markAll(d: Document): number {
       existing?.remove();
       continue;
     }
-    // O alvo é o contêiner da IMAGEM da capa, não o card. Medido pela referência na
-    // tela inicial do Deck: o card inclui o espaço do título e passa ~27 px da área
-    // visível, enquanto a capa fica inteira à vista.
+    // The target is the container of the capsule IMAGE, not the card. Measured against the
+    // reference on the Deck home screen: the card includes the title space and extends ~27 px
+    // past the visible area, while the capsule stays fully in view.
     const img = capsule.querySelector("img");
     const target = (img?.parentElement ?? capsule) as HTMLElement;
     if (existing) {
-      // o Steam reaproveita cards ao rolar: o badge pode estar no lugar errado
+      // Steam reuses cards when scrolling: the badge may be in the wrong place
       if (existing.parentElement === target && existing.dataset.appid === appid) {
         badges.push(existing);
         continue;
@@ -121,10 +121,10 @@ function markAll(d: Document): number {
     target.appendChild(badge);
     badges.push(badge);
   }
-  // Geometria só depois de todas as escritas: intercalar "insere badge / lê retângulo"
-  // força um recálculo de layout por badge. Foi isso que travou o Steam Machine.
-  // Mede a CAPA, não o badge: assim o canto certo sai da mesma conta para badge novo e
-  // reaproveitado, esteja ele embaixo ou em cima agora.
+  // Geometry only after all writes: interleaving "insert badge / read rect" forces
+  // a layout recalculation per badge. That is what froze the Steam Machine.
+  // Measures the CAPSULE, not the badge: that way the right corner comes out of the same
+  // math for new and reused badges, whether currently at the bottom or the top.
   const clips = new Map<Element, DOMRect>();
   const positions: Array<[HTMLElement, string]> = [];
   for (const badge of badges) {
@@ -136,12 +136,12 @@ function markAll(d: Document): number {
         rect = clip.getBoundingClientRect();
         clips.set(clip, rect);
       }
-      // 6 px = distância do badge à borda (CSS acima)
+      // 6 px = badge distance from the edge (CSS above)
       if (badge.parentElement.getBoundingClientRect().bottom - 6 > rect.bottom) pos = "top";
     }
     positions.push([badge, pos]);
   }
-  // canto de baixo cortado (tela inicial): o badge sobe para o canto de cima
+  // bottom corner clipped (home screen): the badge moves up to the top corner
   for (const [badge, pos] of positions) if (badge.dataset.pos !== pos) badge.dataset.pos = pos;
   return badges.length;
 }
@@ -150,8 +150,8 @@ function attach(d: Document): void {
   if (doc === d && observer) return;
   detach();
   doc = d;
-  // O Steam muta o DOM em rajadas: o observer só agenda, e a passada roda uma vez por
-  // quadro. Antes do próximo quadro ninguém veria o badge mesmo.
+  // Steam mutates the DOM in bursts: the observer only schedules, and the pass runs once
+  // per frame. Nobody would see the badge before the next frame anyway.
   observer = new MutationObserver(() => {
     if (frame) return;
     frame = requestAnimationFrame(() => {
@@ -159,7 +159,7 @@ function attach(d: Document): void {
       try {
         markAll(d);
       } catch {
-        // uma passada que falha não pode derrubar o observer
+        // a failing pass must not take down the observer
       }
     });
   });
@@ -175,14 +175,14 @@ function detach(): void {
     doc?.querySelectorAll(`.${CLASS}`).forEach((b) => b.remove());
     doc?.getElementById(STYLE_ID)?.remove();
   } catch {
-    // a janela pode já ter fechado
+    // the window may already be closed
   }
   doc = null;
 }
 
-/** Sem janela da biblioteca (Steam iniciando, ou o gatilho da rota rodou antes de os
- *  cards existirem), tenta de novo a cada segundo por até um minuto. Cada gatilho novo
- *  recomeça a contagem. */
+/** Without a library window (Steam starting, or the route trigger ran before the
+ *  cards existed), retries every second for up to a minute. Each new trigger
+ *  restarts the count. */
 const RETRY_MS = 1000;
 const RETRY_LIMIT = 60;
 let retry: ReturnType<typeof setTimeout> | null = null;
@@ -214,9 +214,9 @@ function draw(): number {
   }
 }
 
-/** Troca o conjunto de jogos com badge e redesenha. Sem argumento, só redesenha com o
- *  conjunto atual (gatilho de navegação). Devolve quantos badges há na tela, ou 0 se a
- *  janela da biblioteca não estiver aberta. */
+/** Replaces the set of badged games and redraws. Without an argument, just redraws with the
+ *  current set (navigation trigger). Returns how many badges are on screen, or 0 if the
+ *  library window is not open. */
 export function showBadges(ids?: Iterable<number>): number {
   if (stopped) return 0;
   if (ids) appids = new Set(Array.from(ids, String));
@@ -224,8 +224,8 @@ export function showBadges(ids?: Iterable<number>): number {
   return draw();
 }
 
-/** Remove badges, estilo e observer. Sem isto, observer e estilo sobrevivem ao reload
- *  do plugin no documento da biblioteca. */
+/** Removes badges, style and observer. Without this, the observer and style survive a
+ *  plugin reload in the library document. */
 export function stopBadges(): void {
   stopped = true;
   if (retry) clearTimeout(retry);

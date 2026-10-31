@@ -1,10 +1,10 @@
-"""Ícone dos atalhos (issue #17).
+"""Shortcut icons (issue #17).
 
-Medido no Deck (2026-10-27): o Steam guarda só o *caminho* do ícone de um atalho e o
-carrega sob demanda. Com o arquivo no cartão, o atalho fica sem ícone quando o Steam
-reinicia com o cartão fora, e uma falha num caminho só passa no próximo reinício. Por
-isso o ícone é copiado para o SSD, com o hash do conteúdo no nome: um ícone novo no
-cartão vira um caminho novo, sem esbarrar no que o Steam guardou de um caminho antigo.
+Measured on the Deck (2026-10-27): Steam stores only the *path* of a shortcut's icon and
+loads it on demand. With the file on the card, the shortcut has no icon when Steam
+restarts with the card out, and a failure on a path only clears on the next restart. So
+the icon is copied to the SSD, with the content hash in the name: a new icon on the
+card becomes a new path, without running into what Steam cached for an old path.
 """
 import glob
 import hashlib
@@ -13,7 +13,7 @@ import shutil
 import struct
 import time
 
-# steamid64 = este valor + id da conta (a pasta em userdata/)
+# steamid64 = this value + account id (the folder in userdata/)
 STEAMID64_BASE = 76561197960265728
 HASH_CHARS = 12
 
@@ -56,11 +56,11 @@ def _read_map(data: bytes, i: int) -> tuple:
 
 
 def shortcut_icons(path: str) -> dict:
-    """appid → caminho do ícone ("" = sem ícone), lido do `shortcuts.vdf` binário.
+    """appid → icon path ("" = no icon), read from the binary `shortcuts.vdf`.
 
-    O frontend não enxerga esse caminho (nem `appStore` nem `appDetailsStore`); o
-    arquivo é a única fonte. Medido: o Steam o grava ~0,16 s depois de `SetShortcutIcon`.
-    O SteamGridDB, por sua vez, edita o arquivo direto."""
+    The frontend can't see that path (neither `appStore` nor `appDetailsStore`); the
+    file is the only source. Measured: Steam writes it ~0.16 s after `SetShortcutIcon`.
+    SteamGridDB, in turn, edits the file directly."""
     with open(path, "rb") as f:
         data = f.read()
     root, _ = _read_map(data, 0)
@@ -84,11 +84,11 @@ def content_hash(source: str) -> str:
 
 
 def target_path(current, source: str, guid: str, icons_dir: str, now=time.time) -> str:
-    """Caminho da cópia de `source` no SSD: `<guid>-<hash>-<geração>.<ext>`.
+    """Path of the copy of `source` on the SSD: `<guid>-<hash>-<generation>.<ext>`.
 
-    Mesmo conteúdo já aplicado → o caminho atual, e não há o que fazer. Conteúdo novo →
-    sempre um caminho inédito, mesmo que o conteúdo já tenha sido usado antes: o Steam
-    não relê um caminho que já carregou na sessão (A → B → A ficaria em B até reiniciar)."""
+    Same content already applied → the current path, and nothing to do. New content →
+    always a never-used path, even if the content was used before: Steam
+    doesn't reread a path it already loaded in the session (A → B → A would stay on B until restart)."""
     digest = content_hash(source)
     if current and _ours(current, icons_dir):
         stem = os.path.splitext(os.path.basename(current))[0]
@@ -104,17 +104,17 @@ def target_path(current, source: str, guid: str, icons_dir: str, now=time.time) 
 
 
 def plan(current, target: str, icons_dir: str) -> bool:
-    """Aplicar `target`? `current` é o ícone que o atalho tem; `None` = o atalho ainda
-    não está no `shortcuts.vdf` (acabou de ser criado). Só substitui a falta de ícone ou
-    um ícone que o próprio plugin gravou: o resto foi escolha do usuário."""
+    """Apply `target`? `current` is the shortcut's icon; `None` = the shortcut is not
+    in `shortcuts.vdf` yet (just created). Only replaces a missing icon or
+    one the plugin itself wrote: anything else was the user's choice."""
     if current is None or current == "":
         return True
     return current != target and _ours(current, icons_dir)
 
 
 def stage(source: str, target: str) -> None:
-    """Copia o ícone para `target`, se ainda não estiver lá. Grava num temporário e troca
-    de uma vez: o Steam nunca vê um arquivo pela metade."""
+    """Copies the icon to `target`, if it isn't there yet. Writes to a temp file and swaps
+    in one go: Steam never sees a half-written file."""
     if os.path.isfile(target):
         return
     os.makedirs(os.path.dirname(target), exist_ok=True)
@@ -124,9 +124,9 @@ def stage(source: str, target: str) -> None:
 
 
 def referenced_icons(steam_root: str) -> set:
-    """Ícones que algum atalho de alguma conta Steam usa. A pasta de cópias é do
-    aparelho, não da conta: uma versão antiga pode estar em uso na outra conta.
-    Lança se um `shortcuts.vdf` não puder ser lido: na dúvida, nada é apagado."""
+    """Icons used by any shortcut of any Steam account. The copies folder belongs to the
+    device, not the account: an old version may be in use by the other account.
+    Raises if a `shortcuts.vdf` can't be read: when in doubt, nothing is deleted."""
     used = set()
     for path in glob.glob(os.path.join(steam_root, "userdata", "*", "config", "shortcuts.vdf")):
         used.update(os.path.normpath(icon) for icon in shortcut_icons(path).values() if icon)
@@ -134,9 +134,9 @@ def referenced_icons(steam_root: str) -> set:
 
 
 def prune(icons_dir: str, keep: set) -> list:
-    """Apaga as cópias fora de `keep` (caminhos em uso). A versão substituída só sai numa
-    chamada seguinte, depois que o Steam gravou a nova no `shortcuts.vdf`: se o
-    `SetShortcutIcon` falhar, o atalho não fica apontando para um arquivo apagado."""
+    """Deletes the copies not in `keep` (paths in use). The replaced version only goes on a
+    later call, after Steam wrote the new one to `shortcuts.vdf`: if
+    `SetShortcutIcon` fails, the shortcut isn't left pointing at a deleted file."""
     removed = []
     try:
         names = os.listdir(icons_dir)

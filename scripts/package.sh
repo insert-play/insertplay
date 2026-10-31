@@ -14,11 +14,11 @@ rm -f "$OUT/InsertPlay.zip"
 
 npx -y pnpm@9 build 2>&1 | tee "$OUT/build.log"
 if grep -q "plugin typescript" "$OUT/build.log"; then
-	echo "Build com erros de TypeScript." >&2
+	echo "Build has TypeScript errors." >&2
 	exit 1
 fi
 
-# build_zip_from_dir escolhe os arquivos (PACKAGE_ENTRIES) direto da pasta do projeto
+# build_zip_from_dir picks the files (PACKAGE_ENTRIES) straight from the project folder
 PYTHONPATH="$ROOT/py_modules" python3 - "$ROOT" "$OUT/InsertPlay.zip" <<'PY'
 import sys
 from insertplay_decky.plugin_package import build_zip_from_dir

@@ -1,4 +1,4 @@
-"""Persistência local do plugin: registro guid → atalho, configurações e log de eventos."""
+"""Plugin local persistence: guid → shortcut registry, settings and event log."""
 import json
 import os
 import tempfile
@@ -14,7 +14,7 @@ def _load(path: str, default):
 
 
 def _save(path: str, data) -> None:
-    """Escrita atômica: um plugin_loader reiniciado no meio da escrita não pode corromper o registro."""
+    """Atomic write: a plugin_loader restarted mid-write must not corrupt the registry."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
     try:
@@ -75,7 +75,7 @@ class Settings:
 
 
 class EventLog:
-    """JSONL só com acréscimo; corta para as últimas `keep` linhas ao passar de `limit`."""
+    """Append-only JSONL; trims to the last `keep` lines once past `limit`."""
 
     def __init__(self, path: str, limit: int = 1000, keep: int = 500):
         self.path, self.limit, self.keep = path, limit, keep

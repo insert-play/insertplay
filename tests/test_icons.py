@@ -12,7 +12,7 @@ GUID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 
 def vdf(entries):
-    """`shortcuts.vdf` binário, no formato que o Steam grava."""
+    """Binary `shortcuts.vdf`, in the format Steam writes."""
 
     def string(key, value):
         return b"\x01" + key.encode() + b"\x00" + value.encode() + b"\x00"
@@ -48,9 +48,9 @@ def test_target_path_keeps_same_content_and_renames_new_content(tmp_path):
     first = icons.target_path("", str(src), GUID, "/icons", now=lambda: 1.0)
     assert os.path.dirname(first) == "/icons" and first.endswith(".png")
     assert os.path.basename(first).startswith(f"{GUID}-{icons.content_hash(str(src))}-")
-    # mesmo conteúdo já aplicado: o caminho atual, sem nada a fazer
+    # same content already applied: the current path, nothing to do
     assert icons.target_path(first, str(src), GUID, "/icons", now=lambda: 2.0) == first
-    # cópia do formato antigo (sem geração) com o mesmo conteúdo também vale
+    # an old-format copy (no generation) with the same content also counts
     legacy = f"/icons/{GUID}-{icons.content_hash(str(src))}.png"
     assert icons.target_path(legacy, str(src), GUID, "/icons") == legacy
     src.write_bytes(b"two")
@@ -59,7 +59,7 @@ def test_target_path_keeps_same_content_and_renames_new_content(tmp_path):
 
 
 def test_target_path_back_to_old_content_gets_a_new_path(tmp_path):
-    """A → B → A: o Steam não relê um caminho já carregado na sessão (review do PR #18)."""
+    """A → B → A: Steam doesn't reread a path already loaded in the session (PR #18 review)."""
     src = tmp_path / "icon.png"
     src.write_bytes(b"A")
     a = icons.target_path("", str(src), GUID, str(tmp_path), now=lambda: 1.0)
@@ -81,11 +81,11 @@ def test_target_path_skips_an_existing_file(tmp_path):
 @pytest.mark.parametrize(
     "current, expected",
     [
-        (None, True),  # atalho recém-criado, ainda fora do shortcuts.vdf
-        ("", True),  # sem ícone
-        ("/icons/old.png", True),  # versão antiga gravada pelo plugin
-        ("/icons/new.png", False),  # já aplicado
-        ("/home/deck/.local/share/Steam/userdata/1/config/grid/7_icon.png", False),  # do usuário
+        (None, True),  # shortcut just created, not in shortcuts.vdf yet
+        ("", True),  # no icon
+        ("/icons/old.png", True),  # old version written by the plugin
+        ("/icons/new.png", False),  # already applied
+        ("/home/deck/.local/share/Steam/userdata/1/config/grid/7_icon.png", False),  # the user's
         ("/run/media/deck/Card/icon.png", False),
     ],
 )

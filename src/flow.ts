@@ -40,12 +40,12 @@ import { showBadges } from "./steam-badges";
 
 const TITLE = "InsertPlay";
 
-/** Fila única: inserção, remoção e reconciliação mexem no mesmo atalho e no mesmo
- *  registro. Em paralelo, uma remoção podia ocultar o atalho que uma inserção
- *  acabou de mostrar. */
+/** Single queue: insertion, removal and reconciliation touch the same shortcut and the
+ *  same registry. In parallel, a removal could hide the shortcut an insertion had
+ *  just shown. */
 let chain: Promise<unknown> = Promise.resolve();
 export function enqueue<T>(work: () => Promise<T>): Promise<T> {
-  // toda decisão sobre atalhos depende da biblioteca carregada (ver waitForLibrary)
+  // every shortcut decision depends on the loaded library (see waitForLibrary)
   const guarded = async () => {
     await waitForLibrary();
     return work();
@@ -55,8 +55,8 @@ export function enqueue<T>(work: () => Promise<T>): Promise<T> {
   return next;
 }
 
-/** Garante o atalho do cartão e o deixa visível. `launch` só é verdadeiro numa
- *  inserção real; a reconciliação de carga nunca inicia jogo. Devolve o appid. */
+/** Ensures the card's shortcut exists and makes it visible. `launch` is only true on a
+ *  real insertion; the load-time reconciliation never starts a game. Returns the appid. */
 async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
   if (card.error || !card.guid || !card.appName || !card.exe) {
     const why = card.error ?? "incomplete manifest";
@@ -70,10 +70,10 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
     startDir: card.startDir ?? card.mount,
     launchOptions: card.launchOptions ?? "",
   };
-  // Só o registro associa um atalho a um cartão, sempre pelo guid. Adotar por nome
-  // sobrescrevia atalhos alheios com o mesmo nome e fazia dois cartões homônimos
-  // dividirem um atalho (review do PR #2). Um appid que outro guid também reivindica
-  // não é confiável: criamos um atalho próprio.
+  // Only the registry ties a shortcut to a card, always by guid. Adopting by name
+  // overwrote other people's shortcuts with the same name and made two cards with the
+  // same name share a shortcut (PR #2 review). An appid another guid also claims
+  // is not trustworthy: we create our own shortcut.
   const registry = await loadRegistry();
   const known = registry[card.guid];
   const claimedByOther =
@@ -110,9 +110,9 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
   return appid;
 }
 
-/** Ícone do atalho a partir da cópia no SSD (issue #17). Roda a cada inserção, não só
- *  na criação: um ícone novo no cartão vira um caminho novo. O backend decide se aplica
- *  (não sobrescreve um ícone escolhido pelo usuário). Falha não para o fluxo. */
+/** Shortcut icon from the copy on the SSD (issue #17). Runs on every insertion, not only
+ *  on creation: a new icon on the card becomes a new path. The backend decides whether to
+ *  apply it (it does not overwrite an icon the user chose). A failure does not stop the flow. */
 async function ensureIcon(card: Card, appid: number): Promise<void> {
   try {
     const steamid = currentSteamId();
@@ -127,16 +127,16 @@ async function ensureIcon(card: Card, appid: number): Promise<void> {
   }
 }
 
-/** Aplica a configuração "ocultar ao remover" a todo atalho registrado cujo cartão não
- *  está montado agora: oculta, ou mostra de volta se a opção estiver desligada. Pergunta
- *  ao backend em vez de lembrar mount→guid aqui: o frontend recarrega sem o backend
- *  saber, e o backend já atualizou a lista antes de emitir a remoção. */
+/** Applies the "hide on removal" setting to every registered shortcut whose card is not
+ *  mounted now: hides it, or shows it again if the option is off. Asks the backend
+ *  instead of remembering mount→guid here: the frontend reloads without the backend
+ *  knowing, and the backend has already updated the list before emitting the removal. */
 async function syncAbsent(): Promise<void> {
   const present = new Set((await presentCards()).map((c) => c.guid).filter(Boolean));
   const registry = Object.entries(await loadRegistry());
   const hide = (await getSettings()).hideRemoved ?? true;
-  // um appid que um cartão PRESENTE usa nunca é ocultado, mesmo que outro guid
-  // (ausente) aponte para ele num registro antigo
+  // an appid used by a PRESENT card is never hidden, even if another (absent) guid
+  // points to it in an old registry entry
   const presentAppids = new Set(registry.filter(([guid]) => present.has(guid)).map(([, r]) => r.appid));
   for (const [guid, record] of registry) {
     if (present.has(guid) || presentAppids.has(record.appid) || !shortcutExists(record.appid)) continue;
@@ -144,32 +144,32 @@ async function syncAbsent(): Promise<void> {
   }
 }
 
-/** Cartões montados agora. `null` do backend = ele ainda não terminou a primeira
- *  varredura (ou falhou): seguir com "nenhum cartão" ocultaria o atalho do cartão
- *  que está no leitor, então lançamos e a operação aparece como erro. */
+/** Cards mounted now. `null` from the backend = it has not finished its first scan
+ *  (or failed): carrying on with "no card" would hide the shortcut of the card in the
+ *  reader, so we throw and the operation shows up as an error. */
 async function presentCards(): Promise<Card[]> {
   const cards = await currentCards();
   if (!Array.isArray(cards)) throw new Error("backend has not finished scanning for cards");
   return cards;
 }
 
-/** Registro guid → appid. Falha do backend lança: tratar como vazio faria cada
- *  cartão parecer novo e ganhar um atalho duplicado. */
+/** guid → appid registry. A backend failure throws: treating it as empty would make
+ *  every card look new and get a duplicate shortcut. */
 async function loadRegistry(): Promise<Record<string, RegistryRecord>> {
   const registry = await registryAll();
   if (!registry || typeof registry !== "object") throw new Error("could not read the shortcut registry");
   return registry;
 }
 
-/** Gravação que falha em silêncio perderia o vínculo guid → appid e a próxima
- *  inserção criaria outro atalho; por isso lança. */
+/** A write that fails silently would lose the guid → appid link and the next
+ *  insertion would create another shortcut; hence it throws. */
 async function saveRecord(guid: string, record: Partial<RegistryRecord>): Promise<void> {
   if (!(await registryPut(guid, record))) throw new Error(`could not save the registry entry for ${guid}`);
 }
 
 async function report(what: string, err: unknown): Promise<void> {
   const detail = err instanceof Error ? err.message : String(err);
-  // o stack vai só para o log: sem ele "reading 'get'" não diz onde quebrou
+  // the stack goes only to the log: without it "reading 'get'" does not say where it broke
   const stack = err instanceof Error && err.stack ? `\n${err.stack.split("\n").slice(1, 6).join("\n")}` : "";
   await logAdd("error", `${what}: ${detail}${stack}`).catch(() => undefined);
   toaster.toast({ title: TITLE, body: `${what} falhou: ${detail}`, duration: 10000 });
@@ -177,15 +177,15 @@ async function report(what: string, err: unknown): Promise<void> {
 
 let lastBadgeError = "";
 
-/** Recalcula quais jogos levam o badge de cartão: os atalhos dos cartões InsertPlay
- *  inseridos e os jogos Steam instalados numa biblioteca do cartão. Só cartões
- *  presentes: o atalho de um cartão ausente fica oculto e não deve ficar com badge.
- *  Nunca lança; o badge é enfeite. O erro vai para o log uma vez, não a cada gatilho. */
+/** Recomputes which games get the card badge: the shortcuts of inserted InsertPlay
+ *  cards and the Steam games installed in a library on the card. Only present cards:
+ *  an absent card's shortcut is hidden and must not keep a badge.
+ *  Never throws; the badge is cosmetic. The error is logged once, not on every trigger. */
 export async function refreshBadges(): Promise<void> {
   try {
     const [cards, registry] = await Promise.all([presentCards(), loadRegistry()]);
     const present = new Set(cards.map((c) => c.guid).filter(Boolean));
-    // o mesmo critério de cartão das notificações; antes do primeiro retrato, nenhum
+    // same card criterion as the notifications; before the first snapshot, none
     const steamApps = [...(steamCards?.values() ?? [])].filter((c) => c.card).flatMap((c) => c.apps);
     const shortcuts = Object.entries(registry)
       .filter(([guid]) => present.has(guid))
@@ -214,35 +214,35 @@ export const onRemoved = (card: { mount: string; label: string }) =>
     .catch((err) => report(`Remoção de ${card.label}`, err))
     .finally(refreshBadges);
 
-/** Biblioteca Steam montada vista no último aviso do Steam, por pasta da biblioteca. */
+/** Mounted Steam library seen in Steam's last notification, per library folder. */
 interface SteamCard {
   mount: string;
   label: string;
-  /** Está num cartão: o Steam diz que não é fixa (Deck) ou o kernel diz que o disco é
-   *  removível (leitor USB da Steam Machine). Um segundo SSD interno fica de fora. */
+  /** It is on a card: Steam says it is not fixed (Deck) or the kernel says the disk is
+   *  removable (Steam Machine USB reader). A second internal SSD is left out. */
   card: boolean;
-  /** Também é cartão InsertPlay (ou o backend não soube dizer): o outro fluxo notifica. */
+  /** Also an InsertPlay card (or the backend could not tell): the other flow notifies. */
   silent: boolean;
-  /** O backend achou o ponto de montagem (mídia em /run/media). Sem isso, o save portátil
-   *  não vale: o backend recusa caminhos fora de mídia montada. */
+  /** The backend found the mount point (media under /run/media). Without it, portable
+   *  saves do not apply: the backend refuses paths outside mounted media. */
   onMedia: boolean;
   apps: number[];
 }
 
-/** `null` = ainda sem retrato. O primeiro aviso (o Steam chama o callback logo após o
- *  registro) e a carga do plugin com o cartão inserido são estado inicial, não inserção. */
+/** `null` = no snapshot yet. The first notification (Steam calls the callback right after
+ *  registration) and plugin load with the card inserted are initial state, not insertion. */
 let steamCards: Map<string, SteamCard> | null = null;
 
-/** Compara as bibliotecas removíveis montadas com o último retrato. Por cartão (ponto de
- *  montagem), não por appid: instalar um jogo num cartão já inserido muda `apps`, não
- *  os cartões presentes. */
+/** Compares the mounted removable libraries with the last snapshot. Per card (mount
+ *  point), not per appid: installing a game on an already inserted card changes `apps`,
+ *  not the present cards. */
 async function checkSteamLibraries(): Promise<void> {
   const libraries = await steamLibraries();
   const previous = steamCards;
   const next = new Map<string, SteamCard>();
-  // Medido no Deck: o aviso do Steam chega ~12 s depois de um move terminar, então `apps`
-  // do retrato pode estar velho. Na remoção vale o que o Steam guardou da pasta
-  // desmontada, mesmo vazio (o último jogo pode ter saído do cartão).
+  // Measured on the Deck: Steam's notification arrives ~12 s after a move finishes, so the
+  // snapshot's `apps` may be stale. On removal, what Steam kept for the unmounted folder
+  // wins, even if empty (the last game may have left the card).
   const unmountedApps = new Map(libraries.filter((l) => !l.mounted).map((l) => [l.path, l.apps]));
   if (previous) {
     for (const [path, card] of previous) {
@@ -267,11 +267,11 @@ async function checkSteamLibraries(): Promise<void> {
     });
   }
   steamCards = next;
-  // Antes do auto-launch: o jogo do cartão tem que abrir já com o prefixo do cartão.
-  // Falha aqui não pode tirar a notificação da inserção.
+  // Before auto-launch: the card's game must open already using the card's prefix.
+  // A failure here must not suppress the insertion notification.
   await syncPortable().catch((err) => report("Save portátil", err));
   if (previous === null) {
-    // sem esta linha, um cartão que faltou no retrato só aparece como "remoção perdida"
+    // without this line, a card missing from the snapshot only shows up as a "lost removal"
     const cards = [...next.values()]
       .filter((c) => c.card)
       .map((c) => `${c.label}${c.silent ? " (insertplay)" : ""}: ${c.apps.length}`);
@@ -279,9 +279,9 @@ async function checkSteamLibraries(): Promise<void> {
     return;
   }
 
-  // Inserção e remoção são do cartão (ponto de montagem), não de cada biblioteca:
-  // acrescentar ou tirar uma biblioteca num cartão inserido não é evento, e um cartão
-  // com duas bibliotecas soma os jogos das duas (review do PR #12).
+  // Insertion and removal belong to the card (mount point), not to each library:
+  // adding or removing a library on an inserted card is not an event, and a card
+  // with two libraries sums the games of both (PR #12 review).
   const byMount = (cards: Map<string, SteamCard>) => {
     const out = new Map<string, SteamCard>();
     for (const card of cards.values()) {
@@ -313,7 +313,7 @@ async function checkSteamLibraries(): Promise<void> {
   for (const card of gone(after, before)) await steamCardInserted(card);
 }
 
-/** Inicia sozinho só com exatamente um jogo no cartão e nenhum jogo aberto. */
+/** Auto-starts only with exactly one game on the card and no game running. */
 async function steamCardInserted(card: SteamCard): Promise<void> {
   const apps = [...new Set(card.apps)];
   await logAdd("steam", `${card.label} inserted (${apps.join(", ")})`);
@@ -332,14 +332,14 @@ async function steamCardInserted(card: SteamCard): Promise<void> {
   }
 }
 
-/** Aviso do Steam de que as bibliotecas mudaram (cartão inserido ou removido, jogo
- *  instalado ou movido). Também atualiza os badges, como antes. */
+/** Steam notification that the libraries changed (card inserted or removed, game
+ *  installed or moved). Also refreshes the badges, as before. */
 export const onSteamLibrariesChanged = () =>
   enqueue(checkSteamLibraries)
     .catch((err) => report("Biblioteca Steam no cartão", err))
     .finally(refreshBadges);
 
-/** Cartão com biblioteca Steam inserido agora, juntando as bibliotecas do mesmo cartão. */
+/** Card with a Steam library inserted now, merging the libraries of the same card. */
 export interface PortableCard {
   mount: string;
   label: string;
@@ -347,7 +347,7 @@ export interface PortableCard {
   apps: number[];
 }
 
-/** Cartões Steam presentes no último retrato (vazio antes do primeiro). */
+/** Steam cards present in the last snapshot (empty before the first one). */
 export function steamCardsPresent(): PortableCard[] {
   const out = new Map<string, PortableCard>();
   for (const [path, card] of steamCards ?? []) {
@@ -368,13 +368,13 @@ const RESULT_TEXT: Record<string, string> = {
 
 const reportedPortableErrors = new Set<string>();
 
-/** Jogos já avisados nesta sessão de que as opções de inicialização trocam o prefixo. */
+/** Games already warned this session that their launch options change the prefix. */
 const warnedCompatPath = new Set<number>();
 
-/** `STEAM_COMPAT_DATA_PATH` (ou `WINEPREFIX`) nas opções de inicialização faz o Proton
- *  usar outro prefixo e ignorar o link. Medido na Steam Machine: com a opção de um teste
- *  antigo, o Bully abriu sem os saves do cartão e gravou ~115 MB de DLLs no prefixo da
- *  raiz do cartão. A opção é do usuário: avisamos, não apagamos. */
+/** `STEAM_COMPAT_DATA_PATH` (or `WINEPREFIX`) in the launch options makes Proton use
+ *  another prefix and ignore the link. Measured on the Steam Machine: with the option from
+ *  an old test, Bully opened without the card's saves and wrote ~115 MB of DLLs into the
+ *  prefix at the card root. The option is the user's: we warn, we do not delete it. */
 async function warnPrefixOverride(card: PortableCard, results: PortableResults): Promise<void> {
   for (const id of Object.keys(results)) {
     const appid = Number(id);
@@ -390,14 +390,14 @@ async function warnPrefixOverride(card: PortableCard, results: PortableResults):
   }
 }
 
-/** Toast do que mudou numa passada. "ok", "none", "leftover" e "unlinked" vão só para o
- *  log do backend: acontecem sem o usuário precisar saber. */
+/** Toast for what changed in a pass. "ok", "none", "leftover" and "unlinked" only go to
+ *  the backend log: they happen without the user needing to know. */
 async function announcePortable(card: PortableCard, results: PortableResults): Promise<void> {
   await warnPrefixOverride(card, results);
   for (const [id, result] of Object.entries(results)) {
     const name = appName(Number(id));
     if (result.startsWith("error")) {
-      // o mesmo erro volta a cada passada (30 s): avisa e registra uma vez por sessão
+      // the same error comes back on every pass (30 s): warn and log once per session
       const key = `${card.mount}|${id}|${result}`;
       if (reportedPortableErrors.has(key)) continue;
       reportedPortableErrors.add(key);
@@ -409,14 +409,14 @@ async function announcePortable(card: PortableCard, results: PortableResults): P
   }
 }
 
-/** Jogos instalados em outras bibliotecas (SSD ou outro cartão): um jogo que saiu deste
- *  cartão para lá ganha cópia do prefixo no SSD em vez de só perder o link. */
+/** Games installed in other libraries (SSD or another card): a game that moved from this
+ *  card to one of them gets a copy of the prefix on the SSD instead of just losing the link. */
 async function elsewhereOf(card: PortableCard): Promise<number[]> {
   return (await mountedLibraries()).filter((l) => !card.libraries.includes(l.path)).flatMap((l) => l.apps);
 }
 
-/** Uma passada do save portátil em todos os cartões Steam presentes (o backend ignora os
- *  desligados). Sem saber quais jogos estão abertos, não mexe em nada. */
+/** One portable saves pass over all present Steam cards (the backend skips the ones that
+ *  are off). Without knowing which games are running, it touches nothing. */
 async function syncPortable(): Promise<void> {
   const running = runningAppids();
   if (!running) return;
@@ -427,12 +427,12 @@ async function syncPortable(): Promise<void> {
   }
 }
 
-/** Passada periódica: o Steam recria o prefixo no SSD ~20 s depois de um move, e o jogo
- *  que roda pela primeira vez cria um prefixo comum que só depois pode ir para o cartão. */
+/** Periodic pass: Steam recreates the prefix on the SSD ~20 s after a move, and a game
+ *  run for the first time creates a regular prefix that can only go to the card later. */
 let portableTicking = false;
 export const portableTick = () => {
-  // Uma migração lenta (prefixo inteiro num cartão lento) leva minutos. Empilhar um tick a
-  // cada 30 s na fila única atrasaria a inserção de cartões InsertPlay por todos eles.
+  // A slow migration (whole prefix on a slow card) takes minutes. Stacking a tick every
+  // 30 s on the single queue would delay InsertPlay card insertion behind all of them.
   if (portableTicking) return Promise.resolve();
   portableTicking = true;
   return enqueue(syncPortable)
@@ -442,10 +442,10 @@ export const portableTick = () => {
     });
 };
 
-/** Escolha de modo em andamento (`done: false`) ou já aplicada e ainda não relida pelo
- *  painel (`done: true`). Fica aqui, fora do componente: o menu do seletor e o modal de
- *  confirmação abrem por cima do Quick Access e o painel é montado de novo. Guardado no
- *  componente, o "aplicando" sumia e o seletor voltava ao modo antigo (visto no Deck). */
+/** Mode choice in progress (`done: false`) or already applied and not yet re-read by the
+ *  panel (`done: true`). Lives here, outside the component: the selector menu and the
+ *  confirm modal open over Quick Access and the panel is mounted again. Kept in the
+ *  component, "applying" vanished and the selector reverted to the old mode (seen on the Deck). */
 export interface PortableChange {
   mode: PortableMode;
   done: boolean;
@@ -455,12 +455,12 @@ const portableListeners = new Set<() => void>();
 
 export const portableChange = (mount: string): PortableChange | null => portableChanges.get(mount) ?? null;
 
-/** O painel já leu o modo aplicado: a mudança acabou. */
+/** The panel has read the applied mode: the change is over. */
 export function settlePortableChange(mount: string): void {
   if (portableChanges.get(mount)?.done) portableChanges.delete(mount);
 }
 
-/** Avisa quando uma mudança começa ou termina. Devolve o cancelamento. */
+/** Notifies when a change starts or ends. Returns the unsubscribe function. */
 export function onPortableChange(callback: () => void): () => void {
   portableListeners.add(callback);
   return () => void portableListeners.delete(callback);
@@ -472,11 +472,11 @@ function trackPortable(mount: string, change: PortableChange | null): void {
   portableListeners.forEach((callback) => callback());
 }
 
-/** Escolha do painel. Devolve o status novo, ou `null` se falhou (já avisado). */
+/** Panel choice. Returns the new status, or `null` if it failed (already reported). */
 export const setPortable = (card: PortableCard, mode: PortableMode) => {
   trackPortable(card.mount, { mode, done: false });
   return runSetPortable(card, mode).then((status) => {
-    // não mudou (falha, ou jogo do cartão aberto): o seletor volta ao modo de antes
+    // unchanged (failure, or the card's game is running): the selector reverts to the old mode
     trackPortable(card.mount, status?.mode === mode ? { mode, done: true } : null);
     return status;
   });
@@ -498,26 +498,26 @@ const runSetPortable = (card: PortableCard, mode: PortableMode) =>
     return null;
   });
 
-/** Estado inicial ao carregar o plugin: mostra o que está inserido, aplica "ocultar ao
- *  remover" ao resto, não inicia nada. */
+/** Initial state on plugin load: shows what is inserted, applies "hide on removal" to
+ *  the rest, starts nothing. */
 export const reconcile = () =>
   enqueue(async () => {
     const cards = await presentCards();
     for (const card of cards) await ensureCard(card, false);
     await syncAbsent();
-    // sem esta linha, "reconciliou certo" e "nem rodou" ficam iguais no log
+    // without this line, "reconciled correctly" and "never ran" look the same in the log
     await logAdd("reconcile", `${cards.length} card(s): ${cards.map((c) => c.appName ?? c.label).join(", ") || "-"}`);
   })
     .catch((err) => report("Reconciliação", err))
     .finally(refreshBadges);
 
-/** Troca de "ocultar ao remover" no painel: aplica na hora aos cartões ausentes. */
+/** "Hide on removal" toggled in the panel: applies right away to absent cards. */
 export const applyHideRemoved = () =>
   enqueue(syncAbsent)
     .catch((err) => report("Ocultar ao remover", err))
     .finally(refreshBadges);
 
-/** Botão "Reinstalar atalho": força nova aplicação das artes. */
+/** "Reinstalar atalho" button: forces the artwork to be applied again. */
 export const reinstall = (card: Card) =>
   enqueue(async () => {
     if (card.guid) await saveRecord(card.guid, { artworkApplied: false });

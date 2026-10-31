@@ -1,19 +1,19 @@
 #!/bin/bash
-# Roda UMA vez, no Deck, como root (pede a senha do deck):
+# Run ONCE, on the Deck, as root (asks for the deck password):
 #   ssh -t deck@<ip> "sudo bash /tmp/insertplay-deck-setup/install-dev-access.sh"
-# Instala o deploy-plugin.sh e a regra de sudo que o libera sem senha.
-# Para desfazer:  sudo rm -rf /etc/insertplay-dev /etc/sudoers.d/zz-insertplay-dev
+# Installs deploy-plugin.sh and the sudo rule that allows it without a password.
+# To undo:  sudo rm -rf /etc/insertplay-dev /etc/sudoers.d/zz-insertplay-dev
 set -euo pipefail
 
-[[ $EUID -eq 0 ]] || { echo "rode com sudo" >&2; exit 1; }
+[[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 install -d -o root -g root -m 755 /etc/insertplay-dev
 install -o root -g root -m 755 "$HERE/deploy-plugin.sh" /etc/insertplay-dev/deploy-plugin.sh
 
-# O sudo aplica a ÚLTIMA regra que combina, e /etc/sudoers.d é lido em ordem
-# alfabética. O SteamOS tem /etc/sudoers.d/wheel ("%wheel ALL=(ALL) ALL", com senha);
-# uma regra com nome anterior a "wheel" é anulada por ela (medido no Deck). Daí o "zz-".
+# sudo applies the LAST rule that matches, and /etc/sudoers.d is read in alphabetical
+# order. SteamOS has /etc/sudoers.d/wheel ("%wheel ALL=(ALL) ALL", with password);
+# a rule named before "wheel" is overridden by it (measured on the Deck). Hence the "zz-".
 RULE=$(mktemp)
 echo 'deck ALL=(root) NOPASSWD: /etc/insertplay-dev/deploy-plugin.sh' > "$RULE"
 visudo -cf "$RULE"
@@ -21,5 +21,5 @@ install -o root -g root -m 440 "$RULE" /etc/sudoers.d/zz-insertplay-dev
 rm -f "$RULE" /etc/sudoers.d/insertplay-dev
 visudo -c >/dev/null
 
-echo "OK: acesso de desenvolvimento instalado."
-echo "Teste: sudo -n /etc/insertplay-dev/deploy-plugin.sh   (deve mostrar o 'uso:' sem pedir senha)"
+echo "OK: development access installed."
+echo "Test: sudo -n /etc/insertplay-dev/deploy-plugin.sh   (should show the 'usage:' without asking for a password)"

@@ -1,12 +1,12 @@
-"""Pacote do próprio plugin guardado no cartão (`insertplay/decky/InsertPlay.zip`).
+"""The plugin's own package stored on the card (`insertplay/decky/InsertPlay.zip`).
 
-O cartão leva o plugin: o Decky o instala pelo "Install Plugin from ZIP File" e o
-plugin instalado compara versões, se atualiza a partir do cartão ou grava a versão
-instalada nele. Sem import de `decky`: tudo aqui roda e é testado fora do Deck.
+The card carries the plugin: Decky installs it via "Install Plugin from ZIP File" and the
+installed plugin compares versions, updates itself from the card or writes the installed
+version to it. No `decky` import: everything here runs and is tested off the Deck.
 
-O zip tem o mesmo layout do scripts/package.sh: uma única pasta `InsertPlay/` na raiz.
-O nome importa: o Decky extrai o zip como está em ~/homebrew/plugins, então outra
-pasta raiz criaria um segundo plugin em vez de substituir este.
+The zip has the same layout as scripts/package.sh: a single `InsertPlay/` folder at the root.
+The name matters: Decky extracts the zip as-is into ~/homebrew/plugins, so another
+root folder would create a second plugin instead of replacing this one.
 """
 import hashlib
 import io
@@ -18,19 +18,19 @@ import zipfile
 
 PLUGIN_NAME = "InsertPlay"
 CARD_PACKAGE = os.path.join("insertplay", "decky", f"{PLUGIN_NAME}.zip")
-# o que entra no pacote, seja da pasta do projeto (package.sh) ou da instalada (plugin);
-# o `upload` do scripts/deck.mjs envia a mesma lista
+# what goes into the package, from the project folder (package.sh) or the installed one (plugin);
+# `upload` in scripts/deck.mjs sends the same list
 PACKAGE_ENTRIES = ("plugin.json", "package.json", "main.py", "NOTICE", "py_modules", "dist")
 REQUIRED = ("plugin.json", "package.json", "main.py", "dist/index.js")
-# semver: major.minor.patch[-pré-release][+build]
+# semver: major.minor.patch[-prerelease][+build]
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
-# um pacote real tem algumas dezenas de KB; isto barra zip bomb e arquivo gigante com
-# o nome certo sem limitar o plugin
+# a real package is a few tens of KB; this stops zip bombs and huge files with
+# the right name without limiting the plugin
 MAX_ZIP_BYTES = 16 * 1024 * 1024
 MAX_UNCOMPRESSED = 64 * 1024 * 1024
 
-# zip_path -> ((mtime_ns, size), resultado ou PackageError). O painel pergunta o status
-# a cada 5 s; sem isto cada pergunta relia e refazia o hash do zip no cartão.
+# zip_path -> ((mtime_ns, size), result or PackageError). The panel asks for the status
+# every 5 s; without this each request reread and rehashed the zip on the card.
 _cache: dict = {}
 
 
@@ -43,8 +43,8 @@ def card_package_path(mount: str) -> str:
 
 
 def parse_version(value) -> tuple:
-    """Chave de ordenação com a precedência do semver: `1.0.0-beta < 1.0.0`, e
-    identificadores de pré-release numéricos ordenam como número. `+build` não conta."""
+    """Sort key with semver precedence: `1.0.0-beta < 1.0.0`, and numeric
+    prerelease identifiers sort as numbers. `+build` doesn't count."""
     match = VERSION_RE.match(str(value or "").strip())
     if not match:
         raise PackageError(f"invalid version: {value!r}")
@@ -57,7 +57,7 @@ def parse_version(value) -> tuple:
 
 
 def compare_versions(a: str, b: str) -> int:
-    """-1, 0 ou 1."""
+    """-1, 0 or 1."""
     pa, pb = parse_version(a), parse_version(b)
     return (pa > pb) - (pa < pb)
 
@@ -66,23 +66,23 @@ def _check_plugin_json(data) -> None:
     if not isinstance(data, dict) or data.get("name") != PLUGIN_NAME:
         raise PackageError(f"plugin.json is not the {PLUGIN_NAME} plugin")
     flags = data.get("flags", [])
-    # mesma regra do deploy-plugin.sh: o backend nunca roda como root
+    # same rule as deploy-plugin.sh: the backend never runs as root
     if not isinstance(flags, list) or "root" in flags:
         raise PackageError("plugin.json asks for the root flag")
 
 
 def read_package(zip_path: str) -> dict:
-    """Valida o zip do cartão e devolve `{version, sha256, size}`.
+    """Validates the card's zip and returns `{version, sha256, size}`.
 
-    A validação é a mesma que o Decky não faz: o zip vai ser extraído como root em
-    ~/homebrew/plugins, então só aceitamos a pasta `InsertPlay/`, sem caminhos
-    absolutos, sem `..`, sem symlinks e sem dois nomes para o mesmo arquivo
-    (`InsertPlay/./plugin.json` é extraído por cima do `plugin.json` validado). Todo
-    arquivo é descompactado e tem o CRC conferido: o Decky apaga a versão instalada
-    antes de extrair, e um zip que falha no meio deixaria o usuário sem plugin.
+    This is the validation Decky doesn't do: the zip will be extracted as root into
+    ~/homebrew/plugins, so we only accept the `InsertPlay/` folder, with no absolute
+    paths, no `..`, no symlinks and no two names for the same file
+    (`InsertPlay/./plugin.json` is extracted over the validated `plugin.json`). Every
+    file is decompressed and CRC-checked: Decky deletes the installed version
+    before extracting, and a zip that fails halfway would leave the user without the plugin.
 
-    O arquivo é lido uma vez só, para que o hash devolvido (e conferido pelo Decky na
-    instalação) seja dos bytes validados."""
+    The file is read only once, so that the returned hash (checked by Decky on
+    install) is of the validated bytes."""
     try:
         if os.path.getsize(zip_path) > MAX_ZIP_BYTES:
             raise PackageError(f"{zip_path} is too large")
@@ -98,7 +98,7 @@ def read_package(zip_path: str) -> dict:
             for info in infos:
                 name = info.filename
                 parts = name.split("/")
-                # pasta termina em "/": só o último componente pode ser vazio
+                # a folder ends in "/": only the last component may be empty
                 inner = parts[:-1] if info.is_dir() else parts
                 if (
                     "\\" in name
@@ -111,7 +111,7 @@ def read_package(zip_path: str) -> dict:
                 seen.add(name)
                 if parts[0] != PLUGIN_NAME:
                     raise PackageError(f"zip must have a single {PLUGIN_NAME}/ folder, found {name!r}")
-                # bits de tipo no external_attr (Unix): 0o120000 = symlink
+                # type bits in external_attr (Unix): 0o120000 = symlink
                 if (info.external_attr >> 16) & 0o170000 == 0o120000:
                     raise PackageError(f"symlink in zip: {name!r}")
                 total += info.file_size
@@ -121,7 +121,7 @@ def read_package(zip_path: str) -> dict:
             missing = [r for r in REQUIRED if f"{PLUGIN_NAME}/{r}" not in names]
             if missing:
                 raise PackageError(f"zip is missing {', '.join(missing)}")
-            # descompacta tudo e confere o CRC; erro de descompressão também cai abaixo
+            # decompresses everything and checks the CRC; a decompression error also lands below
             bad = archive.testzip()
             if bad is not None:
                 raise PackageError(f"corrupt file in zip: {bad!r}")
@@ -130,8 +130,8 @@ def read_package(zip_path: str) -> dict:
     except PackageError:
         raise
     except Exception as exc:
-        # zip corrompido falha de muitos jeitos (BadZipFile, zlib.error, EOFError,
-        # NotImplementedError, RuntimeError de entrada cifrada...); todos são "inválido"
+        # a corrupt zip fails in many ways (BadZipFile, zlib.error, EOFError,
+        # NotImplementedError, RuntimeError for an encrypted entry...); all are "invalid"
         raise PackageError(f"invalid zip {zip_path}: {type(exc).__name__}: {exc}") from exc
     version = str(package.get("version") or "") if isinstance(package, dict) else ""
     parse_version(version)
@@ -139,7 +139,7 @@ def read_package(zip_path: str) -> dict:
 
 
 def read_package_cached(zip_path: str) -> dict:
-    """`read_package`, refeito só quando o arquivo muda (mtime ou tamanho)."""
+    """`read_package`, redone only when the file changes (mtime or size)."""
     st = os.stat(zip_path)
     key = (st.st_mtime_ns, st.st_size)
     hit = _cache.get(zip_path)
@@ -170,10 +170,10 @@ def _package_files(plugin_dir: str):
 
 
 def _card_package_dir(mount: str) -> str:
-    """`<cartão>/insertplay/decky`, criada se faltar, garantidamente dentro do cartão.
+    """`<card>/insertplay/decky`, created if missing, guaranteed to be inside the card.
 
-    O cartão é conteúdo de terceiros: um `insertplay` ou `decky` que seja symlink
-    levaria a gravação para fora dele."""
+    The card is third-party content: an `insertplay` or `decky` that is a symlink
+    would send the write outside it."""
     path = os.path.realpath(mount)
     for part in os.path.dirname(CARD_PACKAGE).split(os.sep):
         path = os.path.join(path, part)
@@ -187,22 +187,22 @@ def _card_package_dir(mount: str) -> str:
 
 
 def _write_atomic(dest_zip: str, fill) -> dict:
-    """Grava o zip com `fill(arquivo)`, valida e só então troca `dest_zip`.
+    """Writes the zip with `fill(file)`, validates it and only then swaps `dest_zip`.
 
-    O temporário é criado com O_EXCL e nome aleatório (mkstemp), então nunca segue um
-    symlink que já esteja no cartão. fsync antes do rename: cartão removido no meio da
-    gravação deixa o zip antigo intacto (ou um temporário órfão), nunca um zip pela
-    metade. `os.replace` troca o próprio `dest_zip`, mesmo se ele for um symlink."""
+    The temp file is created with O_EXCL and a random name (mkstemp), so it never follows a
+    symlink already on the card. fsync before the rename: a card removed mid-write
+    leaves the old zip intact (or an orphan temp file), never a half-written
+    zip. `os.replace` swaps `dest_zip` itself, even if it is a symlink."""
     folder = os.path.dirname(dest_zip)
     fd, tmp = tempfile.mkstemp(dir=folder, prefix=f".{PLUGIN_NAME}.", suffix=".zip.tmp")
     try:
         if hasattr(os, "fchmod"):
-            os.fchmod(fd, 0o644)  # mkstemp cria 0600; o pacote não é segredo
+            os.fchmod(fd, 0o644)  # mkstemp creates 0600; the package isn't secret
         with os.fdopen(fd, "wb") as f:
             fill(f)
             f.flush()
             os.fsync(f.fileno())
-        # valida antes de substituir: nunca troca um pacote bom por um quebrado
+        # validate before replacing: never swap a good package for a broken one
         info = read_package(tmp)
         os.replace(tmp, dest_zip)
     except BaseException:
@@ -212,7 +212,7 @@ def _write_atomic(dest_zip: str, fill) -> dict:
             pass
         raise
     _fsync_dir(folder)
-    # os.replace mantém os bytes validados: guarda o resultado em vez de reler o cartão
+    # os.replace keeps the validated bytes: cache the result instead of rereading the card
     st = os.stat(dest_zip)
     _cache[dest_zip] = ((st.st_mtime_ns, st.st_size), info)
     return dict(info)
@@ -228,23 +228,23 @@ def _zip_dir(plugin_dir: str):
 
 
 def build_zip_from_dir(plugin_dir: str, dest_zip: str) -> dict:
-    """Empacota a pasta do plugin em `dest_zip` (uma pasta do desenvolvedor, como o
-    `out/` do package.sh) e devolve `read_package` dele. Para o cartão, use
+    """Packs the plugin folder into `dest_zip` (a developer folder, like
+    package.sh's `out/`) and returns its `read_package`. For the card, use
     `write_card_package`."""
     os.makedirs(os.path.dirname(dest_zip) or ".", exist_ok=True)
     return _write_atomic(dest_zip, _zip_dir(plugin_dir))
 
 
 def write_card_package(plugin_dir: str, mount: str) -> dict:
-    """Empacota a pasta do plugin direto no pacote do cartão."""
+    """Packs the plugin folder straight into the card's package."""
     dest = os.path.join(_card_package_dir(mount), os.path.basename(CARD_PACKAGE))
     return _write_atomic(dest, _zip_dir(plugin_dir))
 
 
 def copy_package_to_card(src_zip: str, mount: str) -> tuple:
-    """Copia um zip pronto (out/InsertPlay.zip) para o cartão, sem rebaixar versão:
-    se o cartão já tem um pacote válido mais novo, ele fica. Devolve
-    `(info do pacote no cartão, copiou?)`."""
+    """Copies a ready zip (out/InsertPlay.zip) to the card, never downgrading:
+    if the card already has a newer valid package, it stays. Returns
+    `(info of the package on the card, copied?)`."""
     new = read_package(src_zip)
     dest = os.path.join(_card_package_dir(mount), os.path.basename(CARD_PACKAGE))
     if os.path.isfile(dest):
@@ -267,7 +267,7 @@ def _fsync_dir(path: str) -> None:
     try:
         fd = os.open(path, os.O_RDONLY)
     except OSError:
-        return  # Windows não abre diretório; no Deck isto sempre funciona
+        return  # Windows can't open a directory; on the Deck this always works
     try:
         os.fsync(fd)
     except OSError:
@@ -277,10 +277,10 @@ def _fsync_dir(path: str) -> None:
 
 
 def card_status(mount: str, installed_version: str) -> dict:
-    """Situação do pacote de um cartão em relação ao plugin instalado.
+    """State of a card's package relative to the installed plugin.
 
-    `relation`: `missing` (sem zip), `invalid`, `newer` (o cartão traz versão mais
-    nova), `older` ou `same`."""
+    `relation`: `missing` (no zip), `invalid`, `newer` (the card carries a newer
+    version), `older` or `same`."""
     path = card_package_path(mount)
     out = {"zipPath": path, "version": None, "sha256": None, "relation": "missing", "error": None}
     if not os.path.isfile(path):
@@ -293,6 +293,6 @@ def card_status(mount: str, installed_version: str) -> dict:
     try:
         cmp = compare_versions(out["version"], installed_version)
     except PackageError:
-        cmp = 1  # versão instalada ilegível: qualquer pacote válido do cartão serve
+        cmp = 1  # unreadable installed version: any valid package on the card will do
     out["relation"] = {1: "newer", 0: "same", -1: "older"}[cmp]
     return out

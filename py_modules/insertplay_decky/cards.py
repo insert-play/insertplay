@@ -1,6 +1,6 @@
-"""Detecção de cartões InsertPlay montados.
+"""Detection of mounted InsertPlay cards.
 
-Sem import de `decky`: tudo aqui roda e é testado fora do Deck.
+No `decky` import: everything here runs and is tested off the Deck.
 """
 import glob
 import os
@@ -23,14 +23,14 @@ def manifest_path(mount: str):
 
 
 def find_cards(media_roots: list) -> list:
-    """Cartões com manifesto InsertPlay, cada um exatamente uma vez.
+    """Cards with an InsertPlay manifest, each exactly once.
 
-    No SteamOS `/run/media/<rótulo>` é symlink para `/run/media/deck/<rótulo>`, então os
-    dois níveis do glob acham o mesmo cartão. Deduplicamos por realpath e o ponto de
-    montagem real vence o symlink (mesma lógica de decky-nonsteam-sync/cards.py).
+    On SteamOS `/run/media/<label>` is a symlink to `/run/media/deck/<label>`, so both
+    glob levels find the same card. We dedupe by realpath and the real mount
+    point wins over the symlink (same logic as decky-nonsteam-sync/cards.py).
 
-    Uma subpasta de um cartão já encontrado nunca é outro cartão — sem isso a pasta
-    `insertplay/` do layout legado, que tem o próprio manifesto, contaria duas vezes."""
+    A subfolder of a card already found is never another card — without this the
+    `insertplay/` folder of the legacy layout, which has its own manifest, would count twice."""
     cards = {}
     for root in media_roots:
         for pattern in (os.path.join(root, "*"), os.path.join(root, "*", "*")):
@@ -48,19 +48,19 @@ def find_cards(media_roots: list) -> list:
 
 
 def diff(previous: dict, current: dict) -> tuple:
-    """Compara dois instantâneos `{real: card}` e devolve (inseridos, removidos)."""
+    """Compares two `{real: card}` snapshots and returns (inserted, removed)."""
     inserted = [current[k] for k in sorted(current) if k not in previous]
     removed = [previous[k] for k in sorted(previous) if k not in current]
     return inserted, removed
 
 
 def disk_is_removable(mount: str, sys_root: str = "/sys", resolve=os.path.realpath) -> bool:
-    """O disco do ponto de montagem se declara removível no kernel (`removable` = 1).
+    """The mount point's disk declares itself removable in the kernel (`removable` = 1).
 
-    Medido em 2026-10-24: o leitor USB da Steam Machine (`/dev/sda1`) tem `removable` 1,
-    mas o Steam marca a biblioteca do cartão como `bIsFixed: true`. Sem isto, cartão em
-    leitor USB nunca conta como cartão. O `removable` fica no disco, não na partição:
-    `/sys/dev/block/<maj>:<min>` aponta para a partição, e o arquivo está na pasta pai."""
+    Measured on 2026-10-24: the Steam Machine's USB reader (`/dev/sda1`) has `removable` 1,
+    but Steam marks the card's library as `bIsFixed: true`. Without this, a card in a
+    USB reader never counts as a card. `removable` is on the disk, not the partition:
+    `/sys/dev/block/<maj>:<min>` points to the partition, and the file is in the parent folder."""
     try:
         dev = os.stat(mount).st_dev
         node = resolve(os.path.join(sys_root, "dev", "block", f"{os.major(dev)}:{os.minor(dev)}"))
@@ -69,19 +69,19 @@ def disk_is_removable(mount: str, sys_root: str = "/sys", resolve=os.path.realpa
             if os.path.isfile(flag):
                 with open(flag) as f:
                     return f.read().strip() == "1"
-    except (OSError, AttributeError):  # AttributeError: os.major não existe fora do POSIX
+    except (OSError, AttributeError):  # AttributeError: os.major doesn't exist outside POSIX
         pass
     return False
 
 
 def library_card(path: str, media_roots: list, ismount=os.path.ismount, removable=disk_is_removable):
-    """Cartão onde fica uma biblioteca Steam (`path` vem do Steam e pode ser subpasta,
-    como `Games/SteamLibrary`). Devolve `{"mount", "label", "insertplay", "removable"}`
-    ou `None` se o caminho não está em mídia montada.
+    """Card holding a Steam library (`path` comes from Steam and may be a subfolder,
+    like `Games/SteamLibrary`). Returns `{"mount", "label", "insertplay", "removable"}`
+    or `None` if the path is not on mounted media.
 
-    `insertplay` olha o manifesto no disco, não `find_cards`: o Steam avisa da biblioteca
-    antes da próxima varredura do backend, e o cartão InsertPlay que também tem
-    biblioteca Steam não pode ganhar a notificação dos dois fluxos."""
+    `insertplay` checks the manifest on disk, not `find_cards`: Steam reports the library
+    before the backend's next scan, and an InsertPlay card that also has a
+    Steam library must not get the notification from both flows."""
     roots = [os.path.realpath(r) for r in media_roots]
     current = os.path.realpath(path)
     if not any(current.startswith(r.rstrip(os.sep) + os.sep) for r in roots):

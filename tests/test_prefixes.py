@@ -1,4 +1,4 @@
-"""Save portátil (issue #13). Symlink de verdade: só roda em Linux/WSL."""
+"""Portable saves (issue #13). Real symlinks: only runs on Linux/WSL."""
 import json
 import os
 import shutil
@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "py_modules"))
 
 from insertplay_decky import prefixes  # noqa: E402
 
-pytestmark = pytest.mark.skipif(os.name != "posix", reason="symlink e /proc/mounts são do Linux")
+pytestmark = pytest.mark.skipif(os.name != "posix", reason="symlink and /proc/mounts are Linux-only")
 
 APPID = 12200
 NOW = 1_800_000_000.0
@@ -19,7 +19,7 @@ STEAMUSER = os.path.join("pfx", "drive_c", "users", "steamuser")
 
 @pytest.fixture(autouse=True)
 def no_live_games(monkeypatch):
-    """Nenhum jogo rodando no /proc do teste, a não ser que o teste diga outro."""
+    """No game running in the test's /proc, unless the test says otherwise."""
     monkeypatch.setattr(prefixes, "LIVE_APPIDS", lambda: set())
 
 
@@ -41,11 +41,11 @@ def leftover(env, appid=APPID):
 
 
 def make_prefix(path, save_mtime=None):
-    """Prefixo com `pfx/`. `save_mtime` cria um arquivo de usuário (o save) com esse mtime;
-    sem ele, o prefixo é como o que o Steam cria num move: nenhum arquivo de usuário."""
+    """Prefix with `pfx/`. `save_mtime` creates a user file (the save) with that mtime;
+    without it, the prefix is like the one Steam creates on a move: no user file."""
     users = os.path.join(path, STEAMUSER)
     os.makedirs(os.path.join(users, "AppData", "Local", "Temp"), exist_ok=True)
-    os.symlink("./Documents", os.path.join(users, "My Documents"))  # como o Proton cria
+    os.symlink("./Documents", os.path.join(users, "My Documents"))  # as Proton creates it
     os.makedirs(os.path.join(path, "pfx", "drive_c", "windows", "system32"))
     with open(os.path.join(path, "config_info"), "w") as f:
         f.write("11.0-100\n")
@@ -59,7 +59,7 @@ def make_prefix(path, save_mtime=None):
 
 
 def make_userdata(path, save_mtime):
-    """Só a pasta `steamuser` (como fica no cartão no modo userdata)."""
+    """Only the `steamuser` folder (as it sits on the card in userdata mode)."""
     save = os.path.join(path, "Documents", "save.dat")
     os.makedirs(os.path.dirname(save))
     with open(save, "w") as f:
@@ -97,7 +97,7 @@ def ssd_backups(env, parent=None):
     return [n for n in os.listdir(folder) if ".insertplay-backup-" in n]
 
 
-# ---- modo prefixo ----------------------------------------------------------------
+# ---- prefix mode -----------------------------------------------------------------
 
 
 def test_off_does_nothing(env):
@@ -112,8 +112,8 @@ def test_prefix_migrates_ssd_prefix_to_card_and_links(env):
     dest = prefixes.card_prefix(env["mount"], APPID)
     assert os.readlink(ssd(env)) == dest
     assert save_of(dest) == original
-    assert os.path.islink(os.path.join(dest, STEAMUSER, "My Documents"))  # link interno copiado como link
-    assert len(ssd_backups(env)) == 1  # o original fica no SSD, nada apagado
+    assert os.path.islink(os.path.join(dest, STEAMUSER, "My Documents"))  # inner link copied as a link
+    assert len(ssd_backups(env)) == 1  # the original stays on the SSD, nothing deleted
 
 
 def test_second_pass_is_a_no_op(env):
@@ -140,32 +140,32 @@ def test_running_game_is_not_touched(env):
 
 
 def test_fresh_prefix_never_beats_a_save_and_is_kept_quietly(env):
-    """Depois de um move o Steam cria um prefixo vazio no SSD, mais novo que tudo."""
+    """After a move Steam creates an empty prefix on the SSD, newer than everything."""
     card = make_prefix(prefixes.card_prefix(env["mount"], APPID), save_mtime=NOW - 1000)
-    make_prefix(ssd(env))  # sem arquivo de usuário
-    assert run(env) == {APPID: "linked"}  # sem save do outro lado: não é conflito
+    make_prefix(ssd(env))  # no user file
+    assert run(env) == {APPID: "linked"}  # no save on the other side: not a conflict
     assert os.readlink(ssd(env)) == card
-    assert len(ssd_backups(env)) == 1  # mas fica guardado
+    assert len(ssd_backups(env)) == 1  # but it is kept
 
 
 def test_newest_save_wins_and_card_copy_becomes_backup(env):
-    """Jogado depois num aparelho com plugin antigo: o save do SSD é o mais recente."""
+    """Played later on a device with an old plugin: the SSD save is the newest."""
     card = make_prefix(prefixes.card_prefix(env["mount"], APPID), save_mtime=NOW - 1000)
     ssd_prefix = make_prefix(ssd(env), save_mtime=NOW - 10)
     assert run(env) == {APPID: "conflict"}
-    assert save_of(card) == ssd_prefix  # o cartão agora tem o save do SSD
+    assert save_of(card) == ssd_prefix  # the card now has the SSD save
     [backup] = backups(env)
     assert save_of(os.path.join(env["mount"], ".insertplay", "backups", backup)) == card
 
 
 def test_prefix_leftover_from_a_move_is_adopted(env):
-    """Move SSD → cartão sem link: o Steam leva o prefixo para `steamapps/compatdata` e
-    recria um vazio no SSD."""
+    """SSD → card move without a link: Steam takes the prefix to `steamapps/compatdata` and
+    recreates an empty one on the SSD."""
     moved = make_prefix(leftover(env), save_mtime=NOW - 500)
     make_prefix(ssd(env))
     assert run(env) == {APPID: "migrated"}
     assert save_of(prefixes.card_prefix(env["mount"], APPID)) == moved
-    assert not os.path.exists(leftover(env))  # não bloqueia mais o move de volta
+    assert not os.path.exists(leftover(env))  # no longer blocks the move back
 
 
 def test_copy_left_by_a_move_through_the_link_goes_to_backups(env):
@@ -211,7 +211,7 @@ def test_game_moved_off_the_card_gets_a_copy_on_the_ssd(env):
     assert run(env, appids=[], elsewhere=[APPID]) == {APPID: "restored"}
     assert not os.path.islink(ssd(env))
     assert save_of(ssd(env)) == card
-    assert save_of(card) == card  # cartão intacto
+    assert save_of(card) == card  # card intact
 
 
 def test_uninstalled_game_only_loses_the_link(env):
@@ -243,14 +243,14 @@ def test_turning_off_refuses_while_a_card_game_runs(env):
 def test_unlink_dangling_only_removes_our_broken_links(env, tmp_path):
     make_prefix(prefixes.card_prefix(env["mount"], APPID), save_mtime=NOW - 100)
     run(env)
-    os.symlink(str(tmp_path / "gone" / "x"), ssd(env, 111))  # link alheio quebrado
-    os.rename(env["mount"], env["mount"] + "-out")  # cartão "removido"
+    os.symlink(str(tmp_path / "gone" / "x"), ssd(env, 111))  # broken foreign link
+    os.rename(env["mount"], env["mount"] + "-out")  # card "removed"
     assert prefixes.unlink_dangling(env["steam"]) == [APPID]
     assert not os.path.lexists(ssd(env))
     assert os.path.islink(ssd(env, 111))
 
 
-# ---- modo userdata (só steamuser) -----------------------------------------------
+# ---- userdata mode (steamuser only) ---------------------------------------------
 
 
 def ssd_user(env, appid=APPID):
@@ -263,15 +263,15 @@ def test_userdata_moves_only_steamuser(env):
     dest = prefixes.card_userdata(env["mount"], APPID)
     assert os.readlink(ssd_user(env)) == dest
     assert save_in(dest) == original
-    assert os.path.isdir(os.path.join(ssd(env), "pfx", "drive_c", "windows"))  # o resto fica no SSD
+    assert os.path.isdir(os.path.join(ssd(env), "pfx", "drive_c", "windows"))  # the rest stays on the SSD
     assert not os.path.islink(ssd(env))
     users = os.path.dirname(ssd_user(env))
-    assert len(ssd_backups(env, users)) == 1  # steamuser original guardado ao lado
+    assert len(ssd_backups(env, users)) == 1  # original steamuser kept alongside
 
 
 def test_userdata_builds_the_skeleton_on_a_device_where_the_game_never_ran(env):
-    """Steam Machine com o cartão do Deck: sem prefixo. Medido: o Proton monta o prefixo
-    em volta do link e o save aparece já na primeira abertura."""
+    """Steam Machine with the Deck's card: no prefix. Measured: Proton builds the prefix
+    around the link and the save shows up on the very first launch."""
     dest = make_userdata(prefixes.card_userdata(env["mount"], APPID), NOW - 100)
     assert run(env, mode="userdata") == {APPID: "linked"}
     assert os.readlink(ssd_user(env)) == dest
@@ -279,7 +279,7 @@ def test_userdata_builds_the_skeleton_on_a_device_where_the_game_never_ran(env):
 
 def test_userdata_fresh_steamuser_loses_quietly(env):
     dest = make_userdata(prefixes.card_userdata(env["mount"], APPID), NOW - 1000)
-    make_prefix(ssd(env))  # o jogo rodou aqui sem o cartão e não salvou nada
+    make_prefix(ssd(env))  # the game ran here without the card and saved nothing
     assert run(env, mode="userdata") == {APPID: "linked"}
     assert os.readlink(ssd_user(env)) == dest
 
@@ -295,7 +295,7 @@ def test_userdata_newest_save_wins(env):
 def test_userdata_leftover_from_a_move_goes_to_backups(env):
     make_userdata(prefixes.card_userdata(env["mount"], APPID), NOW - 100)
     run(env, mode="userdata")
-    make_prefix(leftover(env), save_mtime=NOW - 100)  # move SSD → cartão copiou o prefixo
+    make_prefix(leftover(env), save_mtime=NOW - 100)  # SSD → card move copied the prefix
     assert run(env, mode="userdata") == {APPID: "leftover"}
     assert not os.path.exists(leftover(env))
 
@@ -315,14 +315,14 @@ def test_switching_prefix_to_userdata_copies_back_first(env):
     set_mode(env, "prefix")
     assert os.path.islink(ssd(env))
     assert set_mode(env, "userdata") == {APPID: "migrated"}
-    assert not os.path.islink(ssd(env))  # o prefixo voltou ao SSD
+    assert not os.path.islink(ssd(env))  # the prefix went back to the SSD
     assert os.readlink(ssd_user(env)) == prefixes.card_userdata(env["mount"], APPID)
     assert save_in(ssd_user(env)) == original
 
 
 def test_choosing_the_active_mode_again_changes_nothing(env):
-    """Painel desatualizado manda o mesmo modo duas vezes (visto no Deck): não pode copiar
-    de volta, refazer o link nem avisar conflito."""
+    """A stale panel sends the same mode twice (seen on the Deck): must not copy
+    back, redo the link or warn of a conflict."""
     make_prefix(ssd(env), save_mtime=NOW - 100)
     set_mode(env, "userdata")
     link = os.readlink(ssd_user(env))
@@ -335,7 +335,7 @@ def test_identical_copies_are_not_a_conflict(env):
     card = make_userdata(prefixes.card_userdata(env["mount"], APPID), NOW - 100)
     make_prefix(ssd(env))
     shutil.rmtree(ssd_user(env))
-    shutil.copytree(card, ssd_user(env), symlinks=True)  # mesma data: cópia do mesmo save
+    shutil.copytree(card, ssd_user(env), symlinks=True)  # same date: a copy of the same save
     assert run(env, mode="userdata") == {APPID: "linked"}
     assert len(ssd_backups(env, os.path.dirname(ssd_user(env)))) == 1
 
@@ -348,7 +348,7 @@ def test_userdata_unlink_dangling(env):
     assert not os.path.lexists(ssd_user(env))
 
 
-# ---- cartão --------------------------------------------------------------------
+# ---- card ----------------------------------------------------------------------
 
 
 def test_mode_lives_on_the_card(env):
@@ -358,7 +358,7 @@ def test_mode_lives_on_the_card(env):
     with open(prefixes.config_path(env["mount"])) as f:
         assert json.load(f) == {"mode": "userdata", "minVersion": "0.5.0"}
     with pytest.raises(ValueError):
-        set_mode(env, "tudo")
+        set_mode(env, "everything")
 
 
 def test_fs_type_reads_escaped_mount_points(tmp_path, env):
@@ -382,16 +382,16 @@ def test_fs_type_handles_spaces(tmp_path):
     assert prefixes.fs_type(str(mount), str(mounts)) == "ext4"
 
 
-# ---- achados da revisão ---------------------------------------------------------
+# ---- review findings -----------------------------------------------------------
 
 
 def test_off_on_another_device_releases_this_devices_links(env):
-    """Desligado no outro aparelho: o link que este ainda tem vira cópia, senão o save
-    sumiria daqui quando o cartão saísse."""
+    """Turned off on the other device: the link this one still has becomes a copy, otherwise the save
+    would vanish from here when the card left."""
     card = make_userdata(prefixes.card_userdata(env["mount"], APPID), NOW - 100)
     make_prefix(ssd(env))
     run(env, mode="userdata")
-    prefixes._write_mode(env["mount"], "off", "0.5.0")  # o que o outro aparelho gravou
+    prefixes._write_mode(env["mount"], "off", "0.5.0")  # what the other device wrote
     assert prefixes.sync(env["mount"], env["libraries"], [APPID], [], [], env["steam"]) == {APPID: "restored"}
     assert not os.path.islink(ssd_user(env))
     assert save_in(ssd_user(env)) == card
@@ -407,8 +407,8 @@ def test_failed_copy_back_keeps_the_mode(env, monkeypatch):
 
     monkeypatch.setattr(prefixes, "_copy", full_disk)
     assert set_mode(env, "off")[APPID].startswith("error")
-    assert prefixes.get_mode(env["mount"]) == "userdata"  # tenta de novo depois
-    assert os.path.islink(ssd_user(env))  # o link ficou: o jogo continua com o save
+    assert prefixes.get_mode(env["mount"]) == "userdata"  # tries again later
+    assert os.path.islink(ssd_user(env))  # the link stayed: the game keeps its save
 
 
 def test_copy_is_discarded_when_the_game_saves_during_it(env, monkeypatch):
@@ -418,11 +418,11 @@ def test_copy_is_discarded_when_the_game_saves_during_it(env, monkeypatch):
     def slow_copy(src, dest):
         real_copy(src, dest)
         save = os.path.join(src, STEAMUSER, "Documents", "save.dat")
-        os.utime(save, (NOW - 5, NOW - 5))  # o jogo abriu e salvou no meio da cópia
+        os.utime(save, (NOW - 5, NOW - 5))  # the game opened and saved mid-copy
 
     monkeypatch.setattr(prefixes, "_copy", slow_copy)
     assert run(env) == {APPID: "changed"}
-    assert not os.path.islink(ssd(env))  # SSD intacto
+    assert not os.path.islink(ssd(env))  # SSD intact
     assert save_of(ssd(env)) == original
     assert not os.path.exists(prefixes.card_prefix(env["mount"], APPID))
 
@@ -430,7 +430,7 @@ def test_copy_is_discarded_when_the_game_saves_during_it(env, monkeypatch):
 def test_invalid_card_destination_goes_to_backups(env):
     original = make_prefix(ssd(env), save_mtime=NOW - 100)
     broken = prefixes.card_prefix(env["mount"], APPID)
-    os.makedirs(broken)  # sem `pfx`: só `version` gravado pelo link, por exemplo
+    os.makedirs(broken)  # no `pfx`: only `version` written through the link, for example
     with open(os.path.join(broken, "version"), "w") as f:
         f.write("11.0-100\n")
     assert run(env) == {APPID: "migrated"}
@@ -453,8 +453,8 @@ def test_unescape_is_a_single_pass():
 
 
 def test_dxvk_cache_does_not_count_as_user_data(env):
-    """Metro: o cache do DXVK é regravado a cada execução. Sem save, o aparelho que rodou
-    por último não pode vencer quem tem save."""
+    """Metro: the DXVK cache is rewritten on every run. Without a save, the device that ran
+    last must not beat the one with a save."""
     card = make_userdata(prefixes.card_userdata(env["mount"], APPID), NOW - 1000)
     make_prefix(ssd(env))
     cache = os.path.join(ssd_user(env), "AppData", "Local", "dxvk", "game.dxvk.bin")
@@ -467,7 +467,7 @@ def test_dxvk_cache_does_not_count_as_user_data(env):
 
 
 def test_read_only_card_is_not_ok(tmp_path, env):
-    """Cartão do Metro no Deck: ext4 com erro, remontado só leitura (`emergency_ro`)."""
+    """Metro's card on the Deck: ext4 with an error, remounted read-only (`emergency_ro`)."""
     mounts = tmp_path / "mounts"
     point = env["mount"].replace(" ", "\\040")
     mounts.write_text(f"/dev/sda1 {point} ext4 rw,nosuid,nodev,noatime,errors=remount-ro,emergency_ro 0 0\n", encoding="utf-8")
@@ -477,16 +477,16 @@ def test_read_only_card_is_not_ok(tmp_path, env):
     assert prefixes.status(env["mount"], str(mounts))["fsOk"] is False
 
 
-# ---- revisão do Copilot na PR #14 ----------------------------------------------
+# ---- Copilot review on PR #14 --------------------------------------------------
 
 
 @pytest.mark.parametrize("old, new", [("userdata", "prefix"), ("prefix", "userdata")])
 def test_mode_switched_on_another_device_replaces_the_old_link(env, old, new):
-    """O outro aparelho trocou o modo do cartão. O link do modo antigo daqui vira cópia e o
-    novo modo assume, em vez de `foreign` para sempre."""
+    """The other device switched the card's mode. The old mode's link here becomes a copy and the
+    new mode takes over, instead of `foreign` forever."""
     make_prefix(ssd(env), save_mtime=NOW - 100)
     run(env, mode=old)
-    prefixes._write_mode(env["mount"], new, "0.5.0")  # gravado pelo outro aparelho
+    prefixes._write_mode(env["mount"], new, "0.5.0")  # written by the other device
     result = prefixes.sync(env["mount"], env["libraries"], [APPID], [], [], env["steam"], now=NOW)
     assert result[APPID] in ("migrated", "linked", "conflict")
     if new == "prefix":
@@ -503,11 +503,11 @@ def test_mode_switch_waits_for_a_running_game(env, monkeypatch):
     prefixes._write_mode(env["mount"], "prefix", "0.5.0")
     monkeypatch.setattr(prefixes, "LIVE_APPIDS", lambda: {APPID})
     assert prefixes.sync(env["mount"], env["libraries"], [APPID], [], [], env["steam"], now=NOW) == {APPID: "running"}
-    assert os.path.islink(ssd_user(env))  # o link antigo segue até o jogo fechar
+    assert os.path.islink(ssd_user(env))  # the old link stays until the game closes
 
 
 def test_game_detected_live_is_not_touched(env, monkeypatch):
-    """A lista do frontend disse que nada estava aberto, mas o /proc tem o jogo."""
+    """The frontend's list said nothing was open, but /proc has the game."""
     make_prefix(ssd(env), save_mtime=NOW - 100)
     monkeypatch.setattr(prefixes, "LIVE_APPIDS", lambda: {APPID})
     assert run(env) == {APPID: "running"}
@@ -540,11 +540,11 @@ def test_restore_keeps_the_link_when_the_save_changes_during_the_copy(env, monke
     def copy_while_saving(src, dest):
         real_copy(src, dest)
         save = os.path.join(card, "Documents", "save.dat")
-        os.utime(save, (NOW - 5, NOW - 5))  # o jogo gravou pelo link durante a cópia
+        os.utime(save, (NOW - 5, NOW - 5))  # the game saved through the link during the copy
 
     monkeypatch.setattr(prefixes, "_copy", copy_while_saving)
     assert set_mode(env, "off") == {APPID: "changed"}
-    assert prefixes.get_mode(env["mount"]) == "userdata"  # tenta de novo depois
+    assert prefixes.get_mode(env["mount"]) == "userdata"  # tries again later
     assert os.path.islink(ssd_user(env))
 
 
@@ -553,7 +553,7 @@ def test_interrupted_restore_stage_does_not_block_the_next_one(env):
     make_prefix(ssd(env))
     run(env, mode="userdata")
     stale = ssd_user(env) + ".insertplay-restore"
-    shutil.copytree(card, stale, symlinks=True)  # cópia pronta, troca não aconteceu
+    shutil.copytree(card, stale, symlinks=True)  # copy finished, swap didn't happen
     assert set_mode(env, "off") == {APPID: "restored"}
     assert save_in(ssd_user(env)) == card
     users = os.path.dirname(ssd_user(env))
@@ -561,8 +561,8 @@ def test_interrupted_restore_stage_does_not_block_the_next_one(env):
 
 
 def test_newer_save_left_by_desktop_steam_wins_over_the_card(env):
-    """Steam do modo desktop usa `steamapps/compatdata` da biblioteca: um save feito lá é
-    mais novo que o do cartão e não pode virar backup em silêncio."""
+    """Desktop-mode Steam uses the library's `steamapps/compatdata`: a save made there is
+    newer than the card's and must not silently become a backup."""
     card = make_prefix(prefixes.card_prefix(env["mount"], APPID), save_mtime=NOW - 1000)
     run(env)
     desktop = make_prefix(leftover(env), save_mtime=NOW - 10)
@@ -576,7 +576,7 @@ def test_unlink_dangling_keeps_a_running_games_link(env, monkeypatch):
     make_userdata(prefixes.card_userdata(env["mount"], APPID), NOW - 100)
     make_prefix(ssd(env))
     run(env, mode="userdata")
-    os.rename(env["mount"], env["mount"] + "-out")  # cartão tirado no meio do jogo
+    os.rename(env["mount"], env["mount"] + "-out")  # card pulled mid-game
     assert prefixes.unlink_dangling(env["steam"], [APPID]) == []
     monkeypatch.setattr(prefixes, "LIVE_APPIDS", lambda: {APPID})
     assert prefixes.unlink_dangling(env["steam"]) == []
@@ -587,5 +587,5 @@ def test_live_appids_reads_steamappid_from_proc(tmp_path):
     for pid, env in (("10", b"HOME=/home/deck\0SteamAppId=12200\0"), ("11", b"PATH=/usr/bin\0"), ("self", b"")):
         os.makedirs(tmp_path / pid)
         (tmp_path / pid / "environ").write_bytes(env)
-    os.makedirs(tmp_path / "12")  # sem environ legível
+    os.makedirs(tmp_path / "12")  # no readable environ
     assert prefixes.live_appids(str(tmp_path)) == {12200}

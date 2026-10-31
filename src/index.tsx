@@ -65,7 +65,7 @@ function failed(what: string, err: unknown) {
   toaster.toast({ title: "InsertPlay", body: `${what} falhou: ${detail}`, duration: 10000 });
 }
 
-/** Instalar/atualizar o plugin pelo cartão e gravar a versão instalada no cartão. */
+/** Install/update the plugin from the card and write the installed version to the card. */
 function PackageRow({ pkg, installed, onChange }: { pkg: CardPackage; installed: string; onChange: () => void }) {
   const [busy, setBusy] = useState(false);
 
@@ -142,8 +142,8 @@ const PORTABLE_MODES: { data: PortableMode; label: string; description: string }
   },
 ];
 
-/** Save portátil de um cartão com jogos Steam. Vale para o cartão inteiro e fica gravado
- *  nele. Sair de um modo copia o que está no cartão de volta para o aparelho. */
+/** Portable saves of a card with Steam games. Applies to the whole card and is stored
+ *  on it. Leaving a mode copies what is on the card back to the device. */
 function PortableRow({
   card,
   status,
@@ -153,8 +153,8 @@ function PortableRow({
   status: PortableStatus | undefined;
   onChange: () => void;
 }) {
-  // Enquanto a escolha roda (a cópia leva segundos), o seletor já mostra o modo escolhido,
-  // desabilitado e com spinner. A mudança mora no flow.ts e sobrevive ao painel remontar.
+  // While the choice runs (the copy takes seconds), the selector already shows the chosen mode,
+  // disabled and with a spinner. The change lives in flow.ts and survives the panel remounting.
   const change = portableChange(card.mount);
   useEffect(() => {
     if (change?.done && status?.mode === change.mode) settlePortableChange(card.mount);
@@ -162,7 +162,7 @@ function PortableRow({
   const pending = change && !change.done ? change.mode : null;
   const settled = change?.done ? change.mode : status?.mode ?? "off";
   const current = pending ?? settled;
-  // falha: o seletor volta ao modo anterior; o toast diz por quê
+  // failure: the selector reverts to the previous mode; the toast says why
   const apply = (mode: PortableMode) => void setPortable(card, mode).finally(onChange);
   const choose = (mode: PortableMode) => {
     if (pending || mode === settled) return;
@@ -213,26 +213,26 @@ function Panel() {
 
   const refresh = useCallback(async () => {
     const [c, s, l, p] = await Promise.all([currentCards(), getSettings(), logTail(8), packageStatus()]);
-    if (Array.isArray(c)) setCards(c); // null = backend ainda varrendo; mantém o que havia
+    if (Array.isArray(c)) setCards(c); // null = backend still scanning; keep what was there
     setSettings(s);
     setLog(l);
     if (p) setPkg(p);
     const present = await Promise.all(
       steamCardsPresent().map(async (card) => ({ card, status: (await portableStatus(card.mount)) ?? undefined })),
     );
-    // só cartão com jogo Steam; um cartão ligado que ficou sem jogos continua, para desligar
+    // only cards with Steam games; an enabled card left with no games stays, to turn it off
     setPortableCards(present.filter(({ card, status }) => card.apps.length > 0 || (status && status.mode !== "off")));
   }, []);
 
   useEffect(() => {
     void refresh();
-    // espera a fila do flow.ts tratar o evento antes de reler o estado
+    // wait for the flow.ts queue to handle the event before re-reading the state
     const later = () => setTimeout(() => void refresh(), 1500);
     const subs = REFRESH_EVENTS.map((name) => addEventListener(name, later));
-    // começo e fim de uma mudança do save portátil: redesenha já, com o status novo
+    // start and end of a portable saves change: redraw now, with the new status
     const stopPortable = onPortableChange(() => void refresh());
-    // O Decky mantém o painel montado entre aberturas do Quick Access; sem isto ele
-    // mostraria um estado velho até alguém clicar em "Atualizar" (medido no Deck).
+    // Decky keeps the panel mounted between Quick Access openings; without this it
+    // would show a stale state until someone clicks "Atualizar" (measured on the Deck).
     const timer = setInterval(() => void refresh(), 5000);
     return () => {
       clearInterval(timer);
@@ -327,18 +327,18 @@ export default definePlugin(() => {
     void notifyNewerPackage(card.mount).catch(() => undefined);
   });
   const removed = addEventListener<[{ mount: string; label: string }]>("card_removed", (card) => void onRemoved(card));
-  // Cartão com biblioteca Steam e sem manifesto InsertPlay não gera evento do backend:
-  // quem avisa é o Steam, para o badge e para a notificação (issue #10).
+  // A card with a Steam library and no InsertPlay manifest raises no backend event:
+  // Steam is what notifies, for the badge and for the notification (issue #10).
   const stopFolders = onInstallFoldersChanged(() => void onSteamLibrariesChanged());
-  // A janela da biblioteca pode não existir quando o plugin carrega (jogo aberto, Steam
-  // iniciando). Entrar na biblioteca é o gatilho para prender os badges nela.
+  // The library window may not exist when the plugin loads (game running, Steam
+  // starting). Entering the library is the trigger to attach the badges to it.
   const libraryPatch = routerHook.addPatch("/library", (tree: unknown) => {
     showBadges();
     return tree;
   });
   const portableTimer = setInterval(() => void portableTick(), PORTABLE_TICK_MS);
   void reconcile();
-  // retrato inicial das bibliotecas, mesmo que o Steam deixe de chamar o callback no registro
+  // initial library snapshot, even if Steam stops calling the callback on registration
   void onSteamLibrariesChanged();
   return {
     name: "InsertPlay",

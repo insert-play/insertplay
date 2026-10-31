@@ -22,7 +22,7 @@ def make_plugin_dir(root, version="0.2.0", flags=(), name="InsertPlay"):
     (plugin / "dist" / "index.js").write_text("// js\n", encoding="utf-8")
     (plugin / "py_modules" / "insertplay_decky" / "cards.py").write_text("# cards\n", encoding="utf-8")
     (plugin / "py_modules" / "insertplay_decky" / "__pycache__" / "cards.cpython-312.pyc").write_bytes(b"x")
-    (plugin / "stray.txt").write_text("fora do pacote\n", encoding="utf-8")
+    (plugin / "stray.txt").write_text("outside the package\n", encoding="utf-8")
     return plugin
 
 
@@ -101,7 +101,7 @@ def test_build_keeps_old_package_when_new_one_is_invalid(tmp_path):
         (valid_entries(name="Other"), "not the InsertPlay"),
         ({k: v for k, v in valid_entries().items() if not k.endswith("index.js")}, "dist/index.js"),
         (valid_entries(version="banana"), "invalid version"),
-        # extraídos por cima do plugin.json validado (review do PR #6)
+        # extracted over the validated plugin.json (PR #6 review)
         ({**valid_entries(), "InsertPlay/./plugin.json": '{"name": "InsertPlay", "flags": ["root"]}'}, "unsafe"),
         ({**valid_entries(), "InsertPlay//plugin.json": '{"name": "InsertPlay", "flags": ["root"]}'}, "unsafe"),
         ({**valid_entries(), "C:/evil": ""}, "unsafe"),
@@ -150,7 +150,7 @@ def test_card_status(tmp_path):
 
 
 def test_corrupt_entry_data_is_invalid_not_a_crash(tmp_path):
-    """Diretório central bom, dados de uma entrada estragados: zlib.error vira PackageError."""
+    """Good central directory, one entry's data corrupted: zlib.error becomes PackageError."""
     path = tmp_path / "p.zip"
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, data in valid_entries().items():
@@ -187,7 +187,7 @@ def test_status_is_cached_until_the_file_changes(tmp_path, monkeypatch):
     pp.card_status(str(mount), "0.1.0")
     assert len(reads) == 1
     write_zip(zip_path, valid_entries("0.3.0"))
-    os.utime(zip_path, ns=(1, 1))  # garante mtime diferente mesmo em FS de baixa resolução
+    os.utime(zip_path, ns=(1, 1))  # ensures a different mtime even on a low-resolution FS
     assert pp.card_status(str(mount), "0.1.0")["version"] == "0.3.0"
     assert len(reads) == 2
 
@@ -220,7 +220,7 @@ def test_backslash_names_are_rejected(tmp_path):
     with zipfile.ZipFile(path, "w") as archive:
         for name, data in valid_entries().items():
             archive.writestr(name, data)
-        # ZipInfo("a\\b") vira "a/b" no Windows; o nome cru é o que um zip hostil traria
+        # ZipInfo("a\\b") becomes "a/b" on Windows; the raw name is what a hostile zip would carry
         info = zipfile.ZipInfo("placeholder")
         info.filename = "InsertPlay\\..\\evil.py"
         archive.writestr(info, "")
@@ -235,7 +235,7 @@ def test_directory_entries_are_allowed(tmp_path):
 
 
 def test_corrupt_payload_member_is_rejected(tmp_path):
-    """CRC errado em main.py: só o JSON era lido e o zip passava (review do PR #6)."""
+    """Bad CRC in main.py: only the JSON was read and the zip passed (PR #6 review)."""
     path = tmp_path / "p.zip"
     with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as archive:
         for name, data in {**valid_entries(), "InsertPlay/main.py": "print('ok')"}.items():
@@ -278,7 +278,7 @@ def test_write_card_package_refuses_a_file_where_the_folder_should_be(tmp_path):
 @POSIX
 @pytest.mark.parametrize("linked", ["insertplay", "insertplay/decky"])
 def test_write_card_package_refuses_symlinked_folders(tmp_path, linked):
-    """`insertplay` ou `decky` como symlink levaria a gravação para fora do cartão."""
+    """`insertplay` or `decky` as a symlink would send the write outside the card."""
     mount = tmp_path / "SD1"
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -292,7 +292,7 @@ def test_write_card_package_refuses_symlinked_folders(tmp_path, linked):
 
 @POSIX
 def test_write_card_package_does_not_follow_links_in_the_folder(tmp_path):
-    """Um `.tmp` de nome fixo ou o próprio zip como symlink não podem truncar o alvo."""
+    """A fixed-name `.tmp` or the zip itself as a symlink must not truncate the target."""
     plugin = make_plugin_dir(tmp_path)
     mount = tmp_path / "SD1"
     folder = mount / "insertplay" / "decky"

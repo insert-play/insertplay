@@ -1,28 +1,28 @@
 #!/bin/bash
-# Instalado no Deck como /etc/insertplay-dev/deploy-plugin.sh (root:root 755) e liberado
-# para o usuário deck SEM SENHA via /etc/sudoers.d/zz-insertplay-dev.
+# Installed on the Deck as /etc/insertplay-dev/deploy-plugin.sh (root:root 755) and allowed
+# for the deck user WITHOUT A PASSWORD via /etc/sudoers.d/zz-insertplay-dev.
 #
-# É a única coisa que o acesso automatizado (IA/scripts) pode fazer como root:
-#   deploy   instala o conteúdo de /tmp/insertplay-decky em ~/homebrew/plugins/InsertPlay
-#            e reinicia o Decky
-#   restart  reinicia o plugin_loader
-#   remove   apaga ~/homebrew/plugins/InsertPlay e reinicia o Decky
+# It is the only thing the automated access (AI/scripts) can do as root:
+#   deploy   installs the contents of /tmp/insertplay-decky into ~/homebrew/plugins/InsertPlay
+#            and restarts Decky
+#   restart  restarts plugin_loader
+#   remove   deletes ~/homebrew/plugins/InsertPlay and restarts Decky
 #
-# Por segurança recusa plugin.json com a flag "root": sem ela o Decky roda o backend do
-# plugin como usuário comum, então esta liberação não vira um sudo geral.
+# For safety it refuses a plugin.json with the "root" flag: without it Decky runs the
+# plugin backend as a regular user, so this grant does not turn into a general sudo.
 #
-# O stage (/tmp/insertplay-decky) é do usuário deck e pode mudar a qualquer momento.
-# Por isso nada é validado nem instalado A PARTIR dele (review do PR #2):
-#   1. copiamos o stage para um snapshot privado do root (mktemp -d, 700), sem symlinks
-#      e com permissões normalizadas (sem escrita para grupo/outros);
-#   2. validamos o SNAPSHOT;
-#   3. instalamos os bytes do snapshot.
+# The stage (/tmp/insertplay-decky) belongs to the deck user and can change at any time.
+# So nothing is validated or installed FROM it (PR #2 review):
+#   1. we copy the stage to a root-private snapshot (mktemp -d, 700), without symlinks
+#      and with normalized permissions (no write for group/others);
+#   2. we validate the SNAPSHOT;
+#   3. we install the snapshot's bytes.
 #
-# Risco residual conhecido e aceito: ~/homebrew é do usuário deck por design do Decky,
-# então o deck pode trocar a pasta `plugins` inteira entre a checagem e a cópia. Isso
-# não é novo: com essa mesma posse, o deck já controla o que o Decky (root) carrega no
-# próximo boot. Checamos o que dá para checar (plugins é diretório real do root, o
-# destino não é symlink) e não prometemos mais que isso.
+# Known and accepted residual risk: ~/homebrew belongs to the deck user by Decky's design,
+# so deck can swap the whole `plugins` folder between the check and the copy. This
+# is not new: with that same ownership, deck already controls what Decky (root) loads on
+# the next boot. We check what can be checked (plugins is a real root-owned directory, the
+# destination is not a symlink) and promise nothing more than that.
 set -euo pipefail
 
 STAGE=/tmp/insertplay-decky
@@ -35,24 +35,24 @@ die() {
 }
 
 check_destination() {
-	[[ -d "$PLUGINS" && ! -L "$PLUGINS" ]] || die "$PLUGINS ausente ou é symlink"
-	[[ "$(realpath -e "$PLUGINS")" == "$PLUGINS" ]] || die "$PLUGINS não resolve para si mesmo"
-	[[ "$(stat -c %u "$PLUGINS")" == 0 ]] || die "$PLUGINS não pertence ao root"
-	# PLUGINS é do root (755): o deck não consegue criar nada aqui dentro, inclusive
-	# um symlink no lugar do destino; checamos mesmo assim
-	[[ ! -e "$DEST" && ! -L "$DEST" ]] || [[ -d "$DEST" && ! -L "$DEST" ]] || die "$DEST não é um diretório comum"
+	[[ -d "$PLUGINS" && ! -L "$PLUGINS" ]] || die "$PLUGINS missing or is a symlink"
+	[[ "$(realpath -e "$PLUGINS")" == "$PLUGINS" ]] || die "$PLUGINS does not resolve to itself"
+	[[ "$(stat -c %u "$PLUGINS")" == 0 ]] || die "$PLUGINS is not owned by root"
+	# PLUGINS belongs to root (755): deck cannot create anything in here, including
+	# a symlink in place of the destination; we check anyway
+	[[ ! -e "$DEST" && ! -L "$DEST" ]] || [[ -d "$DEST" && ! -L "$DEST" ]] || die "$DEST is not a regular directory"
 }
 
 case "${1-}" in
 	deploy)
-		[[ -d "$STAGE" && ! -L "$STAGE" ]] || die "stage $STAGE ausente ou é symlink"
+		[[ -d "$STAGE" && ! -L "$STAGE" ]] || die "stage $STAGE missing or is a symlink"
 		SNAP="$(mktemp -d /tmp/insertplay-deploy.XXXXXX)"
 		trap 'rm -rf "$SNAP"' EXIT
 		rsync -r --no-links --no-specials --no-devices --chmod=D755,F644 "$STAGE/" "$SNAP/"
 
 		[[ -f "$SNAP/plugin.json" && -f "$SNAP/main.py" && -f "$SNAP/dist/index.js" ]] \
-			|| die "stage incompleto (plugin.json, main.py, dist/index.js)"
-		python3 - "$SNAP/plugin.json" <<'PY' || die "recusado: plugin.json inválido ou pede a flag root"
+			|| die "incomplete stage (plugin.json, main.py, dist/index.js)"
+		python3 - "$SNAP/plugin.json" <<'PY' || die "refused: plugin.json invalid or requests the root flag"
 import json, sys
 data = json.load(open(sys.argv[1]))
 flags = data.get("flags", [])
@@ -64,7 +64,7 @@ PY
 		rsync -r --delete --no-links --chmod=D755,F644 "$SNAP/" "$DEST/"
 		chown -R root:root "$DEST"
 		systemctl restart plugin_loader
-		echo "InsertPlay instalado em $DEST"
+		echo "InsertPlay installed at $DEST"
 		;;
 	restart)
 		systemctl restart plugin_loader
@@ -73,10 +73,10 @@ PY
 		check_destination
 		rm -rf "$DEST"
 		systemctl restart plugin_loader
-		echo "InsertPlay removido"
+		echo "InsertPlay removed"
 		;;
 	*)
-		echo "uso: $0 deploy|restart|remove" >&2
+		echo "usage: $0 deploy|restart|remove" >&2
 		exit 2
 		;;
 esac

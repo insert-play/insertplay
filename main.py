@@ -1,5 +1,5 @@
-"""Camada RPC do plugin. É o único módulo que importa `decky`; a lógica fica em
-py_modules/insertplay_decky e é testada sem o Deck."""
+"""Plugin RPC layer. The only module that imports `decky`; the logic lives in
+py_modules/insertplay_decky and is tested without the Deck."""
 import asyncio
 import base64
 import functools
@@ -19,12 +19,12 @@ READY_TIMEOUT_SECONDS = 15.0
 
 
 def guarded(fallback):
-    """Exceção numa RPC vira resposta vazia + linha no log, nunca um plugin travado.
+    """An exception in an RPC becomes an empty response + a log line, never a stuck plugin.
 
-    Toda RPC espera o `_main` terminar a primeira varredura: o Decky atende RPCs em
-    paralelo com o `_main`, e antes disso `mounted` e o registro não existem. Responder
-    "nenhum cartão" ou "registro vazio" nessa janela fazia o frontend ocultar o cartão
-    presente ou criar um atalho duplicado (review do PR #2)."""
+    Every RPC waits for `_main` to finish the first scan: Decky serves RPCs in
+    parallel with `_main`, and before that `mounted` and the registry don't exist. Answering
+    "no card" or "empty registry" in that window made the frontend hide the card
+    that was present or create a duplicate shortcut (PR #2 review)."""
 
     def wrap(method):
         @functools.wraps(method)
@@ -46,8 +46,8 @@ def guarded(fallback):
 
 
 def _describe(card: dict) -> dict:
-    """Cartão detectado + manifesto lido. Erro de leitura vai no payload em vez de
-    derrubar a detecção: o painel precisa mostrar *por que* o cartão não serve."""
+    """Detected card + parsed manifest. A read error goes in the payload instead of
+    breaking detection: the panel has to show *why* the card is unusable."""
     out = {"mount": card["mount"], "label": card["label"], "error": None}
     try:
         out.update(load_card(card["mount"]))
@@ -57,8 +57,8 @@ def _describe(card: dict) -> dict:
 
 
 def _on_mounted_card(mounted: dict, path: str) -> str:
-    """Caminho real de `path`, desde que esteja dentro de um cartão montado. As RPCs que
-    leem ou escrevem arquivos não podem virar acesso arbitrário ao disco."""
+    """Real path of `path`, as long as it is inside a mounted card. RPCs that
+    read or write files must not become arbitrary disk access."""
     real = os.path.realpath(path)
     if not any(real == root or real.startswith(root.rstrip(os.sep) + os.sep) for root in mounted):
         raise PermissionError(f"{path} is not on a mounted InsertPlay card")
@@ -66,9 +66,9 @@ def _on_mounted_card(mounted: dict, path: str) -> str:
 
 
 def _steam_card(mount: str, libraries: list) -> tuple:
-    """Ponto de montagem real de um cartão com biblioteca Steam e as bibliotecas dele.
-    As RPCs do save portátil escrevem no cartão e no `compatdata` do SSD: o cartão tem
-    que ser mídia montada de verdade, e cada biblioteca, estar dentro dele."""
+    """Real mount point of a card with a Steam library, and its libraries.
+    The portable saves RPCs write to the card and to the SSD `compatdata`: the card has
+    to be truly mounted media, and every library has to be inside it."""
     card = cards.library_card(mount, cards.default_media_roots())
     real = os.path.realpath(mount)
     if not card or card["mount"] != real:
@@ -85,7 +85,7 @@ def _steam_root() -> str:
 
 
 class Plugin:
-    # atributo de classe: existe antes de o `_main` rodar, quando as RPCs já chegam
+    # class attribute: exists before `_main` runs, when RPCs already arrive
     ready = False
 
     async def _wait_ready(self):
@@ -106,9 +106,9 @@ class Plugin:
 
     async def _main(self):
         self._setup()
-        # O primeiro instantâneo é o estado inicial, não uma inserção: o frontend o lê
-        # com current_cards() e reconcilia sem auto-launch. Assim reiniciar o
-        # plugin_loader com o cartão inserido não inicia o jogo sozinho.
+        # The first snapshot is the initial state, not an insertion: the frontend reads it
+        # with current_cards() and reconciles without auto-launch. So restarting
+        # plugin_loader with the card inserted doesn't start the game by itself.
         self.mounted = {c["real"]: c for c in await asyncio.to_thread(cards.find_cards, cards.default_media_roots())}
         self.ready = True
         self.watcher = asyncio.get_event_loop().create_task(self._watch())
@@ -138,16 +138,16 @@ class Plugin:
                 decky.logger.exception("InsertPlay: watcher iteration failed")
             await asyncio.sleep(POLL_SECONDS)
 
-    # fallback None, não []: "não sei" não pode parecer "nenhum cartão" (o frontend oculta
-    # os atalhos de todo cartão que não está na lista)
+    # fallback None, not []: "don't know" must not look like "no card" (the frontend hides
+    # the shortcuts of every card not in the list)
     @guarded(lambda: None)
     async def current_cards(self) -> list:
         return [await asyncio.to_thread(_describe, c) for c in self.mounted.values()]
 
     @guarded(str)
     async def artwork_base64(self, path: str) -> str:
-        """Só entrega arquivos de dentro de um cartão montado — a RPC não pode virar
-        leitura arbitrária do disco."""
+        """Only serves files from inside a mounted card — the RPC must not become
+        an arbitrary disk read."""
         real = _on_mounted_card(self.mounted, path)
         if real in self.mounted:
             raise PermissionError(f"{path} is a card, not a file")
@@ -155,7 +155,7 @@ class Plugin:
             return base64.b64encode(f.read()).decode("ascii")
 
     def _prune_icons(self, icons_dir: str, keep: set) -> None:
-        """Limpeza é enfeite: um `shortcuts.vdf` ilegível só adia, nunca derruba a RPC."""
+        """Cleanup is optional: an unreadable `shortcuts.vdf` only postpones it, never breaks the RPC."""
         try:
             used = icons.referenced_icons(_steam_root())
         except Exception as exc:
@@ -165,11 +165,11 @@ class Plugin:
         if removed:
             self.log.add("icon", f"removed unused: {', '.join(removed)}")
 
-    # None = "não sei": o frontend não mexe no ícone
+    # None = "don't know": the frontend leaves the icon alone
     @guarded(lambda: None)
     async def shortcut_icon(self, steamid: str, appid: int, guid: str, source: str) -> dict:
-        """Copia o ícone do cartão para o SSD e diz se o frontend deve aplicá-lo com
-        `SetShortcutIcon` (issue #17). Não aplica sobre um ícone escolhido pelo usuário."""
+        """Copies the card's icon to the SSD and tells whether the frontend should apply it with
+        `SetShortcutIcon` (issue #17). Never applied over an icon the user chose."""
         real = _on_mounted_card(self.mounted, source)
         if real in self.mounted or not os.path.isfile(real):
             raise PermissionError(f"{source} is not a file on a card")
@@ -177,7 +177,7 @@ class Plugin:
             raise ValueError(f"invalid guid {guid!r}")
         guid = guid.lower()
         icons_dir = os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "icons")
-        # sem o shortcuts.vdf não dá para saber de quem é o ícone atual: lança e não aplica
+        # without shortcuts.vdf there's no telling whose the current icon is: raise, don't apply
         current = (await asyncio.to_thread(icons.shortcut_icons, icons.shortcuts_vdf(_steam_root(), steamid))).get(
             int(appid)
         )
@@ -188,15 +188,15 @@ class Plugin:
         await asyncio.to_thread(self._prune_icons, icons_dir, {target} if apply else set())
         return {"path": target, "apply": apply, "current": current}
 
-    # None = "não sei": o frontend trata como cartão InsertPlay e não notifica nada
+    # None = "don't know": the frontend treats it as an InsertPlay card and notifies nothing
     @guarded(lambda: None)
     async def library_card(self, path: str) -> dict:
-        """Cartão de uma biblioteca Steam e se ele é um cartão InsertPlay (issue #10)."""
+        """Card holding a Steam library, and whether it is an InsertPlay card (issue #10)."""
         return await asyncio.to_thread(cards.library_card, path, cards.default_media_roots())
 
     @guarded(lambda: None)
     async def package_status(self) -> dict:
-        """Versão instalada e, por cartão, a versão do pacote do plugin que ele traz."""
+        """Installed version and, per card, the version of the plugin package it carries."""
         installed = decky.DECKY_PLUGIN_VERSION
         out = []
         for card in self.mounted.values():
@@ -206,17 +206,17 @@ class Plugin:
 
     @guarded(lambda: None)
     async def write_package_to_card(self, mount: str) -> dict:
-        """Grava a versão instalada do plugin no cartão. Devolve o status do pacote gravado."""
+        """Writes the installed plugin version to the card. Returns the written package's status."""
         real = _on_mounted_card(self.mounted, mount)
         if real not in self.mounted:
             raise PermissionError(f"{mount} is not the root of a mounted card")
         card_mount = self.mounted[real]["mount"]
         written = await asyncio.to_thread(plugin_package.write_card_package, decky.DECKY_PLUGIN_DIR, card_mount)
         self.log.add("package", f"{card_mount}: wrote plugin v{written['version']}")
-        # build_zip_from_dir já deixou o resultado no cache: isto não relê o zip
+        # build_zip_from_dir already left the result in the cache: this doesn't reread the zip
         return await asyncio.to_thread(plugin_package.card_status, card_mount, decky.DECKY_PLUGIN_VERSION)
 
-    # None, não {}: um registro "vazio" por falha faria o frontend criar atalhos duplicados
+    # None, not {}: a registry "empty" because of a failure would make the frontend create duplicate shortcuts
     @guarded(lambda: None)
     async def registry_all(self) -> dict:
         return self.registry.all()
@@ -244,7 +244,7 @@ class Plugin:
             detail = ", ".join(f"{appid} {r}" for appid, r in sorted(changed.items()))
             self.log.add("portable", f"{os.path.basename(mount)}: {detail}")
 
-    # None = "não sei": o painel deixa o toggle desabilitado
+    # None = "don't know": the panel keeps the toggle disabled
     @guarded(lambda: None)
     async def portable_status(self, mount: str) -> dict:
         real, _ = _steam_card(mount, [])
@@ -254,8 +254,8 @@ class Plugin:
     async def portable_set(
         self, mount: str, mode: str, libraries: list, appids: list, running: list, elsewhere: list
     ) -> dict:
-        """Modo do save portátil do cartão inteiro: "off", "userdata" ou "prefix". Sair de
-        um modo copia de volta ao SSD; com jogo do cartão aberto, nada muda."""
+        """Portable saves mode for the whole card: "off", "userdata" or "prefix". Leaving
+        a mode copies back to the SSD; with a card game open, nothing changes."""
         real, libs = _steam_card(mount, libraries)
         if mode != "off":
             status = await asyncio.to_thread(prefixes.status, real)
@@ -272,12 +272,12 @@ class Plugin:
 
     @guarded(lambda: None)
     async def portable_sync(self, mount: str, libraries: list, appids: list, running: list, elsewhere: list) -> dict:
-        """Uma passada num cartão. Desligado, não faz nada (devolve {})."""
+        """One pass over a card. When off, does nothing (returns {})."""
         real, libs = _steam_card(mount, libraries)
         status = await asyncio.to_thread(prefixes.status, real)
-        # Cartão sem escrita (ext4 remontado só leitura, por exemplo) com o modo ligado: não
-        # liga nada, senão o jogo ficaria com o prefixo ou o save num lugar onde não grava.
-        # Desligado, a passada segue: ela só copia do cartão de volta para o SSD.
+        # Unwritable card (ext4 remounted read-only, for example) with the mode on: don't
+        # link anything, or the game would keep its prefix or save somewhere it can't write.
+        # When off, the pass goes ahead: it only copies from the card back to the SSD.
         if status["mode"] != "off" and not status["fsOk"]:
             return {}
         results = await asyncio.to_thread(prefixes.sync, real, libs, appids, running, elsewhere, _steam_root())

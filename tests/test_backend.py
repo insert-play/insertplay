@@ -92,7 +92,7 @@ def test_library_card_flags_insertplay_cards(tmp_path):
 
 @pytest.mark.skipif(not hasattr(os, "major"), reason="needs os.major (POSIX)")
 def test_disk_is_removable_reads_the_parent_disk_flag(tmp_path):
-    # /sys/dev/block/<maj>:<min> aponta para a partição; `removable` fica no disco pai
+    # /sys/dev/block/<maj>:<min> points to the partition; `removable` is on the parent disk
     disk = tmp_path / "sys" / "devices" / "usb" / "block" / "sda"
     (disk / "sda1").mkdir(parents=True)
     (disk / "removable").write_text("1\n")
@@ -124,7 +124,7 @@ def test_load_card_resolves_placeholders_and_appends_guid(tmp_path):
 def test_load_card_artwork_falls_back_to_default_location(tmp_path):
     mount = make_card(tmp_path)
     art = load_card(str(mount))["artwork"]
-    # `logo` aponta para um arquivo inexistente no manifesto → cai em steam-artwork/logo.png
+    # `logo` points to a nonexistent file in the manifest → falls back to steam-artwork/logo.png
     assert art["logo"] == os.path.normpath(str(mount / "steam-artwork" / "logo.png"))
     assert set(art) == {"capsule", "hero", "logo"}
 
@@ -133,7 +133,7 @@ def test_load_card_icon_from_manifest_or_default(tmp_path):
     mount = make_card(tmp_path, art=("capsule", "icon"))
     card = load_card(str(mount))
     assert card["icon"] == os.path.normpath(str(mount / "steam-artwork" / "icon.png"))
-    assert "icon" not in card["artwork"]  # não passa por SetCustomArtworkForApp
+    assert "icon" not in card["artwork"]  # doesn't go through SetCustomArtworkForApp
 
     manifest = json.loads(json.dumps(MANIFEST))
     manifest["shortcut"]["artwork"]["icon"] = "{SD_ROOT}/art/game.ico"
@@ -195,5 +195,5 @@ def test_event_log_tail_is_newest_first_and_trimmed(tmp_path):
     log = EventLog(str(tmp_path / "events.jsonl"), limit=5, keep=3)
     for i in range(7):
         log.add("k", str(i))
-    # ao passar de 5 linhas (na 6ª) corta para 3; a 7ª entra depois do corte
+    # past 5 lines (on the 6th) trims to 3; the 7th goes in after the trim
     assert [e["message"] for e in log.tail(10)] == ["6", "5", "4", "3"]
