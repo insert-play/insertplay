@@ -121,7 +121,7 @@ Not needed: `appStore` overview `.BHasStoreCategory(22)` (`false` for a shortcut
 
 ## Opening the game page (measured 2026-11-01)
 
-Used by "Ao inserir" → "Abrir página do jogo" (issue #38, `openGamePage` in `src/steam.ts`). Measured on the Deck (SteamOS 3.9.5, Game Mode) with `IP Teste Navegação` shortcuts, removed afterwards:
+Used by "Ao inserir" → "Abrir página do jogo" (issue #38, `waitForApp` and `openGamePage` in `src/steam.ts`). Measured on the Deck (SteamOS 3.9.5, Game Mode) with `IP Teste Navegação` shortcuts, removed afterwards:
 
 | Case | Result |
 |---|---|

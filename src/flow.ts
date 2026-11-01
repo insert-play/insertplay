@@ -39,6 +39,7 @@ import {
   setShortcutIcon,
   shortcutExists,
   updateShortcut,
+  waitForApp,
   waitForLibrary,
 } from "./steam";
 import { showBadges } from "./steam-badges";
@@ -147,7 +148,8 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
  *  of the game. */
 async function onInsert(appid: number, name: string, run: (appid: number) => void): Promise<void> {
   const logo = gameLogo(appid);
-  const action = gameRunning() ? "none" : (await getSettings()).onInsert;
+  const { onInsert: setting } = await getSettings();
+  const action = gameRunning() ? "none" : setting;
   if (action === "launch") {
     toaster.toast({ title: TITLE, body: `Iniciando ${name}…`, logo });
     await logAdd("launch", `${name} (${appid})`);
@@ -156,8 +158,14 @@ async function onInsert(appid: number, name: string, run: (appid: number) => voi
   }
   toaster.toast({ title: TITLE, body: `${name} disponível`, logo });
   if (action !== "page") return;
-  if (await openGamePage(appid)) await logAdd("page", `${name} (${appid})`);
-  else await logAdd("error", `${name}: page not opened, ${appid} missing from the library`);
+  if (!(await waitForApp(appid))) {
+    await logAdd("error", `${name}: page not opened, ${appid} missing from the library`);
+    return;
+  }
+  // a game may have started during the wait (PR #39 review)
+  if (gameRunning()) return;
+  openGamePage(appid);
+  await logAdd("page", `${name} (${appid})`);
 }
 
 /** Shortcut icon from the copy on the SSD (issue #17). Runs on every insertion, not only
