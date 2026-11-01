@@ -79,6 +79,16 @@ The panel's **Save portátil** section has one choice per card with Steam games.
 - **A device with a plugin older than 0.5.0** ignores `.insertplay` and uses its own prefix. After updating, the most-recent rule applies.
 - **Out of scope**: the shader cache (`shadercache/<appid>`), which stays on the device, and InsertPlay cards (non-Steam shortcuts), whose launch script already keeps the prefix on the card.
 
+## Achievements (RetroAchievements)
+
+A card whose manifest declares the game's [RetroAchievements](https://retroachievements.org) ID (`game.retroAchievements.gameId`, see [docs/card-format.md](docs/card-format.md#game)) shows its achievements in Steam's own screens: the **Conquistas** section of the game page and the "Minhas conquistas / Conquistas globais" list.
+
+- **The plugin only shows progress.** Unlocking stays with the emulator (PCSX2, DuckStation and Dolphin have RetroAchievements built in and show their own pop-up during the game). Log in to RetroAchievements in each emulator on your own: the plugin never reads or writes the emulators' credentials.
+- **Login**: panel section **Conquistas**, with your RetroAchievements user and **Web API Key** (retroachievements.org → Settings → Keys). **Abrir página da chave** (open the key page) opens that page in Steam's own browser, also in Game Mode: copy the key there, go back to the panel and paste it. A Web API key, not your password: it can only read the API, and you can regenerate it without touching your password or the emulators' login. The key is used only to read the API and is stored in `~/homebrew/settings/InsertPlay/ra_credentials.json`, readable only by your user. It never goes to a log.
+- **When it updates**: when you open the game page or its achievement list (at most once a minute per game, also from the Steam menu with the game running), on card insertion, at Steam startup (from the cache), when the card's game closes, and with **Atualizar agora** (update now).
+- **Offline**: the last fetch of each game is cached in `~/homebrew/data/InsertPlay/ra-cache/`. The page of a removed card keeps showing it. Badge images come from `media.retroachievements.org` and need the network.
+- Hardcore and softcore unlocks both count. Subsets (a separate RetroAchievements game with a `ParentGameID`) are not shown.
+
 ## How it works
 
 - `main.py` + `py_modules/insertplay_decky/` (Python backend):
@@ -89,7 +99,8 @@ The panel's **Save portátil** section has one choice per card with Steam games.
 - `src/` (frontend, runs inside Steam):
   - creates or updates the shortcut with `SteamClient.Apps.*`;
   - applies the artwork and the icon (never replacing an icon picked by the user), hides and shows the shortcut, and starts the game;
-  - draws the SD card badge on library covers (`src/steam-badges.tsx`, depends on Steam's DOM).
+  - draws the SD card badge on library covers (`src/steam-badges.tsx`, depends on Steam's DOM);
+  - shows RetroAchievements progress in Steam's achievement screens (`src/achievements.ts`, patches Steam's internal stores).
 - Registry `guid → appid` in `~/homebrew/settings/InsertPlay/registry.json`.
 
 The plugin relies on undocumented Steam client APIs (`SteamClient.*`); the calls in use and how they were measured are in [docs/steam-api-notes.md](docs/steam-api-notes.md). A Steam update can break them.

@@ -3,9 +3,11 @@ import {
   ButtonItem,
   ConfirmModal,
   DropdownItem,
+  Navigation,
   PanelSection,
   PanelSectionRow,
   Spinner,
+  TextField,
   ToggleField,
   showModal,
   staticClasses,
@@ -19,6 +21,7 @@ import {
   PackageStatus,
   PortableMode,
   PortableStatus,
+  RaLoginError,
   Settings,
   currentCards,
   getSettings,
@@ -26,13 +29,20 @@ import {
   logTail,
   packageStatus,
   portableStatus,
+  raLogin,
+  raLogout,
+  raStatus,
   setSetting,
   writePackageToCard,
 } from "./backend";
+import { installAchievements, shownAppids, stopAchievements } from "./achievements";
 import {
   PortableCard,
   applyHideRemoved,
+  clearAchievements,
   launchCard,
+  loadAllAchievements,
+  onGameClosed,
   onPortableChange,
   onInserted,
   onRemoved,
@@ -46,7 +56,7 @@ import {
   steamCardsPresent,
 } from "./flow";
 import { InstallType, installFromCard, notifyNewerPackage } from "./selfupdate";
-import { onInstallFoldersChanged } from "./steam";
+import { onAppClosed, onInstallFoldersChanged } from "./steam";
 import { showBadges, stopBadges } from "./steam-badges";
 
 const REFRESH_EVENTS = ["card_inserted", "card_removed"] as const;
@@ -204,6 +214,128 @@ function PortableRow({
   );
 }
 
+const RA_KEYS_URL = "https://retroachievements.org/settings";
+
+const LOGIN_ERROR: Record<RaLoginError, string> = {
+  invalid: "Usuário ou chave em formato inválido.",
+  refused: "O RetroAchievements recusou o usuário ou a chave.",
+  network: "Sem resposta do RetroAchievements. Confira a rede.",
+  failed: "Falha no login (veja o log de eventos).",
+};
+
+/** Plugin's own RetroAchievements login (issue #24): user + web API key, used only to
+ *  read progress. The emulators keep their own login. */
+function AchievementsSection() {
+  // undefined = still asking the backend
+  const [user, setUser] = useState<string | null | undefined>(undefined);
+  const [name, setName] = useState("");
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void raStatus().then((status) => setUser(status ? status.user : null));
+  }, []);
+
+  const login = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await raLogin(name, key);
+      if (!result.user) {
+        setError(LOGIN_ERROR[result.error ?? "failed"]);
+        return;
+      }
+      setUser(result.user);
+      setKey("");
+      toaster.toast({ title: "InsertPlay", body: `RetroAchievements: conectado como ${result.user}` });
+      clearAchievements(); // new session: nothing from before the login is shown
+      void loadAllAchievements(true);
+    } catch (err) {
+      failed("Login no RetroAchievements", err);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const logout = async () => {
+    await raLogout();
+    clearAchievements();
+    setUser(null);
+  };
+  const update = async () => {
+    setBusy(true);
+    try {
+      await loadAllAchievements(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (user === undefined) return null;
+  return (
+    <PanelSection title="Conquistas">
+      {user ? (
+        <>
+          <PanelSectionRow>
+            <div style={{ fontSize: "0.85em" }}>RetroAchievements: {user}</div>
+            <div style={{ fontSize: "0.75em", opacity: 0.7 }}>
+              {shownAppids().length} jogo(s) com conquistas na biblioteca
+            </div>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy} onClick={() => void update()}>
+              Atualizar agora
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy} onClick={() => void logout()}>
+              Sair
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
+      ) : (
+        <>
+          <PanelSectionRow>
+            <div style={{ fontSize: "0.75em", opacity: 0.7 }}>
+              Mostra as conquistas do RetroAchievements dos cartões na página do jogo. Abra a página da
+              chave, copie a Web API Key (seção Keys), volte aqui e cole.
+            </div>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            {/* Steam's own browser, in Game Mode too. Measured on the Deck (2026-11-01): copying
+                the key there and pasting it in the field below works. */}
+            <ButtonItem layout="below" onClick={() => Navigation.NavigateToExternalWeb(RA_KEYS_URL)}>
+              Abrir página da chave
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <TextField label="Usuário" value={name} disabled={busy} onChange={(e) => setName(e.target.value)} />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <TextField
+              label="Web API Key"
+              value={key}
+              bIsPassword
+              disabled={busy}
+              onChange={(e) => setKey(e.target.value)}
+            />
+          </PanelSectionRow>
+          {error && (
+            <PanelSectionRow>
+              <div style={{ fontSize: "0.8em", color: "#e57373" }}>{error}</div>
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy || !name.trim() || !key.trim()} onClick={() => void login()}>
+              Entrar
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
+      )}
+    </PanelSection>
+  );
+}
+
 function Panel() {
   const [cards, setCards] = useState<Card[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -271,6 +403,7 @@ function Panel() {
           ))}
         </PanelSection>
       )}
+      <AchievementsSection />
       <PanelSection title="Plugin">
         <PanelSectionRow>
           <div style={{ fontSize: "0.85em" }}>Instalado: {pkg ? `v${pkg.installed}` : "…"}</div>
@@ -337,6 +470,12 @@ export default definePlugin(() => {
     return tree;
   });
   const portableTimer = setInterval(() => void portableTick(), PORTABLE_TICK_MS);
+  // Before reconcile, which publishes the achievements. A part not found is logged and the
+  // rest works (issue #24). Measured: all three are found at plugin load, also right after
+  // a Steam restart.
+  const achievementsFailed = installAchievements();
+  if (achievementsFailed.length) void logAdd("error", `achievements patch: ${achievementsFailed.join("; ")}`);
+  const stopAppClosed = onAppClosed((appid) => void onGameClosed(appid));
   void reconcile();
   // initial library snapshot, even if Steam stops calling the callback on registration
   void onSteamLibrariesChanged();
@@ -351,7 +490,9 @@ export default definePlugin(() => {
       stopFolders();
       clearInterval(portableTimer);
       routerHook.removePatch("/library", libraryPatch);
+      stopAppClosed();
       stopBadges();
+      stopAchievements();
     },
   };
 });

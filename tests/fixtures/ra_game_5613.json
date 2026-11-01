@@ -1,0 +1,80 @@
+{
+  "ID": 5613,
+  "Title": "Need for Speed: Underground 2",
+  "ConsoleID": 21,
+  "ConsoleName": "PlayStation 2",
+  "ParentGameID": null,
+  "NumDistinctPlayers": 20379,
+  "NumAchievements": 76,
+  "NumAwardedToUser": 5,
+  "NumAwardedToUserHardcore": 5,
+  "Achievements": {
+    "261034": {
+      "ID": 261034,
+      "NumAwarded": 17855,
+      "NumAwardedHardcore": 5943,
+      "Title": "Welcome to Bayview",
+      "Description": "Complete the Tutorial",
+      "Points": 1,
+      "BadgeName": "609317",
+      "DisplayOrder": 1,
+      "DateEarned": "2026-06-02 04:30:31",
+      "DateEarnedHardcore": "2026-06-02 04:30:31"
+    },
+    "261033": {
+      "ID": 261033,
+      "NumAwarded": 4515,
+      "NumAwardedHardcore": 2605,
+      "Title": "Yo Noobie",
+      "Description": "Win an Outrun during the Tutorial",
+      "Points": 2,
+      "BadgeName": "609318",
+      "DisplayOrder": 2,
+      "DateEarned": "2026-06-02 04:13:15",
+      "DateEarnedHardcore": "2026-06-02 04:13:15"
+    },
+    "261028": {
+      "ID": 261028,
+      "NumAwarded": 3151,
+      "NumAwardedHardcore": 2082,
+      "Title": "Bring My Car Back... Now!",
+      "Description": "Complete all three races available before going to Rachel's place",
+      "Points": 2,
+      "BadgeName": "609319",
+      "DisplayOrder": 3,
+      "DateEarned": "2026-06-02 04:25:58",
+      "DateEarnedHardcore": "2026-06-02 04:25:58"
+    },
+    "261036": {
+      "ID": 261036,
+      "NumAwarded": 2766,
+      "NumAwardedHardcore": 1803,
+      "Title": "Beacon Hill Shopper",
+      "Description": "Discover and enter all 13 available locations including the new car lot before proceeding to Stage 3",
+      "Points": 5,
+      "BadgeName": "609322",
+      "DisplayOrder": 6
+    },
+    "261057": {
+      "ID": 261057,
+      "NumAwarded": 3065,
+      "NumAwardedHardcore": 1868,
+      "Title": "I'm so Hood",
+      "Description": "Win 4 Outrun events in Stage 2 and complete the special event to earn unique hoods",
+      "Points": 5,
+      "BadgeName": "609323",
+      "DisplayOrder": 7
+    },
+    "261070": {
+      "ID": 261070,
+      "NumAwarded": 7108,
+      "NumAwardedHardcore": 2793,
+      "Title": "Turbo & High-Tech Performance Magazine",
+      "Description": "Appear on the cover of Turbo & High-Tech Performance Magazine in Stage 2",
+      "Points": 5,
+      "BadgeName": "609324",
+      "DisplayOrder": 8
+    }
+  },
+  "_note": "Real response of API_GetGameInfoAndUserProgress.php (g=5613, a=1) on 2026-11-01, cut to 3 unlocked and 3 locked achievements; the counts above are the full game's."
+}

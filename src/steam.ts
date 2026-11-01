@@ -227,6 +227,16 @@ export function runSteamGame(appid: number): void {
   method(client()?.Apps, "RunGame", "SteamClient.Apps.RunGame")(String(appid), "", -1, 100);
 }
 
+/** Notifies when a game closes, with its appid (a shortcut's appid, not the gameid).
+ *  Measured with spike.mjs: `RegisterForAppLifetimeNotifications` reports `{unAppID, bRunning}`
+ *  at start and exit. Returns the unsubscribe function. */
+export function onAppClosed(callback: (appid: number) => void): () => void {
+  const registration = client()?.GameSessions?.RegisterForAppLifetimeNotifications?.((e: any) => {
+    if (e && e.bRunning === false && Number(e.unAppID) > 0) callback(Number(e.unAppID));
+  });
+  return () => registration?.unregister?.();
+}
+
 export function appName(appid: number): string {
   return apps()?.GetAppOverviewByAppID?.(appid)?.display_name || `app ${appid}`;
 }

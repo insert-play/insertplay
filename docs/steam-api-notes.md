@@ -89,6 +89,36 @@ Used by `appIcon` (`src/steam.ts`) and `gameLogo` (`src/flow.ts`) for the insert
 | `appStore.GetIconURLForApp(overview)`, Steam game | CDN URL `https://shared.steamstatic.com/community_assets/images/apps/<appid>/<icon_hash>.jpg` (AoE DE, 1017900). Offline it depends on the CEF cache; `gameLogo` hides the image if it fails to load. |
 | `toaster.toast({ …, logo: <img/> })` | Steam draws `logo` as the square left of the title, the image filling it with `width/height: 100%`. Toasts are drawn in their own CEF window, `notificationtoasts_uid2`: capture it with `deck.mjs toasts`, the plain `screenshot` misses it. Toasts fired together queue up and show one at a time. |
 
+## Achievements on a shortcut (issue #24, measured 2026-11-01, SteamOS 3.9.5)
+
+Used by `src/achievements.ts` to show RetroAchievements progress in the game page's "Conquistas" section and in the list page `/library/app/<appid>/achievements/my/individual`. Same shapes on the Deck and on the Steam Machine (read-only there).
+
+**The export names are minified** (`N_`, `p6`) and change between builds: every object is found by its shape, never by name. Each of the three parts is installed on its own, and one that is not found disables only its part (logged as `achievements patch: …`).
+
+| Object | How it is found | Use |
+|---|---|---|
+| Class with `prototype.GetSections(app, …)` | webpack export that is a function with `prototype.GetSections` | Sections of the game page. For a shortcut (`BIsModOrShortcut()`) only `nonsteam`, `notes`, `screenshots`. Returns a **`Set`**, memoized in `this.m_setSectionsMemo` (same object while its contents don't change). The patch returns a derived `Set` with `achievements` after `nonsteam`, cached per Steam `Set`, so its identity is stable too. |
+| `appDetailsStore.GetAchievements(appid)` | global | `return GetAppData(appid).details?.achievements`, and calls `RequestAchievements` when `vecHighlight` is `undefined`. The section reads from here. The patch returns our object for card appids and **writes nothing**. |
+| `appDetailsStore.m_mapAppData.get(appid).details.achievements` | global | `{nAchieved, nTotal, vecHighlight, vecUnachieved, vecAchievedHidden}`. Only exists after Steam loads the details (opening the page); for a shortcut Steam sets `nTotal: 0` and writes it again on every reload of the page. **The plugin does not write it**: after a Steam restart it stayed `0/0` and the section showed 5/76 through the patched getter alone. |
+| Achievements store | webpack export object with the key `m_mapMyAchievements` and a `LoadMyAchievements` method | `m_mapMyAchievements.get(appid) = {data: {achieved: {id: Ach}, unachieved: {…}, hidden: {}}}`, `m_mapGlobalAchievements.get(appid) = {data: {id: pct}}`. `GetMyAchievements(appid)` stores `{loading: true}` and calls `LoadMyAchievements` when the appid is missing, during render. The original `LoadMyAchievements` calls `SteamClient.Apps.GetMyAchievementsForApp` and, for a shortcut, stores `{error: 8}`; the patch ignores card appids and writes our data on a timer. |
+
+`Ach`, the shape of a Steam game's achievement (AoE DE, 1017900): `{strID, strName, strDescription, bAchieved, rtUnlocked, strImage, bHidden, flMinProgress, flCurrentProgress, flMaxProgress, flAchieved}`, `flAchieved` being the global %. In that game (12/44), `vecHighlight` had the 12 achieved ones from the most recent `rtUnlocked`, and `vecUnachieved` the **12** most common locked ones (by `flAchieved`), not all 32.
+
+**Render loop (do not repeat).** A first version wrote `details.achievements` (a mobx observable) inside the patched `GetAchievements`, which Steam calls while rendering. The steamwebhelper went to 133% CPU, the SharedJSContext stopped answering (CDP and the power button), and ~6 min later a watchdog dumped core and Steam reopened its UI. Rules in the code:
+- never write an observable inside a getter Steam calls while rendering (`GetAchievements`, `GetSections`, `GetMyAchievements` → `LoadMyAchievements`);
+- write once, from outside (card flow, timers), and only when the value changed (identity of the object built per fetch);
+- write only what is needed: the achievements store for the list page. `details.achievements` is not needed (see the table).
+- refresh on view: `GetAchievements` (section) and `GetMyAchievements` (list) only **schedule** a fetch (`setTimeout`), at most once a minute per game; the fetch result replaces the objects only if the unlocks changed (compared by achievement id + unlock time, not by fetch time), so a fetch with nothing new makes Steam redraw nothing. Measured: opening the page fetched once, opening the list 8 s later did not, and with the list open for a minute the steamwebhelper used ~1 s of CPU and no further fetch happened.
+- a card shortcut with no data yet (first load failed offline) is still known by GameID: opening its game page (`GetSections`) schedules the retry. Measured with a refused key and no cache: the fetch on page open worked, but the section only shows on the **next** opening, since Steam had already computed the sections and nothing the plugin holds is observable. Accepted: forcing a redraw would mean writing an observable from that path.
+
+Measured with the NFSU2 card (2026-11-01): section "5/76 alcançadas (6%)" in "Suas coisas" and the list "5 de 76 conquistas alcançadas (7%)" with badge, local unlock date and global %; the three patches found at plugin load, also right after a Steam restart; steamwebhelper at ~1% CPU with the list page idle.
+
+`Navigation.NavigateToExternalWeb(url)` (`@decky/ui`) opens Steam's own browser in Game Mode. With `https://retroachievements.org/settings` the user logged in, copied the Web API key there and pasted it in the panel's text field: that is the "Abrir página da chave" button.
+
+Not needed: `appStore` overview `.BHasStoreCategory(22)` (`false` for a shortcut, the section showed anyway) and `appAchievementProgressCache` (changed nothing on the page or the list).
+
+**RetroAchievements API from the backend.** `urllib` in the Python embedded in Decky's PluginLoader reaches `https://retroachievements.org` (a login with a well-formed fake key came back 401, not a certificate error), so the requests stay in Python (`py_modules/insertplay_decky/retroachievements.py`). `API_GetGameInfoAndUserProgress.php?u=<user>&g=<gameId>&a=1`: 200, ~400 ms, 35 KB for 76 achievements. Dates are UTC (`YYYY-MM-DD HH:MM:SS`); the emulators of the measured cards log in hardcore, so unlocks come as `DateEarnedHardcore`.
+
 ## Steam libraries on the card (measured 2026-10-24, SteamOS 3.9.5)
 
 Used by the card badge (`src/steam-badges.tsx`) to also mark Steam games installed on the card, not only InsertPlay shortcuts, and by the notification and auto-launch of those games (issue #10, `checkSteamLibraries` in `src/flow.ts`).

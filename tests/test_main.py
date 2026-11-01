@@ -2,6 +2,7 @@
 fallbacks that must not look "empty"."""
 import asyncio
 import importlib
+import json
 import logging
 import os
 import sys
@@ -242,3 +243,98 @@ def test_shortcut_icon_copies_to_ssd_and_respects_user_icons(main, tmp_path):
     assert steps["files_after"] == [name(changed)]
     assert steps["user"]["apply"] is False and steps["user"]["current"] == "/grid/user_icon.png"
     assert steps["outside"] is None and steps["bad_guid"] is None
+
+
+RA_KEY = "AbCdEf0123456789AbCdEf0123456789"
+
+
+def _ra_plugin(main):
+    plugin = main.Plugin()
+    asyncio.run(plugin._main())
+    return plugin
+
+
+def test_ra_login_saves_only_when_the_api_accepts(main, monkeypatch, caplog):
+    plugin = _ra_plugin(main)
+    calls = []
+
+    def verify(user, key, agent):
+        calls.append(user)
+        if user == "Bad":
+            raise main.ra.RAError("refused", "HTTP 401")
+        return "Someone"
+
+    monkeypatch.setattr(main.ra, "verify_login", verify)
+    assert asyncio.run(plugin.ra_login("Bad", RA_KEY)) == {"user": None, "error": "refused"}
+    assert asyncio.run(plugin.ra_status()) == {"user": None}
+    assert asyncio.run(plugin.ra_login("x", "short")) == {"user": None, "error": "invalid"}
+    assert calls == ["Bad"]  # the bad format never reached the API
+    assert asyncio.run(plugin.ra_login("someone", RA_KEY)) == {"user": "Someone", "error": None}
+    assert asyncio.run(plugin.ra_status()) == {"user": "Someone"}
+    # the key never goes to the event log or the Python log
+    events = json.dumps(asyncio.run(plugin.log_tail(50)))
+    assert RA_KEY not in events and RA_KEY not in caplog.text
+    asyncio.run(plugin.ra_logout())
+    assert asyncio.run(plugin.ra_status()) == {"user": None}
+    asyncio.run(plugin._unload())
+
+
+def test_ra_game_uses_the_cache_and_falls_back_to_it(main, monkeypatch):
+    plugin = _ra_plugin(main)
+    assert asyncio.run(plugin.ra_game(5613)) is None  # not logged in
+    plugin.ra_credentials.save("Someone", RA_KEY)
+    fetched = []
+
+    def fetch(user, key, game_id, agent):
+        fetched.append(game_id)
+        if len(fetched) > 1:
+            raise main.ra.RAError("network", "offline")
+        return {"gameId": game_id, "title": "NFSU2", "total": 2, "unlocked": 1, "achievements": []}
+
+    monkeypatch.setattr(main.ra, "fetch_game", fetch)
+    first = asyncio.run(plugin.ra_game(5613))
+    assert (first["unlocked"], first["stale"]) == (1, False) and first["fetchedAt"] > 0
+    assert asyncio.run(plugin.ra_game(5613)) == first  # cache, no second fetch
+    assert fetched == [5613]
+    stale = asyncio.run(plugin.ra_game(5613, True))  # refresh fails: cache, marked stale
+    assert stale == {**first, "stale": True}
+    assert asyncio.run(plugin.ra_game(1, True)) is None  # no cache and offline
+    assert asyncio.run(plugin.ra_game(0)) is None  # invalid id, through @guarded
+    asyncio.run(plugin._unload())
+
+
+def test_ra_game_logs_only_when_progress_changes(main, monkeypatch):
+    plugin = _ra_plugin(main)
+    plugin.ra_credentials.save("Someone", RA_KEY)
+    unlocked = [1]
+    monkeypatch.setattr(
+        main.ra,
+        "fetch_game",
+        lambda user, key, game_id, agent: {"gameId": game_id, "title": "G", "total": 3, "unlocked": unlocked[0], "achievements": []},
+    )
+
+    def lines():
+        return [e["message"] for e in asyncio.run(plugin.log_tail(50)) if e["kind"] == "achievements"]
+
+    asyncio.run(plugin.ra_game(7, True))
+    asyncio.run(plugin.ra_game(7, True))
+    assert lines() == ["G: 1/3"]
+    unlocked[0] = 2
+    asyncio.run(plugin.ra_game(7, True))
+    assert lines() == ["G: 2/3", "G: 1/3"]
+    asyncio.run(plugin._unload())
+
+
+def test_ra_game_drops_a_fetch_that_outlived_its_session(main, monkeypatch):
+    plugin = _ra_plugin(main)
+    plugin.ra_credentials.save("Someone", RA_KEY)
+
+    def fetch(user, key, game_id, agent):
+        plugin.ra_credentials.clear()  # logout while the request is in flight
+        plugin.ra_credentials.save("Other", RA_KEY)  # and someone else logs in
+        return {"gameId": game_id, "title": "G", "total": 3, "unlocked": 1, "achievements": []}
+
+    monkeypatch.setattr(main.ra, "fetch_game", fetch)
+    assert asyncio.run(plugin.ra_game(7, True)) is None
+    assert plugin.ra_cache.get(7, "Someone") is None and plugin.ra_cache.get(7, "Other") is None
+    asyncio.run(plugin._unload())
