@@ -14,6 +14,7 @@ import {
   portableSet,
   portableSync,
   portableUnlinkDangling,
+  raGame,
   registryAll,
   registryPut,
   shortcutIcon,
@@ -39,6 +40,7 @@ import {
   waitForLibrary,
 } from "./steam";
 import { showBadges } from "./steam-badges";
+import { forgetAchievements, onAchievementsViewed, publishAchievements, shownAppids } from "./achievements";
 
 const TITLE = "InsertPlay";
 
@@ -118,9 +120,13 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
     artworkApplied = failed.length === 0;
   }
   if (card.icon) await ensureIcon(card, appid);
-  await saveRecord(card.guid, { appid, appName: card.appName, artworkApplied });
+  const raGameId = card.game?.retroAchievements?.gameId ?? null;
+  await saveRecord(card.guid, { appid, appName: card.appName, artworkApplied, raGameId });
   setHidden(appid, false);
   cardApps.set(card.mount, appid);
+  // outside the queue: the API can take seconds and the game may already be starting
+  if (raGameId) void showAchievements(appid, raGameId, true);
+  else forgetAchievements(appid);
 
   const logo = gameLogo(appid);
   if (launch && (await getSettings()).autoLaunch) {
@@ -148,6 +154,83 @@ async function ensureIcon(card: Card, appid: number): Promise<void> {
   } catch (err) {
     await logAdd("error", `${card.appName}: icon failed: ${err instanceof Error ? err.message : err}`);
   }
+}
+
+/** A fetch younger than this is not repeated on insertion or startup. */
+const ACHIEVEMENTS_FRESH_SECONDS = 120;
+/** RA registers an unlock when it happens, but the emulator may still be sending it as
+ *  the game closes. */
+const AFTER_GAME_MS = 5000;
+
+const reportedAchievementErrors = new Set<string>();
+
+/** RetroAchievements progress of a shortcut (issue #24): the cache first, so the page has
+ *  something right away, then the API when `refresh` and the cache is old. Never throws:
+ *  achievements are cosmetic, and a failure is logged once per session. */
+async function showAchievements(appid: number, gameId: number, refresh: boolean): Promise<void> {
+  try {
+    // without a cache, the backend already goes to the API here
+    let game = await raGame(gameId, false);
+    if (game) publishAchievements(appid, game);
+    if (refresh && game && Date.now() / 1000 - game.fetchedAt > ACHIEVEMENTS_FRESH_SECONDS) {
+      game = await raGame(gameId, true);
+      if (game) publishAchievements(appid, game);
+    }
+  } catch (err) {
+    const detail = `achievements ${gameId}: ${err instanceof Error ? err.message : err}`;
+    if (reportedAchievementErrors.has(detail)) return;
+    reportedAchievementErrors.add(detail);
+    await logAdd("error", detail).catch(() => undefined);
+  }
+}
+
+/** Every registered shortcut with a GameID, card in or out: the page of a removed card
+ *  keeps the last state. `refresh` goes to the API for all of them ("Atualizar agora"). */
+export async function loadAllAchievements(refresh: boolean): Promise<void> {
+  const registry = await registryAll();
+  if (!registry) return;
+  // A present card's manifest wins over the registry: it may have gained the block
+  // after its last insertion (login with the card already in)
+  const games = new Map<number, number>();
+  for (const record of Object.values(registry)) if (record.raGameId) games.set(record.appid, record.raGameId);
+  for (const card of (await currentCards()) ?? []) {
+    const record = card.guid ? registry[card.guid] : undefined;
+    const gameId = card.game?.retroAchievements?.gameId;
+    if (record && gameId) games.set(record.appid, gameId);
+  }
+  for (const [appid, gameId] of games) {
+    if (shortcutExists(appid)) await showAchievements(appid, gameId, refresh);
+  }
+}
+
+/** Logout: Steam's screens go back to "no achievements" for every shortcut. */
+export function clearAchievements(): void {
+  for (const appid of shownAppids()) forgetAchievements(appid);
+}
+
+/** Fetches again and shows it if the progress changed. Never throws. */
+async function refreshAchievements(appid: number, gameId: number, why: string): Promise<void> {
+  try {
+    const game = await raGame(gameId, true);
+    if (game && publishAchievements(appid, game)) {
+      await logAdd("achievements", `${game.title || gameId}: ${game.unlocked}/${game.total} (${why})`);
+    }
+  } catch (err) {
+    await logAdd("error", `achievements ${gameId}: ${err instanceof Error ? err.message : err}`).catch(() => undefined);
+  }
+}
+
+/** Steam's game page or achievement list is open (card in or out, game running or not):
+ *  an unlock made with the game open shows up there. Throttled in achievements.ts. */
+onAchievementsViewed((appid, gameId) => refreshAchievements(appid, gameId, "page opened"));
+
+/** A card game closed: fetch again to show what was unlocked in the session. */
+export async function onGameClosed(appid: number): Promise<void> {
+  const registry = await registryAll();
+  const record = Object.values(registry ?? {}).find((r) => r.appid === appid && r.raGameId);
+  if (!record?.raGameId) return;
+  await new Promise((r) => setTimeout(r, AFTER_GAME_MS));
+  await refreshAchievements(appid, record.raGameId, "game closed");
 }
 
 /** Applies the "hide on removal" setting to every registered shortcut whose card is not
@@ -537,7 +620,11 @@ export const reconcile = () =>
     await logAdd("reconcile", `${cards.length} card(s): ${cards.map((c) => c.appName ?? c.label).join(", ") || "-"}`);
   })
     .catch((err) => report("Reconciliação", err))
-    .finally(refreshBadges);
+    .finally(() => {
+      void refreshBadges();
+      // absent cards too: their shortcut pages keep the last state (cache only)
+      void loadAllAchievements(false);
+    });
 
 /** "Hide on removal" toggled in the panel: applies right away to absent cards. */
 export const applyHideRemoved = () =>

@@ -13,6 +13,7 @@ from .cards import LEGACY_DIR, manifest_path
 IDENTITY_NAME = "shortcut-identity.json"
 GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 SD_ROOT = "{SD_ROOT}"
+SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 # Kinds Steam accepts in SetCustomArtworkForApp. The icon is separate: Steam
 # stores only its path (SetShortcutIcon), so it is copied to the SSD (icons.py).
@@ -72,12 +73,44 @@ def _artwork_path(mount: str, value, kind: str):
     return None
 
 
+def _slug(value):
+    """`platform` and `emulator`: a short lowercase word, or `None`. The known values are
+    in docs/card-format.md; an unknown one is kept, since the plugin only displays it."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip().lower()
+    return value if SLUG_RE.match(value) else None
+
+
+def _game_id(value):
+    """RetroAchievements GameID: integer > 0. `true` and "5613" are not accepted."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def read_game(data: dict):
+    """Optional `game` block (issue #24): which game and emulator the card holds. An
+    invalid value becomes `None` without refusing the card: the shortcut still works."""
+    game = _get(data, "game")
+    if not isinstance(game, dict):
+        return None
+    ra = _get(game, "retroAchievements")
+    game_id = _game_id(_get(ra, "gameId")) if isinstance(ra, dict) else None
+    return {
+        "platform": _slug(_get(game, "platform")),
+        "emulator": _slug(_get(game, "emulator")),
+        "retroAchievements": {"gameId": game_id} if game_id else None,
+    }
+
+
 def load_card(mount: str) -> dict:
     """Everything the frontend needs to create or update this card's shortcut."""
     path = manifest_path(mount)
     if not path:
         raise CardError(f"manifest not found in {mount}")
-    shortcut = _get(_read_json(path), "shortcut")
+    data = _read_json(path)
+    shortcut = _get(data, "shortcut")
     if not isinstance(shortcut, dict):
         raise CardError(f"{path} has no 'shortcut' object")
     app_name = str(_get(shortcut, "appName") or "").strip()
@@ -104,4 +137,5 @@ def load_card(mount: str) -> dict:
         "launchOptions": launch_options,
         "artwork": artwork,
         "icon": icon,
+        "game": read_game(data),
     }

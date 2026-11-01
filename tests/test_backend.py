@@ -156,6 +156,39 @@ def test_load_card_with_invalid_guid_is_refused(tmp_path):
         load_card(str(mount))
 
 
+def test_load_card_without_game_block(tmp_path):
+    assert load_card(str(make_card(tmp_path)))["game"] is None
+
+
+def test_load_card_reads_game_block(tmp_path):
+    manifest = {**MANIFEST, "game": {"platform": "PS2", "emulator": "pcsx2", "retroAchievements": {"gameId": 5613}}}
+    game = load_card(str(make_card(tmp_path, manifest=manifest)))["game"]
+    assert game == {"platform": "ps2", "emulator": "pcsx2", "retroAchievements": {"gameId": 5613}}
+
+
+def test_load_card_game_block_keys_are_case_insensitive(tmp_path):
+    manifest = {**MANIFEST, "Game": {"Platform": "ps1", "RetroAchievements": {"GameID": 11361}}}
+    game = load_card(str(make_card(tmp_path, manifest=manifest)))["game"]
+    assert game == {"platform": "ps1", "emulator": None, "retroAchievements": {"gameId": 11361}}
+
+
+@pytest.mark.parametrize("game_id", [0, -3, "5613", True, 12.0, None])
+def test_load_card_invalid_game_id_has_no_achievements(tmp_path, game_id):
+    manifest = {**MANIFEST, "game": {"platform": "ps2", "retroAchievements": {"gameId": game_id}}}
+    card = load_card(str(make_card(tmp_path, manifest=manifest)))
+    assert card["game"]["retroAchievements"] is None
+    assert card["appName"] == "New Super Mario Bros. U"  # the card itself still works
+
+
+@pytest.mark.parametrize("game", ["ps2", [], {"platform": 7, "emulator": "a b", "retroAchievements": 5613}])
+def test_load_card_invalid_game_values_become_none(tmp_path, game):
+    card = load_card(str(make_card(tmp_path, manifest={**MANIFEST, "game": game})))
+    if isinstance(game, dict):
+        assert card["game"] == {"platform": None, "emulator": None, "retroAchievements": None}
+    else:
+        assert card["game"] is None
+
+
 def test_load_card_without_args_uses_only_guid(tmp_path):
     manifest = json.loads(json.dumps(MANIFEST))
     manifest["shortcut"]["launch"]["args"] = ""

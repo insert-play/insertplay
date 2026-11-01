@@ -5,12 +5,14 @@ import base64
 import functools
 import os
 import sys
+import time
 
 import decky
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "py_modules"))
 
 from insertplay_decky import cards, icons, plugin_package, prefixes  # noqa: E402
+from insertplay_decky import retroachievements as ra  # noqa: E402
 from insertplay_decky.manifest import GUID_RE, CardError, load_card  # noqa: E402
 from insertplay_decky.store import EventLog, Registry, Settings  # noqa: E402
 
@@ -101,6 +103,8 @@ class Plugin:
         self.registry = Registry(os.path.join(settings_dir, "registry.json"))
         self.settings = Settings(os.path.join(settings_dir, "settings.json"))
         self.log = EventLog(os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "events.jsonl"))
+        self.ra_credentials = ra.Credentials(os.path.join(settings_dir, "ra_credentials.json"))
+        self.ra_cache = ra.Cache(os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "ra-cache"))
         self.mounted = {}
         self.watcher = None
 
@@ -290,6 +294,62 @@ class Plugin:
         if removed:
             self.log.add("portable", f"unlinked (card absent): {', '.join(map(str, removed))}")
         return removed
+
+    def _ra_user_agent(self) -> str:
+        return f"InsertPlay/{getattr(decky, 'DECKY_PLUGIN_VERSION', 'dev')}"
+
+    @guarded(lambda: None)
+    async def ra_status(self) -> dict:
+        """RetroAchievements login, without the key."""
+        creds = self.ra_credentials.load()
+        return {"user": creds["user"] if creds else None}
+
+    @guarded(lambda: {"user": None, "error": "failed"})
+    async def ra_login(self, user: str, key: str) -> dict:
+        """Saves only after the API accepts the key. Returns `{user, error}`; `error` is
+        "invalid", "refused" or "network". Neither the key nor the URL go to the log."""
+        try:
+            user, key = ra.check_credentials(user, key)
+            name = await asyncio.to_thread(ra.verify_login, user, key, self._ra_user_agent())
+        except ra.RAError as exc:
+            self.log.add("achievements", f"login {user!r} failed: {exc.code}")
+            return {"user": None, "error": exc.code}
+        self.ra_credentials.save(name, key)
+        self.log.add("achievements", f"logged in as {name}")
+        return {"user": name, "error": None}
+
+    @guarded(lambda: None)
+    async def ra_logout(self) -> dict:
+        self.ra_credentials.clear()
+        self.log.add("achievements", "logged out")
+        return {"user": None}
+
+    # None = nothing to show (not logged in, or no cache and the API failed): the frontend
+    # keeps what it already shows
+    @guarded(lambda: None)
+    async def ra_game(self, game_id: int, refresh: bool = False) -> dict:
+        """Progress of one game, already in Steam's format. Cache first; `refresh` goes to the
+        API, and a failed fetch returns the cache marked `stale`."""
+        if isinstance(game_id, bool) or not isinstance(game_id, int) or game_id <= 0:
+            raise ValueError(f"invalid gameId {game_id!r}")
+        creds = self.ra_credentials.load()
+        if not creds:
+            return None
+        cached = await asyncio.to_thread(self.ra_cache.get, game_id, creds["user"])
+        if cached and not refresh:
+            return {**cached, "stale": False}
+        try:
+            game = await asyncio.to_thread(
+                ra.fetch_game, creds["user"], creds["key"], game_id, self._ra_user_agent()
+            )
+        except ra.RAError as exc:
+            self.log.add("achievements", f"game {game_id}: fetch failed ({exc})")
+            return {**cached, "stale": True} if cached else None
+        fresh = await asyncio.to_thread(self.ra_cache.put, game_id, creds["user"], game, time.time())
+        # an open game page refetches every minute: only a change goes to the event log
+        if not cached or (cached.get("unlocked"), cached.get("total")) != (game["unlocked"], game["total"]):
+            self.log.add("achievements", f"{game['title'] or game_id}: {game['unlocked']}/{game['total']}")
+        return {**fresh, "stale": False}
 
     @guarded(lambda: None)
     async def log_add(self, kind: str, message: str) -> None:

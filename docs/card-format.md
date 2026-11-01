@@ -52,6 +52,32 @@ The plugin looks for cards in `/run/media/*` and `/run/media/*/*` every second. 
 - A missing or unreadable artwork falls back to `steam-artwork/<kind>.png`; without it, Steam's default stays.
 - Steam keeps only the path of a shortcut icon, so the plugin copies `icon` to the device (`~/homebrew/data/InsertPlay/icons/`). The icon stays visible after the card is removed. An icon the user picked in Steam is never replaced.
 
+### `game`
+
+Optional block, at the top level next to `shortcut`, that says which game and emulator the card holds. The plugin uses it for RetroAchievements (see the [README](../README.md#achievements-retroachievements)); a card without it works as before.
+
+```json
+{
+  "schemaVersion": 1,
+  "shortcut": { "...": "..." },
+  "game": {
+    "platform": "ps2",
+    "emulator": "pcsx2",
+    "retroAchievements": { "gameId": 5613 }
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `game.platform` | `ps1`, `ps2`, `gc`, `wii`, `wiiu`, … Lowercase letters, digits, `-` and `_`. |
+| `game.emulator` | `duckstation`, `pcsx2`, `dolphin`, `cemu`, … Same format. |
+| `game.retroAchievements.gameId` | The game's ID on retroachievements.org: the number in `retroachievements.org/game/<id>`. A JSON integer greater than 0 (not a string). Only cards with it show achievements. |
+
+- Keys are case-insensitive, as in `shortcut`.
+- An invalid value is ignored without refusing the card: the shortcut still works, only that field is missing (`rpc current_cards` shows the block as the plugin read it).
+- For a game with subsets, use the main game's ID. Subsets are not shown.
+
 ## `shortcut-identity.json`
 
 ```json

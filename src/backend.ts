@@ -12,12 +12,23 @@ export interface Card {
   artwork?: Record<string, string>;
   /** Shortcut icon, on the card. */
   icon?: string | null;
+  /** Optional `game` block of the manifest (issue #24). `null` = card without it. */
+  game?: CardGame | null;
+}
+
+export interface CardGame {
+  platform: string | null;
+  emulator: string | null;
+  retroAchievements: { gameId: number } | null;
 }
 
 export interface RegistryRecord {
   appid: number;
   appName: string;
   artworkApplied?: boolean;
+  /** RetroAchievements GameID of the card, kept so the shortcut page still shows the
+   *  achievements with the card out (and after a Steam restart). `null` = none. */
+  raGameId?: number | null;
   updatedAt?: number;
 }
 
@@ -92,6 +103,47 @@ export interface PackageStatus {
 /** `null` = backend failure (details in the event log). */
 export const packageStatus = callable<[], PackageStatus | null>("package_status");
 export const writePackageToCard = callable<[mount: string], CardPackage | null>("write_package_to_card");
+
+/** Steam's achievement object (`details.achievements` of a real Steam game, measured on the Deck). */
+export interface SteamAchievement {
+  strID: string;
+  strName: string;
+  strDescription: string;
+  bAchieved: boolean;
+  /** Unix seconds; 0 = locked. */
+  rtUnlocked: number;
+  strImage: string;
+  bHidden: boolean;
+  flMinProgress: number;
+  flCurrentProgress: number;
+  flMaxProgress: number;
+  /** % of RA players who have it. */
+  flAchieved: number;
+}
+
+export interface RaGame {
+  gameId: number;
+  title: string;
+  total: number;
+  unlocked: number;
+  achievements: SteamAchievement[];
+  /** Unix seconds of the fetch. */
+  fetchedAt: number;
+  /** The API failed and this is the cache. */
+  stale: boolean;
+}
+
+/** "invalid": wrong format; "refused": RA rejected the user/key; "network": no answer. */
+export type RaLoginError = "invalid" | "refused" | "network" | "failed";
+
+/** `user: null` = not logged in. `null` = backend failure. */
+export const raStatus = callable<[], { user: string | null } | null>("ra_status");
+export const raLogin = callable<[user: string, key: string], { user: string | null; error: RaLoginError | null }>(
+  "ra_login",
+);
+export const raLogout = callable<[], { user: null } | null>("ra_logout");
+/** `null` = nothing to show (not logged in, or no cache and the API failed). */
+export const raGame = callable<[gameId: number, refresh: boolean], RaGame | null>("ra_game");
 
 /** Off; only the Windows user folder (`steamuser`, where the saves live); or the
  *  whole prefix (slow on a slow card: Proton re-copies ~115 MB on every launch). */
