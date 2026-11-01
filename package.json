@@ -1,6 +1,6 @@
 {
   "name": "insertplay",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Decky Loader plugin: InsertPlay SD cards become Steam library entries the moment they are inserted.",
   "author": "Wesley Santos",
   "repository": {
