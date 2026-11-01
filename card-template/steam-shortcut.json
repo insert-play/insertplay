@@ -14,5 +14,10 @@
 			"hero": "steam-artwork/hero.png",
 			"logo": "steam-artwork/logo.png"
 		}
+	},
+	"game": {
+		"platform": "ps1",
+		"emulator": "duckstation",
+		"retroAchievements": { "gameId": 0 }
 	}
 }
