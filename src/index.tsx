@@ -54,6 +54,7 @@ import {
   setPortable,
   settlePortableChange,
   steamCardsPresent,
+  warnIfRaRefused,
 } from "./flow";
 import { InstallType, installFromCard, notifyNewerPackage } from "./selfupdate";
 import { onAppClosed, onInstallFoldersChanged } from "./steam";
@@ -232,9 +233,20 @@ function AchievementsSection() {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // RA refused the saved key (issue #34): the login form comes back, with the user filled in
+  const [refused, setRefused] = useState(false);
 
   useEffect(() => {
-    void raStatus().then((status) => setUser(status ? status.user : null));
+    const load = () =>
+      void raStatus().then((status) => {
+        setUser(status ? status.user : null);
+        setRefused(!!status?.refused);
+        if (status?.refused && status.user) setName((current) => current || status.user!);
+      });
+    load();
+    // Decky keeps the panel mounted: a refusal while it is open must show up too
+    const sub = addEventListener("ra_refused", load);
+    return () => void removeEventListener("ra_refused", sub);
   }, []);
 
   const login = async () => {
@@ -247,6 +259,7 @@ function AchievementsSection() {
         return;
       }
       setUser(result.user);
+      setRefused(false);
       setKey("");
       toaster.toast({ title: "InsertPlay", body: `RetroAchievements: conectado como ${result.user}` });
       clearAchievements(); // new session: nothing from before the login is shown
@@ -261,6 +274,7 @@ function AchievementsSection() {
     await raLogout();
     clearAchievements();
     setUser(null);
+    setRefused(false);
   };
   const update = async () => {
     setBusy(true);
@@ -274,7 +288,7 @@ function AchievementsSection() {
   if (user === undefined) return null;
   return (
     <PanelSection title="Conquistas">
-      {user ? (
+      {user && !refused ? (
         <>
           <PanelSectionRow>
             <div style={{ fontSize: "0.85em" }}>RetroAchievements: {user}</div>
@@ -295,6 +309,14 @@ function AchievementsSection() {
         </>
       ) : (
         <>
+          {refused && (
+            <PanelSectionRow>
+              <div style={{ fontSize: "0.8em", color: "#e57373" }}>
+                O RetroAchievements recusou a chave salva de {user}. As conquistas não são atualizadas até
+                você entrar de novo com a Web API Key atual.
+              </div>
+            </PanelSectionRow>
+          )}
           <PanelSectionRow>
             <div style={{ fontSize: "0.75em", opacity: 0.7 }}>
               Mostra as conquistas do RetroAchievements dos cartões na página do jogo. Abra a página da
@@ -330,6 +352,13 @@ function AchievementsSection() {
               Entrar
             </ButtonItem>
           </PanelSectionRow>
+          {refused && (
+            <PanelSectionRow>
+              <ButtonItem layout="below" disabled={busy} onClick={() => void logout()}>
+                Sair
+              </ButtonItem>
+            </PanelSectionRow>
+          )}
         </>
       )}
     </PanelSection>
@@ -460,6 +489,7 @@ export default definePlugin(() => {
     void notifyNewerPackage(card.mount).catch(() => undefined);
   });
   const removed = addEventListener<[{ mount: string; label: string }]>("card_removed", (card) => void onRemoved(card));
+  const raRefused = addEventListener("ra_refused", () => void warnIfRaRefused().catch(() => undefined));
   // A card with a Steam library and no InsertPlay manifest raises no backend event:
   // Steam is what notifies, for the badge and for the notification (issue #10).
   const stopFolders = onInstallFoldersChanged(() => void onSteamLibrariesChanged());
@@ -487,6 +517,7 @@ export default definePlugin(() => {
     onDismount() {
       removeEventListener("card_inserted", inserted);
       removeEventListener("card_removed", removed);
+      removeEventListener("ra_refused", raRefused);
       stopFolders();
       clearInterval(portableTimer);
       routerHook.removePatch("/library", libraryPatch);

@@ -15,6 +15,7 @@ import {
   portableSync,
   portableUnlinkDangling,
   raGame,
+  raStatus,
   registryAll,
   registryPut,
   shortcutIcon,
@@ -220,10 +221,26 @@ export async function loadAllAchievements(force: boolean): Promise<void> {
   }
 }
 
+let refusedWarned = false;
+
 /** Logout or login: Steam's screens go back to "no achievements" and fetches still on
- *  their way are dropped. */
+ *  their way are dropped. A key refused after a new login warns again. */
 export function clearAchievements(): void {
   newAchievementsSession();
+  refusedWarned = false;
+}
+
+/** RA refused the saved key (issue #34): one toast per session, not one per game or per
+ *  refetch of an open page. Called by the backend's `ra_refused` event and at startup (the
+ *  mark survives a restart). A lack of internet never gets here. */
+export async function warnIfRaRefused(): Promise<void> {
+  if (refusedWarned || !(await raStatus())?.refused) return;
+  refusedWarned = true;
+  toaster.toast({
+    title: TITLE,
+    body: "RetroAchievements: a chave foi recusada. Entre de novo no painel do InsertPlay.",
+    duration: 10000,
+  });
 }
 
 /** Fetches again and shows it if the progress changed. Never throws. */
@@ -643,6 +660,7 @@ export const reconcile = () =>
       void refreshBadges();
       // absent cards too: their shortcut pages keep the last state (cache only)
       void loadAllAchievements(false);
+      void warnIfRaRefused().catch(() => undefined);
     });
 
 /** "Hide on removal" toggled in the panel: applies right away to absent cards. */

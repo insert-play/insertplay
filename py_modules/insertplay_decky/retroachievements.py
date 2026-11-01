@@ -25,7 +25,8 @@ KEY_RE = re.compile(r"^[A-Za-z0-9]{16,64}$")
 
 
 class RAError(Exception):
-    """`code` is what the panel shows: "invalid", "refused" or "network"."""
+    """`code` is what the panel shows: "invalid", "refused" or "network". Only "refused"
+    is a warning outside the login: "network" (offline, RA down) keeps the cache silently."""
 
     def __init__(self, code: str, detail: str = ""):
         super().__init__(f"{code}: {detail}" if detail else code)
@@ -72,7 +73,22 @@ class Credentials:
         return {"user": user, "key": key}
 
     def save(self, user: str, key: str) -> None:
+        """A new login also clears the "refused" mark (issue #34)."""
         _write_private(self.path, {"user": user, "key": key})
+
+    def refused(self) -> bool:
+        """RA refused the saved key (HTTP 401/403): the API stays paused until a new login."""
+        data = _read(self.path)
+        return self.load() is not None and data.get("refused") is True
+
+    def mark_refused(self, creds: dict) -> bool:
+        """Saved next to the key it applies to, so it survives a Decky restart and a new
+        login or logout clears it. True only on the change: the caller warns once. False
+        too if the login changed since `creds` was read."""
+        if self.load() != creds or self.refused():
+            return False
+        _write_private(self.path, {**creds, "refused": True})
+        return True
 
     def clear(self) -> None:
         try:
