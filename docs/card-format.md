@@ -110,6 +110,7 @@ The plugin starts the shortcut as `exe args --guid <guid>`. The template's [`ins
 
 Keep paths in the emulator's settings relative to its data folder, so the card works under any mount point.
 
+- **PCSX2 and OpenGL:** use PCSX2 2.8 or later. With 2.6.3 under gamescope, the OpenGL renderer kept the window's initial 640×480 size and the picture filled only the bottom-left quarter of the screen until the renderer was switched ([#32](https://github.com/insert-play/insertplay/issues/32)). To update, replace the AppImage and keep the data folder; savestates from an older version may not load, memory cards are unaffected.
 - **Several discs:** write a `.m3u` with one disc file name per line (e.g. `disc1.cue`, `disc2.cue`) and point `GAME` to it. The emulator then swaps discs by itself. DuckStation names a per-game memory card after the `.m3u` file, so name it like the existing card (e.g. `Heart of Darkness (USA).m3u` for `Heart of Darkness (USA)_1.mcd`).
 - **`.cue` files:** the `FILE` line must name the `.bin` next to it. A `.bin` renamed after the `.cue` was written (e.g. to `game.bin`) needs the line fixed.
 - **A Windows game:** replace the game block with Proton, the Steam Linux Runtime and a Wine prefix on the card:
