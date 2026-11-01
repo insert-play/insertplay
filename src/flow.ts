@@ -40,7 +40,14 @@ import {
   waitForLibrary,
 } from "./steam";
 import { showBadges } from "./steam-badges";
-import { forgetAchievements, onAchievementsViewed, publishAchievements, shownAppids } from "./achievements";
+import {
+  achievementsSession,
+  forgetAchievements,
+  newAchievementsSession,
+  onAchievementsViewed,
+  publishAchievements,
+  trackAchievements,
+} from "./achievements";
 
 const TITLE = "InsertPlay";
 
@@ -125,7 +132,7 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
   setHidden(appid, false);
   cardApps.set(card.mount, appid);
   // outside the queue: the API can take seconds and the game may already be starting
-  if (raGameId) void showAchievements(appid, raGameId, true);
+  if (raGameId) void showAchievements(appid, raGameId, "auto");
   else forgetAchievements(appid);
 
   const logo = gameLogo(appid);
@@ -158,24 +165,32 @@ async function ensureIcon(card: Card, appid: number): Promise<void> {
 
 /** A fetch younger than this is not repeated on insertion or startup. */
 const ACHIEVEMENTS_FRESH_SECONDS = 120;
+const JUST_FETCHED_SECONDS = 5;
 /** RA registers an unlock when it happens, but the emulator may still be sending it as
  *  the game closes. */
 const AFTER_GAME_MS = 5000;
 
 const reportedAchievementErrors = new Set<string>();
 
+/** "cache": only what the backend already has (startup, absent cards); "auto": also the API
+ *  when the cache is old (insertion); "force": always the API ("Atualizar agora", login). */
+type AchievementsLoad = "cache" | "auto" | "force";
+
 /** RetroAchievements progress of a shortcut (issue #24): the cache first, so the page has
- *  something right away, then the API when `refresh` and the cache is old. Never throws:
- *  achievements are cosmetic, and a failure is logged once per session. */
-async function showAchievements(appid: number, gameId: number, refresh: boolean): Promise<void> {
+ *  something right away, then the API as `mode` says. Never throws: achievements are
+ *  cosmetic, and a failure is logged once per session. */
+async function showAchievements(appid: number, gameId: number, mode: AchievementsLoad): Promise<void> {
+  trackAchievements(appid, gameId);
+  const session = achievementsSession();
   try {
     // without a cache, the backend already goes to the API here
-    let game = await raGame(gameId, false);
-    if (game) publishAchievements(appid, game);
-    if (refresh && game && Date.now() / 1000 - game.fetchedAt > ACHIEVEMENTS_FRESH_SECONDS) {
-      game = await raGame(gameId, true);
-      if (game) publishAchievements(appid, game);
-    }
+    const game = await raGame(gameId, false);
+    if (game) publishAchievements(appid, game, session);
+    // "force" skips only a fetch the line above has just made (game without a cache)
+    const age = game ? Date.now() / 1000 - game.fetchedAt : 0;
+    const fetchAgain =
+      mode === "force" ? !game || age > JUST_FETCHED_SECONDS : mode === "auto" && game && age > ACHIEVEMENTS_FRESH_SECONDS;
+    if (fetchAgain) await refreshAchievements(appid, gameId, mode);
   } catch (err) {
     const detail = `achievements ${gameId}: ${err instanceof Error ? err.message : err}`;
     if (reportedAchievementErrors.has(detail)) return;
@@ -185,34 +200,38 @@ async function showAchievements(appid: number, gameId: number, refresh: boolean)
 }
 
 /** Every registered shortcut with a GameID, card in or out: the page of a removed card
- *  keeps the last state. `refresh` goes to the API for all of them ("Atualizar agora"). */
-export async function loadAllAchievements(refresh: boolean): Promise<void> {
+ *  keeps the last state. `force` goes to the API for all of them ("Atualizar agora", login). */
+export async function loadAllAchievements(force: boolean): Promise<void> {
   const registry = await registryAll();
   if (!registry) return;
-  // A present card's manifest wins over the registry: it may have gained the block
-  // after its last insertion (login with the card already in)
   const games = new Map<number, number>();
   for (const record of Object.values(registry)) if (record.raGameId) games.set(record.appid, record.raGameId);
+  // A present card's manifest wins over the registry: it may have gained the block after
+  // its last insertion. Saved, so the game-close refresh and the next startup find it too.
   for (const card of (await currentCards()) ?? []) {
     const record = card.guid ? registry[card.guid] : undefined;
     const gameId = card.game?.retroAchievements?.gameId;
-    if (record && gameId) games.set(record.appid, gameId);
+    if (!card.guid || !record || !gameId) continue;
+    games.set(record.appid, gameId);
+    if (record.raGameId !== gameId) await registryPut(card.guid, { raGameId: gameId });
   }
   for (const [appid, gameId] of games) {
-    if (shortcutExists(appid)) await showAchievements(appid, gameId, refresh);
+    if (shortcutExists(appid)) await showAchievements(appid, gameId, force ? "force" : "cache");
   }
 }
 
-/** Logout: Steam's screens go back to "no achievements" for every shortcut. */
+/** Logout or login: Steam's screens go back to "no achievements" and fetches still on
+ *  their way are dropped. */
 export function clearAchievements(): void {
-  for (const appid of shownAppids()) forgetAchievements(appid);
+  newAchievementsSession();
 }
 
 /** Fetches again and shows it if the progress changed. Never throws. */
 async function refreshAchievements(appid: number, gameId: number, why: string): Promise<void> {
+  const session = achievementsSession();
   try {
     const game = await raGame(gameId, true);
-    if (game && publishAchievements(appid, game)) {
+    if (game && publishAchievements(appid, game, session)) {
       await logAdd("achievements", `${game.title || gameId}: ${game.unlocked}/${game.total} (${why})`);
     }
   } catch (err) {

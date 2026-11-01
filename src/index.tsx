@@ -249,6 +249,7 @@ function AchievementsSection() {
       setUser(result.user);
       setKey("");
       toaster.toast({ title: "InsertPlay", body: `RetroAchievements: conectado como ${result.user}` });
+      clearAchievements(); // new session: nothing from before the login is shown
       void loadAllAchievements(true);
     } catch (err) {
       failed("Login no RetroAchievements", err);

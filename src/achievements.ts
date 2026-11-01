@@ -39,6 +39,11 @@ interface Shown {
 }
 
 const shown = new Map<number, Shown>();
+/** appid → GameID of every card shortcut with achievements, with or without fetched data:
+ *  a card first loaded offline still retries when its page is opened (PR #28 review). */
+const known = new Map<number, number>();
+/** Bumped on logout and login: a fetch started in another session is never shown. */
+let session = 0;
 const patches = new Map<string, Patch[]>();
 /** Store with `m_mapMyAchievements` (list page). `null` = not found: no list page. */
 let store: any = null;
@@ -101,12 +106,12 @@ const lastView = new Map<number, number>();
  *  renders: it only schedules, at most once per VIEW_REFRESH_MS per game. The fetch runs
  *  outside the render, and `publishAchievements` writes only if the progress changed. */
 function viewed(appid: number): void {
-  const s = shown.get(appid);
+  const gameId = known.get(appid);
   const now = Date.now();
-  if (!s || !onView || now - (lastView.get(appid) ?? 0) < VIEW_REFRESH_MS) return;
+  if (!gameId || !onView || now - (lastView.get(appid) ?? 0) < VIEW_REFRESH_MS) return;
   lastView.set(appid, now);
   const handler = onView;
-  setTimeout(() => void handler(appid, s.gameId).catch(() => undefined), 0);
+  setTimeout(() => void handler(appid, gameId).catch(() => undefined), 0);
 }
 
 /** Who fetches when a screen shows the achievements (flow.ts, which talks to the backend). */
@@ -140,6 +145,9 @@ const PARTS: Record<string, () => Patch[]> = {
     return [
       afterPatch(Sections.prototype, "GetSections", (args: any[], ret: any) => {
         const appid = Number(args[0]?.appid);
+        // the game page is open: without data yet there is no section to read the getter,
+        // so this is where a card loaded offline gets its retry
+        if (!shown.has(appid)) viewed(appid);
         if (!shown.has(appid) || !(ret instanceof Set) || ret.has("achievements")) return ret;
         return addSection(ret);
       }),
@@ -151,10 +159,8 @@ const PARTS: Record<string, () => Patch[]> = {
     return [
       replacePatch(appDetailsStore, "GetAchievements", (args: any[]) => {
         const appid = Number(args[0]);
-        const s = shown.get(appid);
-        if (!s) return callOriginal;
         viewed(appid);
-        return s.details;
+        return shown.get(appid)?.details ?? callOriginal;
       }),
     ];
   },
@@ -198,22 +204,31 @@ export function installAchievements(): string[] {
   return failed;
 }
 
+/** The card shortcut `appid` has achievements of RA game `gameId`, fetched or not yet. */
+export function trackAchievements(appid: number, gameId: number): void {
+  if (known.get(appid) !== gameId) lastView.delete(appid);
+  known.set(appid, gameId);
+}
+
+/** Current session, captured before a fetch and handed back to `publishAchievements`. */
+export const achievementsSession = (): number => session;
+
 /** Shows `game` on the shortcut `appid`. Writes only when the progress changed: a fetch
- *  with nothing new keeps every object, so Steam has nothing to redraw. Returns whether it changed. */
-export function publishAchievements(appid: number, game: RaGame): boolean {
-  if (stopped) return false;
+ *  with nothing new keeps every object, so Steam has nothing to redraw. A fetch started
+ *  before a logout or login (`fromSession` ≠ the current one) is dropped. Returns whether it changed. */
+export function publishAchievements(appid: number, game: RaGame, fromSession: number): boolean {
+  if (stopped || fromSession !== session) return false;
   if (shown.get(appid)?.signature === signatureOf(game)) return false;
   shown.set(appid, build(game));
   writeLater(appid);
   return true;
 }
 
-/** Stops showing the achievements of `appid` (logout, card without gameId). */
-export function forgetAchievements(appid: number): void {
+function unpublish(appid: number): void {
   const s = shown.get(appid);
+  lastView.delete(appid);
   if (!s) return;
   shown.delete(appid);
-  lastView.delete(appid);
   try {
     if (store?.m_mapMyAchievements.get(appid) === s.my) store.m_mapMyAchievements.delete(appid);
     if (store?.m_mapGlobalAchievements.get(appid) === s.global) store.m_mapGlobalAchievements.delete(appid);
@@ -222,13 +237,27 @@ export function forgetAchievements(appid: number): void {
   }
 }
 
+/** The card of `appid` no longer declares a GameID: nothing to show or fetch. */
+export function forgetAchievements(appid: number): void {
+  known.delete(appid);
+  unpublish(appid);
+}
+
+/** Logout or login: Steam's screens go back to "no achievements", fetches already on their
+ *  way are dropped, and the appid → GameID links stay for the next session. */
+export function newAchievementsSession(): void {
+  session += 1;
+  for (const appid of [...shown.keys()]) unpublish(appid);
+}
+
 export function shownAppids(): number[] {
   return [...shown.keys()];
 }
 
 /** Plugin unload: undoes every patch and what was written. */
 export function stopAchievements(): void {
-  for (const appid of [...shown.keys()]) forgetAchievements(appid);
+  newAchievementsSession();
+  known.clear();
   stopped = true;
   onView = null;
   for (const patch of [...patches.values()].flat()) {

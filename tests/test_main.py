@@ -323,3 +323,18 @@ def test_ra_game_logs_only_when_progress_changes(main, monkeypatch):
     asyncio.run(plugin.ra_game(7, True))
     assert lines() == ["G: 2/3", "G: 1/3"]
     asyncio.run(plugin._unload())
+
+
+def test_ra_game_drops_a_fetch_that_outlived_its_session(main, monkeypatch):
+    plugin = _ra_plugin(main)
+    plugin.ra_credentials.save("Someone", RA_KEY)
+
+    def fetch(user, key, game_id, agent):
+        plugin.ra_credentials.clear()  # logout while the request is in flight
+        plugin.ra_credentials.save("Other", RA_KEY)  # and someone else logs in
+        return {"gameId": game_id, "title": "G", "total": 3, "unlocked": 1, "achievements": []}
+
+    monkeypatch.setattr(main.ra, "fetch_game", fetch)
+    assert asyncio.run(plugin.ra_game(7, True)) is None
+    assert plugin.ra_cache.get(7, "Someone") is None and plugin.ra_cache.get(7, "Other") is None
+    asyncio.run(plugin._unload())

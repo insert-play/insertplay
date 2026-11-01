@@ -343,8 +343,14 @@ class Plugin:
                 ra.fetch_game, creds["user"], creds["key"], game_id, self._ra_user_agent()
             )
         except ra.RAError as exc:
+            if self.ra_credentials.load() != creds:
+                return None
             self.log.add("achievements", f"game {game_id}: fetch failed ({exc})")
             return {**cached, "stale": True} if cached else None
+        # logout or another login while the request was in flight (PR #28 review): this
+        # progress belongs to a session that is over, neither cached nor shown
+        if self.ra_credentials.load() != creds:
+            return None
         fresh = await asyncio.to_thread(self.ra_cache.put, game_id, creds["user"], game, time.time())
         # an open game page refetches every minute: only a change goes to the event log
         if not cached or (cached.get("unlocked"), cached.get("total")) != (game["unlocked"], game["total"]):
