@@ -32,8 +32,11 @@ export interface RegistryRecord {
   updatedAt?: number;
 }
 
+/** What inserting a card does: only the toast, open the game's page, or start the game. */
+export type OnInsert = "none" | "page" | "launch";
+
 export interface Settings {
-  autoLaunch: boolean;
+  onInsert: OnInsert;
   /** Hides the shortcut when the card leaves. Off, the shortcut stays visible without a badge. */
   hideRemoved: boolean;
 }
@@ -78,7 +81,7 @@ export interface LibraryCard {
 /** Card of a Steam library. `null` = outside mounted media or backend failure. */
 export const libraryCard = callable<[path: string], LibraryCard | null>("library_card");
 export const getSettings = callable<[], Settings>("get_settings");
-export const setSetting = callable<[key: keyof Settings, value: boolean], Settings>("set_setting");
+export const setSetting = callable<[key: keyof Settings, value: Settings[keyof Settings]], Settings>("set_setting");
 export const logAdd = callable<[kind: string, message: string], void>("log_add");
 export const logTail = callable<[count: number], LogEntry[]>("log_tail");
 
