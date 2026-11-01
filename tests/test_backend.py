@@ -214,14 +214,41 @@ def test_registry_round_trip_and_merge(tmp_path):
 
 def test_settings_reject_unknown_key_and_wrong_type(tmp_path):
     s = Settings(str(tmp_path / "settings.json"))
-    assert s.all()["autoLaunch"] is True
-    assert s.all()["hideRemoved"] is True
-    assert s.set("autoLaunch", False)["autoLaunch"] is False
+    assert s.all() == {"onInsert": "launch", "hideRemoved": True}
+    for choice in ("none", "page", "launch"):
+        assert s.set("onInsert", choice)["onInsert"] == choice
     assert s.set("hideRemoved", False)["hideRemoved"] is False
+    for bad in ("open", "", True, None, 1):
+        with pytest.raises(ValueError):
+            s.set("onInsert", bad)
     with pytest.raises(ValueError):
-        s.set("autoLaunch", "no")
+        s.set("hideRemoved", "no")
     with pytest.raises(ValueError):
         s.set("other", True)
+    with pytest.raises(ValueError):
+        s.set("autoLaunch", True)
+    assert s.all() == {"onInsert": "launch", "hideRemoved": False}
+
+
+@pytest.mark.parametrize(
+    "stored, expected",
+    [({"autoLaunch": True}, "launch"), ({"autoLaunch": False}, "none"), ({}, "launch")],
+)
+def test_settings_migrate_auto_launch(tmp_path, stored, expected):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({**stored, "hideRemoved": False}), encoding="utf-8")
+    s = Settings(str(path))
+    assert s.all() == {"onInsert": expected, "hideRemoved": False}
+    s.set("hideRemoved", True)
+    assert json.loads(path.read_text(encoding="utf-8")) == {"onInsert": expected, "hideRemoved": True}
+
+
+def test_settings_new_key_wins_over_old_and_bad_values_fall_back(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"autoLaunch": True, "onInsert": "page"}), encoding="utf-8")
+    assert Settings(str(path)).all()["onInsert"] == "page"
+    path.write_text(json.dumps({"onInsert": "open", "hideRemoved": "no"}), encoding="utf-8")
+    assert Settings(str(path)).all() == {"onInsert": "launch", "hideRemoved": True}
 
 
 def test_event_log_tail_is_newest_first_and_trimmed(tmp_path):

@@ -4,9 +4,9 @@ A [Decky Loader](https://decky.xyz/) plugin that turns SD cards into game cartri
 
 ![InsertPlay panel and a card game in the library](docs/images/insertplay.png)
 
-- **Insert an InsertPlay card** and its game shows up in the Steam library with the card's own artwork, and starts. **Remove the card** and the shortcut is hidden.
+- **Insert an InsertPlay card** and its game shows up in the Steam library with the card's own artwork and, depending on "Ao inserir", its page opens or the game starts. **Remove the card** and the shortcut is hidden.
 - **SD card badge** on the covers of every game on the inserted card: InsertPlay shortcuts and Steam games installed in a library on the card.
-- **Steam games on a card**: a card with a Steam library and no InsertPlay manifest also gets a notification when inserted and removed and, with "Iniciar ao inserir" on, starts its game if the card has exactly one and no other game is running.
+- **Steam games on a card**: a card with a Steam library and no InsertPlay manifest also gets a notification when inserted and removed and, if the card has exactly one game, the same "Ao inserir" action.
 - **Portable saves**: Steam games installed on a card can keep their saves on the card, so they follow it to another device.
 - No Steam restart needed for any of this.
 
@@ -45,7 +45,10 @@ Cards are prepared by hand for now: a manifest, a guid and a launch script at th
 
 ## Panel settings
 
-- **Iniciar ao inserir** (start on insert): starts the card's game when the card is inserted.
+- **Ao inserir** (on insert): what inserting a card does with its game. Applies to InsertPlay cards and to cards with exactly one Steam game; with another game already running it only notifies.
+  - **Nenhum** (none): only the "available" notification.
+  - **Abrir página do jogo** (open the game's page): the notification and the game's page in the library.
+  - **Abrir jogo** (open the game): starts the game. The default, and what the old "Iniciar ao inserir" toggle did when on; a setting saved with the toggle off becomes "Nenhum".
 - **Ocultar ao remover o cartão** (hide when the card is removed): hides the shortcut while its card is out.
 - **Eventos** (events): what the plugin did recently. The same log is in `~/homebrew/data/InsertPlay/events.jsonl`.
 
@@ -71,7 +74,7 @@ The panel's **Save portátil** section has one choice per card with Steam games.
 - **More than one candidate for the same game** (internal drive, card, the copy a move leaves in `steamapps/compatdata`): the one with the most recent user files wins. A folder with no user files (just created by Steam) never beats one with a save.
   - The others become backups and are never deleted: on the internal drive, `<path>.insertplay-backup-<date>`; on the card, `.insertplay/backups/`.
   - If the loser had a save, a notification says so.
-- **Running game**: the plugin leaves it alone. The pass runs every 30 s and on every library change, before "Iniciar ao inserir".
+- **Running game**: the plugin leaves it alone. The pass runs every 30 s and on every library change, before the "Ao inserir" action.
 - **Leaving a mode** (turning it off, or switching modes) copies what is on the card back to the internal drive. The card's copy stays.
 - **Game moved off the card**: the link becomes a copy on the internal drive.
 - **Game uninstalled**: only the link goes away.

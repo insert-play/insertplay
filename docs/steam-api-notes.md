@@ -34,7 +34,7 @@ Run it again **after every Steam/SteamOS update**.
 | `SteamClient.Apps.RunGame(gameid, "", -1, 100)` | Starts the shortcut. `GameSessions.RegisterForAppLifetimeNotifications` reports the start and the exit. |
 | `SteamClient.Apps.SetShortcutExe(appid, '"/bin/bash"')` | Does not throw. The stored form (quotes) was not checked visually. |
 | `SteamClient.Apps.RemoveShortcut(appid)` | Removes; `appStore` stops having the appid within ~1 s. |
-| `SteamUIStore.Navigate(path)` | Navigates (`/library/app/<appid>`, `/library/home`). Useful in tests. |
+| `SteamUIStore.Navigate(path)` | Navigates (`/library/app/<appid>`, `/library/home`). Used by "Abrir página do jogo"; see [Opening the game page](#opening-the-game-page-measured-2026-11-01). |
 
 ## Steam startup (measured 2026-10-24)
 
@@ -119,9 +119,21 @@ Not needed: `appStore` overview `.BHasStoreCategory(22)` (`false` for a shortcut
 
 **RetroAchievements API from the backend.** `urllib` in the Python embedded in Decky's PluginLoader reaches `https://retroachievements.org` (a login with a well-formed fake key came back 401, not a certificate error), so the requests stay in Python (`py_modules/insertplay_decky/retroachievements.py`). `API_GetGameInfoAndUserProgress.php?u=<user>&g=<gameId>&a=1`: 200, ~400 ms, 35 KB for 76 achievements. Dates are UTC (`YYYY-MM-DD HH:MM:SS`); the emulators of the measured cards log in hardcore, so unlocks come as `DateEarnedHardcore`.
 
+## Opening the game page (measured 2026-11-01)
+
+Used by "Ao inserir" → "Abrir página do jogo" (issue #38, `openGamePage` in `src/steam.ts`). Measured on the Deck (SteamOS 3.9.5, Game Mode) with `IP Teste Navegação` shortcuts, removed afterwards:
+
+| Case | Result |
+|---|---|
+| `SteamUIStore.Navigate("/library/app/<appid>")` in the same tick as `AddShortcut` + `SetShortcutName` | `appStore.GetAppOverviewByAppID` still `undefined`. The route changes to the page and **bounces to `/library/home`** (screenshot: home). Returns `undefined`. |
+| Polling `GetAppOverviewByAppID` every 25 ms after `AddShortcut` | The overview showed up after ~130 ms. `Navigate` then opened the page (screenshot: title, "Jogar", tabs). |
+| `Navigation.Navigate` (`@decky/ui`) to an existing shortcut | Opens the page too. Not used: `SteamUIStore.Navigate` is enough and stays with the other Steam calls. |
+
+Current route, to check a navigation: `(SteamUIStore.m_WindowStore ?? SteamUIStore.WindowStore).SteamUIWindows[0].m_history.location.pathname`.
+
 ## Steam libraries on the card (measured 2026-10-24, SteamOS 3.9.5)
 
-Used by the card badge (`src/steam-badges.tsx`) to also mark Steam games installed on the card, not only InsertPlay shortcuts, and by the notification and auto-launch of those games (issue #10, `checkSteamLibraries` in `src/flow.ts`).
+Used by the card badge (`src/steam-badges.tsx`) to also mark Steam games installed on the card, not only InsertPlay shortcuts, and by the notification and the "Ao inserir" action of those games (issue #10, `checkSteamLibraries` in `src/flow.ts`).
 
 | Call | Result |
 |---|---|
