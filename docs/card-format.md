@@ -4,17 +4,21 @@ An InsertPlay card is an SD card (or USB drive) with a game and a small manifest
 
 ## Layout
 
+Every card uses the same layout at its root. Only what InsertPlay and RetroAchievements use is fixed; the emulator's and the game's own folders are up to you.
+
 ```
 <card root>/
-├── steam-shortcut.json      manifest (required)
-├── shortcut-identity.json   card guid (required)
-├── insertplay-start.sh      launch script (name and location are up to the manifest)
-├── steam-artwork/           icon.png, capsule.png, horizontal.png, hero.png, logo.png (optional)
+├── steam-shortcut.json        manifest, with the "game" block on emulator cards (required)
+├── shortcut-identity.json     card guid (required)
+├── insertplay-start.sh        launch script; the card root is the script's own folder
+├── insertplay-guid-guard.sh   guid check, sourced by the launch script
+├── steam-artwork/             icon.png, capsule.png, horizontal.png, hero.png, logo.png (optional)
 ├── insertplay/decky/InsertPlay.zip   the plugin itself, for installing and updating (optional)
-└── …                        the game, Proton, runtime, prefix, etc.
+├── libraryfolder.vdf, steamapps/, lost+found/   created by Steam's "Format" and by ext4: keep them
+└── …                          the emulator and the game (e.g. duckstation/, game.cue, game.bin)
 ```
 
-The plugin looks for cards in `/run/media/*` and `/run/media/*/*` every second. `steam-shortcut.json` and `shortcut-identity.json` are read from the card root first and then from `insertplay/`, the layout of older cards.
+The plugin looks for cards in `/run/media/*` and `/run/media/*/*` every second. `steam-shortcut.json` and `shortcut-identity.json` are read from the card root first and then from `insertplay/`, the layout of older cards; new cards keep them at the root.
 
 ## `steam-shortcut.json`
 
@@ -93,12 +97,45 @@ Without a valid `shortcut-identity.json`, the card is refused and the panel show
 
 ## Launch script
 
-The plugin starts the shortcut as `exe args --guid <guid>`. The template's [`insertplay-start.sh`](../card-template/insertplay-start.sh) does two things:
+The plugin starts the shortcut as `exe args --guid <guid>`. The template's [`insertplay-start.sh`](../card-template/insertplay-start.sh) lives at the card root and takes the card root from its own folder (`SD_ROOT`). Then:
 
-The script takes the card root from the mount point (`findmnt`), the same `{SD_ROOT}` the plugin uses, so it works from any folder on the card.
+1. **Guid check.** It sources [`insertplay-guid-guard.sh`](../card-template/insertplay-guid-guard.sh), which compares `--guid` with the card's `shortcut-identity.json` and refuses to start if they differ. Without it, a shortcut left in the library could start whatever game is on the card currently inserted. Keep it, and keep the guard file the same on every card.
+2. **Game.** It runs an emulator AppImage on the card with the game's disc image, and points the emulator's data folder (settings, BIOS, memory cards, saves) to the card, so everything travels with it. Edit `EMULATOR`, `GAME` and the data-folder variable for your emulator:
 
-1. **Guid check.** It compares `--guid` with the card's `shortcut-identity.json` (looked up like the plugin does: card root first, then `insertplay/`) and refuses to start if they differ. Without it, a shortcut left in the library could start whatever game is on the card currently inserted. Keep this block.
-2. **Game.** It runs a Windows game with a Proton build and the Steam Linux Runtime copied to the card, and with the Wine prefix on the card (`prefix/`), so the saves travel with the card. Edit `GAME`, the Proton and runtime paths and, if the game needs them, `WINEDLLOVERRIDES`. Any other launcher works too (an emulator with a ROM, a native Linux game): replace this block.
+| Emulator | How | Data folder |
+|---|---|---|
+| DuckStation | `export XDG_DATA_HOME="$SD_ROOT"` | `duckstation/` |
+| PCSX2 | `-portable` argument | `PCSX2/` next to the AppImage (e.g. `pcsx2/PCSX2/`) |
+| Cemu | a `portable/` folder next to the AppImage; game with `-g`, fullscreen with `-f` | `cemu/portable/` |
+
+Keep paths in the emulator's settings relative to its data folder, so the card works under any mount point.
+
+- **Several discs:** write a `.m3u` with one disc file name per line (e.g. `disc1.cue`, `disc2.cue`) and point `GAME` to it. The emulator then swaps discs by itself. DuckStation names a per-game memory card after the `.m3u` file, so name it like the existing card (e.g. `Heart of Darkness (USA).m3u` for `Heart of Darkness (USA)_1.mcd`).
+- **`.cue` files:** the `FILE` line must name the `.bin` next to it. A `.bin` renamed after the `.cue` was written (e.g. to `game.bin`) needs the line fixed.
+- **A Windows game:** replace the game block with Proton, the Steam Linux Runtime and a Wine prefix on the card:
+
+```bash
+GAME="$SD_ROOT/game/Game.exe"
+PREFIX="$SD_ROOT/prefix"
+export STEAM_COMPAT_DATA_PATH="$PREFIX"
+export STEAM_COMPAT_CLIENT_INSTALL_PATH="$HOME/.local/share/Steam"
+export STEAM_RUNTIME_PREFER_HOST_LIBRARIES=0
+mkdir -p "$PREFIX"
+cd "$(dirname "$GAME")"
+exec "$SD_ROOT/runtime/SteamLinuxRuntime_4/_v2-entry-point" -- "$SD_ROOT/proton/proton" run "$GAME"
+```
+
+A Windows game card has no `game` block.
+
+## Migrating an older card
+
+Cards made for the legacy InsertPlay (the C# CLI) work with the plugin as they are, but carry leftovers. To bring one to the layout above:
+
+1. Back up, off the card, the files you change.
+2. In `steam-shortcut.json`: fix `appName`, add the `game` block and drop `shortcut.visibility` and `shortcut.launchVerification` (the plugin ignores them).
+3. Replace `insertplay-start.sh` and `insertplay-guid-guard.sh` with the template's, keeping the card's own game block. The old script found the card root by looking for `autorun.sh`.
+4. Test that the game starts from its shortcut, then delete the leftovers: `autorun.sh`, `install-shortcut.sh`, `sd-monitor.sh`, `insertplay.sh`, `insertplay.update.lock`, `delay-suspend.sh`, `assets/`, a `pulse/` folder (written by the old script) and everything in `insertplay/` **except `insertplay/decky/`**. Make sure `steam-shortcut.json` and `shortcut-identity.json` are at the root first.
+5. Remove and insert the card again. The plugin reads the manifest when the card is inserted, so a shortcut name or GameID edited on a card already inserted only shows up after that (or after "Atualizar agora" in the panel).
 
 ## Plugin package on the card
 
