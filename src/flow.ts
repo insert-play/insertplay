@@ -234,7 +234,12 @@ export function clearAchievements(): void {
  *  refetch of an open page. Called by the backend's `ra_refused` event and at startup (the
  *  mark survives a restart). A lack of internet never gets here. */
 export async function warnIfRaRefused(): Promise<void> {
-  if (refusedWarned || !(await raStatus())?.refused) return;
+  if (refusedWarned) return;
+  const session = achievementsSession();
+  const status = await raStatus();
+  // the startup check and the event may both be waiting here (PR #36 review), and a login
+  // meanwhile ends the session the answer belongs to
+  if (refusedWarned || session !== achievementsSession() || !status?.refused) return;
   refusedWarned = true;
   toaster.toast({
     title: TITLE,

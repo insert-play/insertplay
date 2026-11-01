@@ -337,12 +337,13 @@ class Plugin:
         if not creds:
             return None
         cached = await asyncio.to_thread(self.ra_cache.get, game_id, creds["user"])
-        if cached and not refresh:
-            return {**cached, "stale": False}
         # a refused key is not retried: an open game page would make one refused request
-        # per minute (issue #34). A new login clears it.
+        # per minute (issue #34). A new login clears it. Before the cache-only answer, so the
+        # cache is `stale` while paused.
         if self.ra_credentials.refused():
             return {**cached, "stale": True} if cached else None
+        if cached and not refresh:
+            return {**cached, "stale": False}
         try:
             game = await asyncio.to_thread(
                 ra.fetch_game, creds["user"], creds["key"], game_id, self._ra_user_agent()

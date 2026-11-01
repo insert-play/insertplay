@@ -373,6 +373,7 @@ def test_ra_game_refused_key_warns_once_and_pauses_the_api(main, monkeypatch, ca
     assert emitted == ["ra_refused"]
     # paused: neither another game nor the minute refetch of the open page reach the API
     assert asyncio.run(plugin.ra_game(7, True))["stale"] is True
+    assert asyncio.run(plugin.ra_game(7))["stale"] is True  # the cache-only answer too
     assert asyncio.run(plugin.ra_game(8, True)) is None
     assert len(fetched) == 1 and emitted == ["ra_refused"]
     events = json.dumps(asyncio.run(plugin.log_tail(50)))
