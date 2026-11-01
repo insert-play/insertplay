@@ -113,6 +113,23 @@ def test_credentials_are_private_and_round_trip(tmp_path):
     assert creds.load() is None
 
 
+def test_credentials_refused_mark_until_a_new_login(tmp_path):
+    creds = ra.Credentials(str(tmp_path / "ra_credentials.json"))
+    assert not creds.refused() and not creds.mark_refused({"user": "Someone", "key": KEY})  # no login
+    creds.save("Someone", KEY)
+    login = creds.load()
+    assert creds.mark_refused(login) and creds.refused()
+    assert not creds.mark_refused(login)  # only the change counts
+    assert creds.load() == login  # the key is still there, unchanged
+    creds.save("Someone", KEY)  # a new login clears it
+    assert not creds.refused()
+    assert not creds.mark_refused({"user": "Other", "key": KEY})  # login changed meanwhile
+    assert not creds.refused()
+    creds.mark_refused(login)
+    creds.clear()  # logout clears it too
+    assert not creds.refused()
+
+
 def test_credentials_with_a_broken_file_are_absent(tmp_path):
     path = tmp_path / "ra_credentials.json"
     path.write_text('{"user": "x", "key": "short"}', encoding="utf-8")

@@ -136,8 +136,9 @@ export interface RaGame {
 /** "invalid": wrong format; "refused": RA rejected the user/key; "network": no answer. */
 export type RaLoginError = "invalid" | "refused" | "network" | "failed";
 
-/** `user: null` = not logged in. `null` = backend failure. */
-export const raStatus = callable<[], { user: string | null } | null>("ra_status");
+/** `user: null` = not logged in. `null` = backend failure. `refused`: RA refused the saved
+ *  key (HTTP 401/403); the API stays paused until a new login (issue #34). */
+export const raStatus = callable<[], { user: string | null; refused: boolean } | null>("ra_status");
 export const raLogin = callable<[user: string, key: string], { user: string | null; error: RaLoginError | null }>(
   "ra_login",
 );

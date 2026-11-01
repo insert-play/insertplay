@@ -266,16 +266,16 @@ def test_ra_login_saves_only_when_the_api_accepts(main, monkeypatch, caplog):
 
     monkeypatch.setattr(main.ra, "verify_login", verify)
     assert asyncio.run(plugin.ra_login("Bad", RA_KEY)) == {"user": None, "error": "refused"}
-    assert asyncio.run(plugin.ra_status()) == {"user": None}
+    assert asyncio.run(plugin.ra_status()) == {"user": None, "refused": False}
     assert asyncio.run(plugin.ra_login("x", "short")) == {"user": None, "error": "invalid"}
     assert calls == ["Bad"]  # the bad format never reached the API
     assert asyncio.run(plugin.ra_login("someone", RA_KEY)) == {"user": "Someone", "error": None}
-    assert asyncio.run(plugin.ra_status()) == {"user": "Someone"}
+    assert asyncio.run(plugin.ra_status()) == {"user": "Someone", "refused": False}
     # the key never goes to the event log or the Python log
     events = json.dumps(asyncio.run(plugin.log_tail(50)))
     assert RA_KEY not in events and RA_KEY not in caplog.text
     asyncio.run(plugin.ra_logout())
-    assert asyncio.run(plugin.ra_status()) == {"user": None}
+    assert asyncio.run(plugin.ra_status()) == {"user": None, "refused": False}
     asyncio.run(plugin._unload())
 
 
@@ -337,4 +337,76 @@ def test_ra_game_drops_a_fetch_that_outlived_its_session(main, monkeypatch):
     monkeypatch.setattr(main.ra, "fetch_game", fetch)
     assert asyncio.run(plugin.ra_game(7, True)) is None
     assert plugin.ra_cache.get(7, "Someone") is None and plugin.ra_cache.get(7, "Other") is None
+    asyncio.run(plugin._unload())
+
+
+def _ra_emits(main, monkeypatch):
+    emitted = []
+
+    async def emit(event, *args):
+        emitted.append(event)
+
+    monkeypatch.setattr(main.decky, "emit", emit)
+    return emitted
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_ra_game_refused_key_warns_once_and_pauses_the_api(main, monkeypatch, caplog, status):
+    plugin = _ra_plugin(main)
+    plugin.ra_credentials.save("Someone", RA_KEY)
+    emitted = _ra_emits(main, monkeypatch)
+    plugin.ra_cache.put(7, "Someone", {"gameId": 7, "title": "G", "total": 3, "unlocked": 1, "achievements": []}, 1.0)
+    fetched = []
+    real_fetch = main.ra.fetch_game
+
+    def opener(request):
+        fetched.append(request)
+        raise main.ra.urllib.error.HTTPError(request.full_url, status, "no", {}, None)
+
+    def fetch(user, key, game_id, agent):
+        return real_fetch(user, key, game_id, agent, opener)  # the real 401/403 mapping
+
+    monkeypatch.setattr(main.ra, "fetch_game", fetch)
+    stale = asyncio.run(plugin.ra_game(7, True))
+    assert (stale["unlocked"], stale["stale"]) == (1, True)  # the page keeps the cache
+    assert asyncio.run(plugin.ra_status()) == {"user": "Someone", "refused": True}
+    assert emitted == ["ra_refused"]
+    # paused: neither another game nor the minute refetch of the open page reach the API
+    assert asyncio.run(plugin.ra_game(7, True))["stale"] is True
+    assert asyncio.run(plugin.ra_game(7))["stale"] is True  # the cache-only answer too
+    assert asyncio.run(plugin.ra_game(8, True)) is None
+    assert len(fetched) == 1 and emitted == ["ra_refused"]
+    events = json.dumps(asyncio.run(plugin.log_tail(50)))
+    assert "refused the key" in events and RA_KEY not in events and RA_KEY not in caplog.text
+
+    # a new login clears it and the API is called again
+    monkeypatch.setattr(main.ra, "verify_login", lambda user, key, agent: "Someone")
+    asyncio.run(plugin.ra_login("Someone", RA_KEY))
+    assert asyncio.run(plugin.ra_status()) == {"user": "Someone", "refused": False}
+    monkeypatch.setattr(
+        main.ra, "fetch_game", lambda user, key, game_id, agent: {"gameId": 7, "title": "G", "total": 3, "unlocked": 2, "achievements": []}
+    )
+    fresh = asyncio.run(plugin.ra_game(7, True))
+    assert (fresh["unlocked"], fresh["stale"]) == (2, False)
+    asyncio.run(plugin._unload())
+
+
+def test_ra_game_network_failure_is_silent(main, monkeypatch):
+    plugin = _ra_plugin(main)
+    plugin.ra_credentials.save("Someone", RA_KEY)
+    emitted = _ra_emits(main, monkeypatch)
+    plugin.ra_cache.put(7, "Someone", {"gameId": 7, "title": "G", "total": 3, "unlocked": 1, "achievements": []}, 1.0)
+    fetched = []
+
+    def fetch(user, key, game_id, agent):
+        fetched.append(game_id)
+        raise main.ra.RAError("network", "URLError: offline")
+
+    monkeypatch.setattr(main.ra, "fetch_game", fetch)
+    assert asyncio.run(plugin.ra_game(7, True))["stale"] is True
+    assert asyncio.run(plugin.ra_game(7, True))["stale"] is True
+    assert fetched == [7, 7]  # not paused: the next try may have internet
+    assert asyncio.run(plugin.ra_status()) == {"user": "Someone", "refused": False}
+    assert emitted == []
+    assert not [e for e in asyncio.run(plugin.log_tail(50)) if e["kind"] == "error"]
     asyncio.run(plugin._unload())

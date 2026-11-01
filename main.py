@@ -300,9 +300,10 @@ class Plugin:
 
     @guarded(lambda: None)
     async def ra_status(self) -> dict:
-        """RetroAchievements login, without the key."""
+        """RetroAchievements login, without the key. `refused`: RA refused the saved key,
+        the panel asks for a new login (issue #34)."""
         creds = self.ra_credentials.load()
-        return {"user": creds["user"] if creds else None}
+        return {"user": creds["user"] if creds else None, "refused": self.ra_credentials.refused()}
 
     @guarded(lambda: {"user": None, "error": "failed"})
     async def ra_login(self, user: str, key: str) -> dict:
@@ -336,6 +337,11 @@ class Plugin:
         if not creds:
             return None
         cached = await asyncio.to_thread(self.ra_cache.get, game_id, creds["user"])
+        # a refused key is not retried: an open game page would make one refused request
+        # per minute (issue #34). A new login clears it. Before the cache-only answer, so the
+        # cache is `stale` while paused.
+        if self.ra_credentials.refused():
+            return {**cached, "stale": True} if cached else None
         if cached and not refresh:
             return {**cached, "stale": False}
         try:
@@ -346,6 +352,10 @@ class Plugin:
             if self.ra_credentials.load() != creds:
                 return None
             self.log.add("achievements", f"game {game_id}: fetch failed ({exc})")
+            # "network" stays silent: the page keeps the cache
+            if exc.code == "refused" and self.ra_credentials.mark_refused(creds):
+                self.log.add("error", "RetroAchievements refused the key: fetches paused until a new login")
+                await decky.emit("ra_refused")
             return {**cached, "stale": True} if cached else None
         # logout or another login while the request was in flight (PR #28 review): this
         # progress belongs to a session that is over, neither cached nor shown
