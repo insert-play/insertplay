@@ -132,10 +132,11 @@ A Windows game card has no `game` block.
 Cards made for the legacy InsertPlay (the C# CLI) work with the plugin as they are, but carry leftovers. To bring one to the layout above:
 
 1. Back up, off the card, the files you change.
-2. In `steam-shortcut.json`: fix `appName`, add the `game` block and drop `shortcut.visibility` and `shortcut.launchVerification` (the plugin ignores them).
-3. Replace `insertplay-start.sh` and `insertplay-guid-guard.sh` with the template's, keeping the card's own game block. The old script found the card root by looking for `autorun.sh`.
-4. Test that the game starts from its shortcut, then delete the leftovers: `autorun.sh`, `install-shortcut.sh`, `sd-monitor.sh`, `insertplay.sh`, `insertplay.update.lock`, `delay-suspend.sh`, `assets/`, a `pulse/` folder (written by the old script) and everything in `insertplay/` **except `insertplay/decky/`**. Make sure `steam-shortcut.json` and `shortcut-identity.json` are at the root first.
-5. Remove and insert the card again. The plugin reads the manifest when the card is inserted, so a shortcut name or GameID edited on a card already inserted only shows up after that (or after "Atualizar agora" in the panel).
+2. If `steam-shortcut.json` or `shortcut-identity.json` is still in `insertplay/`, move it to the card root, keeping the guid. The new guard reads the identity only at the root. Put `insertplay-start.sh` at the root too, with `launch.args` pointing to `{SD_ROOT}/insertplay-start.sh`.
+3. In `steam-shortcut.json`: fix `appName`, add the `game` block and drop `shortcut.visibility` and `shortcut.launchVerification` (the plugin ignores them).
+4. Replace `insertplay-start.sh` and `insertplay-guid-guard.sh` with the template's, keeping the card's own game block. The old script found the card root by looking for `autorun.sh`.
+5. Remove and insert the card again. The plugin reads the manifest when the card is inserted: that updates the shortcut's name and launch options and the GameID. "Atualizar agora" in the panel only reloads the GameID and the achievements, not the shortcut.
+6. Test that the game starts from its shortcut, then delete the leftovers: `autorun.sh`, `install-shortcut.sh`, `sd-monitor.sh`, `insertplay.sh`, `insertplay.update.lock`, `delay-suspend.sh`, `assets/`, a `pulse/` folder (written by the old script) and everything in `insertplay/` **except `insertplay/decky/`**.
 
 ## Plugin package on the card
 
