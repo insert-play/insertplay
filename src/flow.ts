@@ -30,6 +30,7 @@ import {
   isHidden,
   launchOptions,
   mountedLibraries,
+  openGamePage,
   runningAppids,
   steamLibraries,
   runGame,
@@ -38,6 +39,7 @@ import {
   setShortcutIcon,
   shortcutExists,
   updateShortcut,
+  waitForApp,
   waitForLibrary,
 } from "./steam";
 import { showBadges } from "./steam-badges";
@@ -87,7 +89,7 @@ export function enqueue<T>(work: () => Promise<T>): Promise<T> {
 }
 
 /** Ensures the card's shortcut exists and makes it visible. `launch` is only true on a
- *  real insertion; the load-time reconciliation never starts a game. Returns the appid. */
+ *  real insertion; the load-time reconciliation never opens the page or starts a game. Returns the appid. */
 async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
   if (card.error || !card.guid || !card.appName || !card.exe) {
     const why = card.error ?? "incomplete manifest";
@@ -136,15 +138,34 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
   if (raGameId) void showAchievements(appid, raGameId, "auto");
   else forgetAchievements(appid);
 
-  const logo = gameLogo(appid);
-  if (launch && (await getSettings()).autoLaunch) {
-    toaster.toast({ title: TITLE, body: `Iniciando ${card.appName}…`, logo });
-    await logAdd("launch", `${card.appName} (${appid})`);
-    runGame(appid);
-  } else {
-    toaster.toast({ title: TITLE, body: `${card.appName} disponível`, logo });
-  }
+  if (launch) await onInsert(appid, card.appName, runGame);
+  else toaster.toast({ title: TITLE, body: `${card.appName} disponível`, logo: gameLogo(appid) });
   return appid;
+}
+
+/** The "Ao inserir" setting, for the single game of a card just inserted (issue #38). With a
+ *  game already running it only notifies: neither the page nor the start pulls the user out
+ *  of the game. */
+async function onInsert(appid: number, name: string, run: (appid: number) => void): Promise<void> {
+  const logo = gameLogo(appid);
+  const { onInsert: setting } = await getSettings();
+  const action = gameRunning() ? "none" : setting;
+  if (action === "launch") {
+    toaster.toast({ title: TITLE, body: `Iniciando ${name}…`, logo });
+    await logAdd("launch", `${name} (${appid})`);
+    run(appid);
+    return;
+  }
+  toaster.toast({ title: TITLE, body: `${name} disponível`, logo });
+  if (action !== "page") return;
+  if (!(await waitForApp(appid))) {
+    await logAdd("error", `${name}: page not opened, ${appid} missing from the library`);
+    return;
+  }
+  // a game may have started during the wait (PR #39 review)
+  if (gameRunning()) return;
+  openGamePage(appid);
+  await logAdd("page", `${name} (${appid})`);
 }
 
 /** Shortcut icon from the copy on the SSD (issue #17). Runs on every insertion, not only
@@ -416,7 +437,7 @@ async function checkSteamLibraries(): Promise<void> {
     });
   }
   steamCards = next;
-  // Before auto-launch: the card's game must open already using the card's prefix.
+  // Before "Abrir jogo": the card's game must open already using the card's prefix.
   // A failure here must not suppress the insertion notification.
   await syncPortable().catch((err) => report("Save portátil", err));
   if (previous === null) {
@@ -464,7 +485,7 @@ async function checkSteamLibraries(): Promise<void> {
   for (const card of gone(after, before)) await steamCardInserted(card);
 }
 
-/** Auto-starts only with exactly one game on the card and no game running. */
+/** "Ao inserir" applies only with exactly one game on the card. */
 async function steamCardInserted(card: SteamCard): Promise<void> {
   const apps = [...new Set(card.apps)];
   await logAdd("steam", `${card.label} inserted (${apps.join(", ")})`);
@@ -473,15 +494,7 @@ async function steamCardInserted(card: SteamCard): Promise<void> {
     return;
   }
   const [appid] = apps;
-  const name = appName(appid);
-  const logo = gameLogo(appid);
-  if ((await getSettings()).autoLaunch && !gameRunning()) {
-    toaster.toast({ title: TITLE, body: `Iniciando ${name}…`, logo });
-    await logAdd("launch", `${name} (${appid})`);
-    runSteamGame(appid);
-  } else {
-    toaster.toast({ title: TITLE, body: `${name} disponível`, logo });
-  }
+  await onInsert(appid, appName(appid), runSteamGame);
 }
 
 /** Steam notification that the libraries changed (card inserted or removed, game

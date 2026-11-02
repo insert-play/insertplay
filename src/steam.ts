@@ -227,6 +227,25 @@ export function runSteamGame(appid: number): void {
   method(client()?.Apps, "RunGame", "SteamClient.Apps.RunGame")(String(appid), "", -1, 100);
 }
 
+/** Waits for the game to be in `appStore`, up to `timeoutMs`. Returns false if it never
+ *  showed up. Measured on the Deck (2026-11-01): right after `AddShortcut` the shortcut is
+ *  not there yet and opening its page bounces to `/library/home`; it showed up ~130 ms later. */
+export async function waitForApp(appid: number, timeoutMs = 5_000): Promise<boolean> {
+  const start = Date.now();
+  while (!shortcutExists(appid)) {
+    if (Date.now() - start > timeoutMs) return false;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return true;
+}
+
+/** Opens the game's page in the library. Call `waitForApp` first for a new shortcut. */
+export function openGamePage(appid: number): void {
+  method(typeof SteamUIStore === "undefined" ? null : SteamUIStore, "Navigate", "SteamUIStore.Navigate")(
+    `/library/app/${appid}`,
+  );
+}
+
 /** Notifies when a game closes, with its appid (a shortcut's appid, not the gameid).
  *  Measured with spike.mjs: `RegisterForAppLifetimeNotifications` reports `{unAppID, bRunning}`
  *  at start and exit. Returns the unsubscribe function. */

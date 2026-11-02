@@ -54,7 +54,15 @@ class Registry:
             _save(self.path, data)
 
 
-DEFAULT_SETTINGS = {"autoLaunch": True, "hideRemoved": True}
+DEFAULT_SETTINGS = {"onInsert": "launch", "hideRemoved": True}
+# Settings that take one value from a list, not any value of the default's type.
+SETTING_CHOICES = {"onInsert": ("none", "page", "launch")}
+
+
+def _valid(key: str, value) -> bool:
+    if key not in DEFAULT_SETTINGS or type(value) is not type(DEFAULT_SETTINGS[key]):
+        return False
+    return value in SETTING_CHOICES.get(key, (value,))
 
 
 class Settings:
@@ -63,11 +71,17 @@ class Settings:
 
     def all(self) -> dict:
         data = _load(self.path, {})
-        return {**DEFAULT_SETTINGS, **(data if isinstance(data, dict) else {})}
+        data = data if isinstance(data, dict) else {}
+        # Up to 0.8.0 the choice was the `autoLaunch` toggle (issue #38). The old key is
+        # dropped here and leaves the file on the next `set`.
+        legacy = data.pop("autoLaunch", None)
+        if "onInsert" not in data and isinstance(legacy, bool):
+            data["onInsert"] = "launch" if legacy else "none"
+        return {**DEFAULT_SETTINGS, **{k: v for k, v in data.items() if _valid(k, v)}}
 
     def set(self, key: str, value) -> dict:
-        if key not in DEFAULT_SETTINGS or type(value) is not type(DEFAULT_SETTINGS[key]):
-            raise ValueError(f"unknown setting or wrong type: {key}={value!r}")
+        if not _valid(key, value):
+            raise ValueError(f"unknown setting or invalid value: {key}={value!r}")
         data = self.all()
         data[key] = value
         _save(self.path, data)

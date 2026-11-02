@@ -18,6 +18,7 @@ import {
   Card,
   CardPackage,
   LogEntry,
+  OnInsert,
   PackageStatus,
   PortableMode,
   PortableStatus,
@@ -138,6 +139,12 @@ function PackageRow({ pkg, installed, onChange }: { pkg: CardPackage; installed:
 }
 
 const PORTABLE_TICK_MS = 30_000;
+
+const ON_INSERT_OPTIONS: { data: OnInsert; label: string }[] = [
+  { data: "none", label: "Nenhum" },
+  { data: "page", label: "Abrir página do jogo" },
+  { data: "launch", label: "Abrir jogo" },
+];
 
 const PORTABLE_MODES: { data: PortableMode; label: string; description: string }[] = [
   { data: "off", label: "Desligado", description: "O save fica no aparelho." },
@@ -443,11 +450,13 @@ function Panel() {
       </PanelSection>
       <PanelSection title="Configurações">
         <PanelSectionRow>
-          <ToggleField
-            label="Iniciar ao inserir"
-            checked={settings?.autoLaunch ?? true}
+          <DropdownItem
+            label="Ao inserir"
+            description="Com um jogo aberto, só avisa."
+            rgOptions={ON_INSERT_OPTIONS}
+            selectedOption={settings?.onInsert ?? "launch"}
             disabled={!settings}
-            onChange={(value) => void setSetting("autoLaunch", value).then(setSettings)}
+            onChange={(option) => void setSetting("onInsert", option.data as OnInsert).then(setSettings)}
           />
         </PanelSectionRow>
         <PanelSectionRow>
