@@ -152,6 +152,17 @@ Used by the card badge (`src/steam-badges.tsx`) to also mark Steam games install
 
 Library DOM (window "Steam — Modo Big Picture", 854×534 CSS px on the Deck): on the home screen every card `div[role="listitem"]` has `data-id` with the appid, including store covers whose URL uses a hash instead of the appid.
 
+**Updating a game installed on a card** (Cyberpunk 2077, 1091500, Deck, 2026-11-01/02). Steam downloaded and staged the update **on the internal drive** and only then moved the result to the card:
+
+| | During the update | After |
+|---|---|---|
+| `appmanifest_1091500.acf` (on the card) | `StagingFolder "0"` (library 0 = internal drive), `BytesToDownload` 28.8 GB, `BytesToStage` 88 GB, `buildid` 20383525 → `TargetBuildID` 26161058 | `StateFlags "4"` (fully installed), `buildid` 26161058, `BytesStaged` = `BytesToStage` |
+| Internal drive, `steamapps/downloading/` | `.delta` and `state_*.patch` files, and `downloading/1091500` already holding 83 GB (147 files, allocated at once, not sparse) | `downloading/1091500` gone |
+| Card, `steamapps/downloading/` and `temp/` | `downloading/` empty, `temp/1091500` empty | both empty |
+| Game folder on the card / free space on the card | 92 GB / 26 GB | 83 GB / 35 GB |
+
+The staging needed 88 GB and the card had 26 GB free, so Steam most likely picked another library with room. A small update that fits on the card was not measured; it probably stages in the card's own `steamapps/downloading`. In practice: a big update of a card game needs that much free space on the internal drive for a while, and the card must stay in until the update finishes, since the last step writes to it.
+
 ## Plugin installation through Decky (measured 2026-10-24, Decky v3.3.0)
 
 Not a Steam API, but it is the other undocumented global the plugin uses (`src/selfupdate.ts`).
