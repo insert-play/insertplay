@@ -34,6 +34,7 @@ Run it again **after every Steam/SteamOS update**.
 | `SteamClient.Apps.RunGame(gameid, "", -1, 100)` | Starts the shortcut. `GameSessions.RegisterForAppLifetimeNotifications` reports the start and the exit. |
 | `SteamClient.Apps.SetShortcutExe(appid, '"/bin/bash"')` | Does not throw. The stored form (quotes) was not checked visually. |
 | `SteamClient.Apps.RemoveShortcut(appid)` | Removes; `appStore` stops having the appid within ~1 s. |
+| `SteamClient.System.SuspendPC()` | Dev tools only (`deck.mjs suspend`). Suspends the device like the menu: logind logs `suspend requested from client … ('dbus-send')`. Measured on the Deck (S3) and the Machine (s2idle), 2026-11-06. Call it delayed (`setTimeout`), or the CEF answer doesn't come back before the sleep. |
 | `SteamUIStore.Navigate(path)` | Navigates (`/library/app/<appid>`, `/library/home`). Used by "Abrir página do jogo"; see [Opening the game page](#opening-the-game-page-measured-2026-11-01). |
 
 ## Steam startup (measured 2026-10-24)

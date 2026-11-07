@@ -39,7 +39,7 @@ Devices are listed in `deck.config.json` (not in git; copy `deck.config.example.
 
 | Command | What for |
 |---|---|
-| `check` | Diagnostics: SSH, Decky, passwordless deploy, plugin installed, Steam over CEF. |
+| `check` | Diagnostics: SSH, Decky, passwordless deploy, wake-on-LAN, plugin installed, Steam over CEF. Saves the device's MAC and sleep mode to `deck.config.json`; without an answer, says whether it may be asleep or the IP changed. |
 | `deploy [--skip-build]` | Build, upload and install on the device; restarts Decky. |
 | `logs [n]` | Decky journal lines about InsertPlay. |
 | `eval "<js>"` | Runs JS inside Steam (SharedJSContext). |
@@ -50,6 +50,8 @@ Devices are listed in `deck.config.json` (not in git; copy `deck.config.example.
 | `stage-card <label> [--version X]` | Writes the plugin zip to a mounted card. |
 | `restart` / `remove` | Restarts Decky / uninstalls InsertPlay. |
 | `setup-access` | Uploads the passwordless deploy installer (below). |
+| `wake` | Wakes a sleeping device with a wake-on-LAN magic packet and waits for SSH ([below](#wake-on-lan-wake)). |
+| `suspend` | Suspends the device through Steam, to test `wake`. Refuses with a game running, and on a device that sleeps in S3 (the Deck: `wake` cannot bring it back) unless `--deep-ok`. |
 
 `node scripts/spike.mjs` checks the Steam API calls the plugin uses ([steam-api-notes.md](steam-api-notes.md)). Run it after a Steam update.
 
@@ -107,13 +109,20 @@ ssh -t deck@<ip> "sudo bash /tmp/insertplay-deck-setup/install-dev-access.sh"
 ```
 The first command uploads the installer. The second asks for the deck password once and installs it. Run `node scripts/deck.mjs check` again: "passwordless deploy" should be OK.
 
-To undo it, on the Deck: `sudo rm -rf /etc/insertplay-dev /etc/sudoers.d/zz-insertplay-dev`.
+To undo it, on the Deck: `sudo rm -rf /etc/insertplay-dev /etc/sudoers.d/zz-insertplay-dev /etc/NetworkManager/conf.d/zz-insertplay-wake.conf`.
 
 The script validates and installs a root-owned private copy, never files the `deck` user can still change. Known limit: `~/homebrew` belongs to `deck` by Decky's design, and with that ownership `deck` already controls what Decky (root) loads at boot. The script doesn't create that risk, but doesn't remove it either. Use this only on the development device.
 
 Run `setup-access` and the `ssh -t … install-dev-access.sh` command again when:
 - **SteamOS updates**: the update wipes `/etc/insertplay-dev` and `/etc/sudoers.d/zz-insertplay-dev` (measured on 3.8.28 → 3.9.5). `check` shows "passwordless deploy: FAIL";
 - `scripts/deck-setup/` changes: the Deck uses the copy installed in `/etc/insertplay-dev`.
+
+### Wake-on-LAN (`wake`)
+The step 5c installer also turns on wake-on-LAN (magic packet) through `/etc/NetworkManager/conf.d/zz-insertplay-wake.conf` and `iw … wowlan enable`, **only on devices that sleep in `s2idle`**. Measured on 2026-11-06 (issue #27):
+- **Steam Machine** (Wi-Fi ath11k; the Ethernet port is unused; `s2idle` only): WoWLAN supported, off by default. With it on, `suspend` → `wake` woke it about 1 s after the first packet, and `check` passed right after.
+- **Steam Deck** (Wi-Fi rtw88_8822ce, sleeps in S3 `deep`): with WoWLAN on, the magic packet did not wake it; after the power button, the driver logged `Unknown wakeup reason 0`. In the ACPI table (`/proc/acpi/wakeup`) the Wi-Fi root port (`GPP3`) wakes the system only from S0. The installer turns WoWLAN off there, so the radio does not stay associated during sleep for nothing. Wake the Deck with the power button.
+
+The magic packet is a broadcast: the PC must be on **the same subnet** as the device. From another subnet (through the router) neither broadcast nor unicast arrived. `check` saves the MAC (`devices.<name>.mac`) and the sleep mode (`sleep`) while the device is awake; `wake` uses them.
 
 ### Step 6: install the plugin
 ```powershell

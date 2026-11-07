@@ -20,8 +20,14 @@
 //   node scripts/deck.mjs setup-access       sends the passwordless access installer (see docs/development.md)
 //   node scripts/deck.mjs stage-card <label> [--version X]   build + write the plugin zip to the
 //                                            mounted card (insertplay/decky/InsertPlay.zip)
+//   node scripts/deck.mjs wake               wake-on-LAN magic packet, then waits for SSH (needs "mac")
+//   node scripts/deck.mjs suspend            suspends the device through Steam (to test `wake`)
 import { spawnSync } from "node:child_process";
+import { createSocket } from "node:dgram";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { Socket } from "node:net";
+import { lookup } from "node:dns/promises";
+import { networkInterfaces } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connect } from "./cdp.mjs";
@@ -31,7 +37,7 @@ const CONFIG_PATH = join(ROOT, "deck.config.json");
 const STAGE = "/tmp/insertplay-decky";
 const DEPLOY = "/etc/insertplay-dev/deploy-plugin.sh";
 
-const MUTATING = new Set(["deploy", "remove", "restart", "stage-card", "setup-access"]);
+const MUTATING = new Set(["deploy", "remove", "restart", "stage-card", "setup-access", "suspend"]);
 
 /** Config of a device: `{ name, host, user, role }`. Accepts the old format
  *  (`{ host, user }` at the root), treated as the "deck" device. */
@@ -40,7 +46,8 @@ export function loadConfig(device = process.env.INSERTPLAY_DEVICE) {
     throw new Error(`create ${CONFIG_PATH} from deck.config.example.json with the Deck's IP`);
   }
   const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-  const devices = raw.devices ?? { deck: { host: raw.host, user: raw.user, role: "dev" } };
+  // old format: also carries the `mac`/`sleep` that saveFacts writes at the root (PR #42 review)
+  const devices = raw.devices ?? { deck: { host: raw.host, user: raw.user, role: "dev", mac: raw.mac, sleep: raw.sleep } };
   const name = device ?? raw.default ?? Object.keys(devices)[0];
   const cfg = devices[name];
   if (!cfg) throw new Error(`device "${name}" does not exist in ${CONFIG_PATH} (available: ${Object.keys(devices).join(", ")})`);
@@ -148,11 +155,176 @@ for path in sorted(glob.glob(home + "/.local/share/Steam/userdata/*/config/short
     if n_orphan: orphans.append(f"{uid}:{n_orphan}")
 print(",".join(orphans) or "-")`;
 
+/** Writes measured facts (`mac`, `sleep`) to the device in deck.config.json
+ *  (`devices.<name>`, or the root in the old format). `check` calls it so `wake` works
+ *  without editing the file by hand, and knows a device that sleeps in S3 cannot be woken. */
+function saveFacts(cfg, facts) {
+  const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+  const entry = raw.devices ? raw.devices[cfg.name] : raw;
+  const changed = Object.entries(facts).filter(([k, v]) => v && entry && entry[k] !== v);
+  if (!changed.length) return;
+  for (const [k, v] of changed) entry[k] = cfg[k] = v;
+  writeFileSync(CONFIG_PATH, `${JSON.stringify(raw, null, 2)}\n`);
+}
+
+const DEEP_SLEEP = "it sleeps in S3 (deep), where the Wi-Fi cannot wake it: press the power button";
+
+const normMac = (mac) => mac.toLowerCase().replace(/-/g, ":");
+
+/** Magic packet: 6 x 0xFF followed by the MAC 16 times. */
+export function magicPacket(mac) {
+  const hex = mac.replace(/[:-]/g, "");
+  if (!/^[0-9a-f]{12}$/i.test(hex)) throw new Error(`invalid MAC "${mac}"`);
+  const m = Buffer.from(hex, "hex");
+  return Buffer.concat([Buffer.alloc(6, 0xff), ...Array(16).fill(m)]);
+}
+
+/** Broadcast addresses to send the packet to: the directed broadcast of every local IPv4
+ *  interface on the device's subnet, plus the limited broadcast. On Windows the limited
+ *  broadcast leaves through a single interface, so the directed one is the reliable one.
+ *  `ip` must be an IPv4 address (resolve hostnames first). */
+function broadcastTargets(ip) {
+  const toInt = (a) => a.split(".").reduce((n, o) => (n << 8) + Number(o), 0) >>> 0;
+  const toIp = (n) => [24, 16, 8, 0].map((s) => (n >>> s) & 255).join(".");
+  const directed = new Set();
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.family !== "IPv4" || a.internal) continue;
+      const mask = toInt(a.netmask);
+      if (((toInt(a.address) ^ toInt(ip)) & mask) === 0) directed.add(toIp((toInt(a.address) | ~mask) >>> 0));
+    }
+  }
+  return [...directed, "255.255.255.255"];
+}
+
+function sendMagic(mac, targets) {
+  const packet = magicPacket(mac);
+  return new Promise((resolve, reject) => {
+    const sock = createSocket("udp4");
+    sock.once("error", reject);
+    sock.bind(() => {
+      sock.setBroadcast(true);
+      let pending = targets.length * 2;
+      for (const t of targets) {
+        for (const port of [9, 7]) {
+          sock.send(packet, port, t, () => {
+            if (--pending === 0) {
+              sock.close();
+              resolve();
+            }
+          });
+        }
+      }
+    });
+  });
+}
+
+/** Whether the TCP port answers within `ms`. */
+function tcpOpen(host, port, ms) {
+  return new Promise((resolve) => {
+    const s = new Socket();
+    const done = (ok) => {
+      s.destroy();
+      resolve(ok);
+    };
+    s.setTimeout(ms);
+    s.once("connect", () => done(true));
+    s.once("timeout", () => done(false));
+    s.once("error", () => done(false));
+    s.connect(port, host);
+  });
+}
+
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+const hostIp = async (host) => (await lookup(host, { family: 4 })).address;
+const deviceFlag = (cfg) => `--device ${cfg.name}`;
+
+/** Sends the magic packet and resends it every few seconds until SSH (port 22) answers.
+ *  Wi-Fi in WoWLAN may miss a packet, so a single one is not enough. */
+async function wake(cfg, timeoutS = 60) {
+  if (!cfg.mac) {
+    console.error(`"mac" missing for device "${cfg.name}" in ${CONFIG_PATH}. Run check once while it is awake: it saves the MAC.`);
+    return 1;
+  }
+  if (await tcpOpen(cfg.host, 22, 1500)) {
+    console.log("already awake (ssh answers)");
+    return 0;
+  }
+  if (cfg.sleep === "deep") {
+    console.error(`no answer, and wake-on-LAN does not work on "${cfg.name}": ${DEEP_SLEEP}`);
+    return 1;
+  }
+  const ip = await hostIp(cfg.host);
+  const targets = broadcastTargets(ip);
+  // only the limited broadcast left: no interface of this machine is on the device's subnet
+  // (PC on another network, or WSL2's NAT), and the broadcast does not cross a router (measured)
+  if (targets.length === 1) {
+    console.error(`no local network interface on ${ip}'s subnet: the magic packet would not reach it. ` +
+      "Connect this PC to the device's network (or run from Windows instead of WSL2).");
+    return 1;
+  }
+  const start = Date.now();
+  console.log(`magic packet for ${cfg.mac} to ${targets.join(", ")}; waiting for ssh...`);
+  while (Date.now() - start < timeoutS * 1000) {
+    const round = Date.now();
+    await sendMagic(cfg.mac, targets);
+    if (await tcpOpen(cfg.host, 22, 3000)) {
+      console.log(`awake: ssh answered after ${Math.round((Date.now() - start) / 1000)} s`);
+      return 0;
+    }
+    // a refused connection returns at once: keep a resend every ~3 s, never a tight loop
+    await sleepMs(Math.max(0, 3000 - (Date.now() - round)));
+  }
+  console.error(`no answer after ${timeoutS} s: wake-on-LAN may be disabled on the device (check shows it), or the IP changed`);
+  return 1;
+}
+
+/** IPs where this PC's ARP table has seen `mac`. A sleeping device does not answer ARP;
+ *  a device that changed IP shows up under the new one (after any traffic with it).
+ *  On WSL the Linux table only sees WSL's own network: read Windows' (arp.exe). */
+function arpLookup(mac) {
+  const r = process.platform === "win32" ? run("arp", ["-a"], { capture: true })
+    : process.env.WSL_DISTRO_NAME ? run("arp.exe", ["-a"], { capture: true })
+    : run("ip", ["neigh"], { capture: true });
+  const want = normMac(mac);
+  const ips = [];
+  for (const line of r.out.split(/\r?\n/)) {
+    const ip = line.match(/\b(\d+\.\d+\.\d+\.\d+)\b/);
+    const m = line.match(/\b([0-9a-f]{2}(?:[:-][0-9a-f]{2}){5})\b/i);
+    if (ip && m && normMac(m[1]) === want) ips.push(ip[1]);
+  }
+  return ips;
+}
+
+/** Why the device does not answer: asleep or another IP. */
+async function unreachableHint(cfg) {
+  if (!cfg.mac) return "asleep or the IP changed; run check once while awake to save the MAC and tell them apart";
+  let ip = cfg.host;
+  try {
+    ip = await hostIp(cfg.host);
+  } catch {
+    return `could not resolve ${cfg.host}`;
+  }
+  const other = arpLookup(cfg.mac).filter((a) => a !== ip);
+  if (other.length) return `the MAC ${cfg.mac} is now at ${other.join(", ")}: the IP changed, update ${CONFIG_PATH}`;
+  if (cfg.sleep === "deep") return `no answer: it may be asleep; ${DEEP_SLEEP}`;
+  return `no answer: it may be asleep, run "node scripts/deck.mjs wake ${deviceFlag(cfg)}"`;
+}
+
 async function check(cfg) {
   const rows = [];
-  const add = (item, ok, detail) => rows.push({ item, status: ok ? "OK" : "FAIL", detail });
+  const add = (item, ok, detail) => rows.push({ item, status: ok === "warn" ? "WARN" : ok ? "OK" : "FAIL", detail });
   const s = ssh(cfg, `
     echo "os=$(grep ^VERSION_ID= /etc/os-release | cut -d= -f2) device=$(cat /sys/devices/virtual/dmi/id/product_name)"
+    dev=$(ip route | awk '/^default/{print $5; exit}')
+    echo "mac=$(cat /sys/class/net/$dev/address 2>/dev/null) netif=$dev"
+    echo "sleep=$(grep -o '\\[[a-z0-9]*\\]' /sys/power/mem_sleep | tr -d '[]')"
+    phy=$(cat /sys/class/net/$dev/phy80211/name 2>/dev/null)
+    if [ -n "$phy" ]; then
+      echo "wol=$(iw phy "$phy" wowlan show 2>/dev/null | grep -qi 'magic packet' && echo magic || echo off)"
+    else
+      echo "wol=wired"
+    fi
     echo "loader=$(systemctl is-active plugin_loader)"
     echo "plugin=$( [ -f ~/homebrew/plugins/InsertPlay/plugin.json ] && echo installed || echo missing)"
     echo "deploy=$(sudo -n ${DEPLOY} >/dev/null 2>&1; [ $? -eq 2 ] && echo granted || echo no-access)"
@@ -163,7 +335,19 @@ PY
   `, { capture: true });
   const facts = Object.fromEntries(s.out.split(/\s+/).filter((x) => x.includes("=")).map((x) => x.split("=")));
   add("passwordless ssh", s.code === 0, s.code === 0 ? `SteamOS ${facts.os} (${facts.device})` : s.err);
+  // only when the network did not answer: ssh also returns 255 on auth/host-key errors,
+  // and calling those "asleep" would hide the real cause (PR #42 review)
+  if (s.code === 255 && /timed out|no route to host|host is unreachable|network is unreachable/i.test(s.err)) {
+    add("diagnosis", false, await unreachableHint(cfg));
+  }
   if (s.code === 0) {
+    saveFacts(cfg, { mac: facts.mac, sleep: facts.sleep });
+    // WARN, not FAIL: the device works without it; only `wake` depends on it
+    // S3 ("deep", the Deck): the Wi-Fi root port wakes the system only from S0 (measured)
+    if (facts.sleep === "deep") add("wake-on-LAN", true, `not available: sleeps in S3 (deep); ${facts.netif} ${facts.mac}`);
+    else if (facts.wol === "magic") add("wake-on-LAN", true, `${facts.netif} ${facts.mac}, magic packet`);
+    else if (facts.wol === "wired") add("wake-on-LAN", "warn", `${facts.netif} ${facts.mac}: Ethernet, not measured`);
+    else add("wake-on-LAN", "warn", `off on ${facts.netif} ${facts.mac}: run setup-access again (docs/development.md)`);
     add("Decky (plugin_loader)", facts.loader === "active", facts.loader);
     if (facts.deploy === "granted") add("passwordless deploy", true, DEPLOY);
     // in prod the plugin arrives through the real flow (card zip); no grant is expected
@@ -186,7 +370,7 @@ PY
     add("Steam via CEF :8081", false, err.message);
   }
   console.table(rows);
-  return rows.every((r) => r.status === "OK") ? 0 : 1;
+  return rows.every((r) => r.status !== "FAIL") ? 0 : 1;
 }
 
 /** Build (optional) and upload of the plugin files to the stage on the Deck. */
@@ -338,6 +522,30 @@ async function main() {
       if (i >= 0 && (!rest[i + 1] || rest[i + 1].startsWith("--"))) throw new Error("--version needs a value, e.g.: --version 0.3.0");
       return stageCard(cfg, rest[0], i >= 0 ? rest[i + 1] : undefined);
     }
+    case "wake":
+      return wake(cfg);
+    case "suspend": {
+      // S3 (the Deck): `wake` cannot bring it back, every remote tool stays down until
+      // someone presses the power button (PR #42 review)
+      if (cfg.sleep === "deep" && !rest.includes("--deep-ok")) {
+        console.error(`not suspending "${cfg.name}": ${DEEP_SLEEP}. Repeat with --deep-ok if someone is at the device.`);
+        return 1;
+      }
+      const steam = await connect(cfg.host);
+      try {
+        const running = await steam.evaluate("SteamUIStore.RunningApps.map((a) => a.display_name)");
+        if (running.length) {
+          console.error(`not suspending: running ${running.join(", ")}`);
+          return 1;
+        }
+        // delayed: the CEF answer must come back before the device sleeps
+        await steam.evaluate("(setTimeout(() => SteamClient.System.SuspendPC(), 1000), true)");
+      } finally {
+        steam.close();
+      }
+      console.log("suspending");
+      return 0;
+    }
     case "screenshot":
       return screenshot(cfg, rest[0]);
     case "panel":
@@ -359,7 +567,7 @@ async function main() {
       return 0;
     }
     default:
-      console.error("usage: node scripts/deck.mjs check|eval|ssh|deploy|restart|remove|logs|setup-access|stage-card|screenshot|panel|toasts|rpc");
+      console.error("usage: node scripts/deck.mjs check|eval|ssh|deploy|restart|remove|logs|setup-access|stage-card|screenshot|panel|toasts|rpc|wake|suspend");
       return 2;
   }
 }

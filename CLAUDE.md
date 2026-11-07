@@ -15,12 +15,12 @@ Steam Machine (prod) rules:
 - Read-only by default: `check`, query `eval`, `logs`, `screenshot`, `panel`, read `rpc`.
 - The real install flow (card zip / Decky's "Install Plugin from ZIP File") was validated on it. To test a new version, `deploy --device machine --confirm-prod` over SSH also works.
 - **Check its state before any install or test:** it is in another room and someone may be playing. Before `deploy`, `restart`, `remove` or asking to open a game, run `check` and `eval "SteamUIStore.RunningApps.map(a => a.display_name)"`. With a game running, do nothing and ask the user: the deploy restarts Decky in the middle of someone's session.
-- `deploy`, `remove`, `restart`, `stage-card` and `setup-access` require `--confirm-prod`. Only use them after agreeing with the user **in that session**.
+- `deploy`, `remove`, `restart`, `stage-card`, `setup-access` and `suspend` require `--confirm-prod`. Only use them after agreeing with the user **in that session**.
 - Don't run `spike.mjs` on it: it creates test shortcuts.
 - It has plugins the Deck doesn't (SteamGridDB, PlayCount). Something that works on the Deck may behave differently there. Non-Steam Badges and MicroSDeck were uninstalled on 2026-10-24: InsertPlay's own card badge replaces them.
 - Don't change shortcuts the plugin didn't create. The legacy InsertPlay (C# CLI + `insertplay.service`) was removed from both devices on 2026-10-24 and from this repository in #16.
 
-Devices live in `deck.config.json` (not in git; template in `deck.config.example.json`): `{"default": "deck", "devices": {"deck": {"host", "user", "role"}, "machine": {...}}}`. The old format, `{"host"}` at the root, still works as the `deck` device. Every command accepts `--device <name>`, in any position, or the `INSERTPLAY_DEVICE` variable, and prints on stderr which device it is using. IPs come from DHCP and can change: if `check` fails to connect, ask the user for the current IP and update the file.
+Devices live in `deck.config.json` (not in git; template in `deck.config.example.json`): `{"default": "deck", "devices": {"deck": {"host", "user", "role"}, "machine": {...}}}`. The old format, `{"host"}` at the root, still works as the `deck` device. Every command accepts `--device <name>`, in any position, or the `INSERTPLAY_DEVICE` variable, and prints on stderr which device it is using. IPs come from DHCP and can change. If `check` fails to connect, read its "diagnosis" row (from the MAC that `check` saved): if the device may be asleep, run `wake` (Machine) or ask the user to press the power button (Deck); if the IP changed, or there's no hint, ask the user for the current IP and update the file.
 
 ## Device access
 
@@ -44,6 +44,8 @@ All commands run from the repository root, on Windows or WSL. Use `node scripts/
 | `ssh "<cmd>"` | Command on the device as user `deck`, no TTY, no password. |
 | `stage-card <label> [--version X]` | Builds and writes the plugin zip to the mounted card (`insertplay/decky/InsertPlay.zip`), validated by the plugin's own `build_zip_from_dir`. `--version` changes the version only in the zip, to test "newer/older card". |
 | `restart` / `remove` | Restart Decky / uninstall InsertPlay. |
+| `wake` | Wake-on-LAN magic packet, then waits for SSH. Works on the Machine (`s2idle`) only; **not on the Deck** (S3: ask the user to press the power button). The PC must be on the devices' subnet. |
+| `suspend` | Suspends through Steam, to test `wake`. Refuses with a game running, and on the Deck (S3) unless `--deep-ok`: only with the user at the bench. |
 
 Others:
 - `node scripts/spike.mjs`: confirms the Steam API calls (see [docs/steam-api-notes.md](docs/steam-api-notes.md)). Run it after a Steam update or when using a new call.
