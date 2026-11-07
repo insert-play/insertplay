@@ -48,10 +48,18 @@ else
 	echo "wake-on-LAN skipped: this device sleeps in $(grep -o '\[[a-z0-9]*\]' /sys/power/mem_sleep), the Wi-Fi cannot wake it"
 fi
 nmcli general reload conf || true
-for net in /sys/class/net/*; do
-	[[ -e "$net/phy80211/name" ]] || continue
-	iw phy "$(cat "$net/phy80211/name")" wowlan "${WOWLAN[@]}" && echo "wake-on-wlan ${WOWLAN[0]}: $(basename "$net")"
-done
+if ! command -v iw >/dev/null; then
+	echo "WARNING: iw not found; wake-on-wlan takes effect on the next Wi-Fi connection" >&2
+else
+	for net in /sys/class/net/*; do
+		[[ -e "$net/phy80211/name" ]] || continue
+		if iw phy "$(cat "$net/phy80211/name")" wowlan "${WOWLAN[@]}"; then
+			echo "wake-on-wlan ${WOWLAN[0]}: $(basename "$net")"
+		else
+			echo "WARNING: iw wowlan ${WOWLAN[*]} failed on $(basename "$net"); the driver may not support it" >&2
+		fi
+	done
+fi
 
 echo "OK: development access installed."
 echo "Test: sudo -n /etc/insertplay-dev/deploy-plugin.sh   (should show the 'usage:' without asking for a password)"

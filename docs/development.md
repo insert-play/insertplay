@@ -51,7 +51,7 @@ Devices are listed in `deck.config.json` (not in git; copy `deck.config.example.
 | `restart` / `remove` | Restarts Decky / uninstalls InsertPlay. |
 | `setup-access` | Uploads the passwordless deploy installer (below). |
 | `wake` | Wakes a sleeping device with a wake-on-LAN magic packet and waits for SSH ([below](#wake-on-lan-wake)). |
-| `suspend` | Suspends the device through Steam, to test `wake`. Refuses with a game running. |
+| `suspend` | Suspends the device through Steam, to test `wake`. Refuses with a game running, and on a device that sleeps in S3 (the Deck: `wake` cannot bring it back) unless `--deep-ok`. |
 
 `node scripts/spike.mjs` checks the Steam API calls the plugin uses ([steam-api-notes.md](steam-api-notes.md)). Run it after a Steam update.
 
