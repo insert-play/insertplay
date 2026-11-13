@@ -28,9 +28,11 @@
 		@method not method GET HEAD
 		respond @method 405
 
-		# "." and ".." segments, also percent-encoded, and backslashes: 404, never a
-		# cleaned-up path. {http.request.orig_uri.path} is the path as sent.
-		@dotted expression `{http.request.orig_uri.path}.matches("(?i)(^|/)(\\.|%2e){1,2}(/|$)|\\\\|%5c|%00")`
+		# "." and ".." segments, also percent-encoded, backslashes and NUL: 404, never a
+		# cleaned-up path. {http.request.orig_uri.path} is the path as sent, already
+		# percent-decoded (so %2e%2e and %5c are caught too, and a file literally named
+		# "a%5cb" or "%2e", which the indexer accepts, is still served).
+		@dotted expression `{http.request.orig_uri.path}.matches("(^|/)\\.{1,2}(/|$)|\\\\|\\x00")`
 		respond @dotted 404
 
 		@index path /index.json
