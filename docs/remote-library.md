@@ -36,7 +36,7 @@ The library root is a folder with **one folder per game**, each in the [card lay
 
 ### HTTP
 
-No custom API: the server is a static file server. The reference server is Caddy (`file-server`) in Docker, with the library and the index mounted read-only; its files and setup live in `server/` (#44, PR 2).
+No custom API: the server is a static file server. The reference server is Caddy (`file-server`) in Docker, with the library and the index mounted read-only; its files and setup live in [`server/`](../server/README.md).
 
 | URL (relative to the server base URL) | Served from |
 |---|---|
@@ -48,8 +48,8 @@ No custom API: the server is a static file server. The reference server is Caddy
 Rules:
 
 - **Authentication.** Every request needs `Authorization: Bearer <token>`, also on the LAN. Missing or wrong token: `401`, checked **before** anything else, so a request without the token can't tell an existing path from a missing one.
-- **Methods.** `GET` and `HEAD`. `GET` supports `Range: bytes=<start>-` and answers `206` with `Content-Range: bytes <start>-<end>/<size>`.
-- **No directory listings.** A directory URL answers `404`. Paths that escape the library root (`..`, encoded or not) answer `404`. Symlinks on the server are not followed outside the library root.
+- **Methods.** `GET` and `HEAD` (any other method: `405`). `GET` supports `Range: bytes=<start>-` and answers `206` with `Content-Range: bytes <start>-<end>/<size>`.
+- **No directory listings.** A directory URL answers `404`. Paths with a `.` or `..` segment (encoded or not) answer `404`. The indexer refuses games whose symlinks leave the game folder, so no indexed path goes through such a link; the reference server sees only the library and the index (in a container), so a link can never reach the rest of the disk.
 - **No redirects.** The server never redirects; the client treats any `3xx` as an error and never resends the token elsewhere.
 - **The token** lives only on the server (its config folder, mode `0600`) and in the plugin's settings on the device. It never goes into the repository, the index, logs or issues. Without TLS on the LAN it travels in clear text: accepted for the proof of concept, to be revisited with remote access.
 
@@ -57,7 +57,7 @@ The **server base URL** is what the user types in the panel, for example `http:/
 
 ### Indexer
 
-A script that reads the library root (read-only) and writes the index and the file lists to an output folder **outside the library disk**, in the server's config folder. It writes to temporary files and renames them at the end, so the server never serves a half-written index.
+A script ([`server/indexer/remote_library_index.py`](../server/indexer/remote_library_index.py)) that reads the library root (read-only) and writes the index and the file lists to an output folder **outside the library disk**, in the server's config folder. It writes to temporary files and renames them at the end, so the server never serves a half-written index.
 
 For each game folder it:
 
@@ -66,7 +66,7 @@ For each game folder it:
 3. resolves the artwork the same way the plugin does for a card (the manifest path, then the fallback `steam-artwork/<kind>.png`). `{SD_ROOT}/` at the start of an artwork path is removed; an absolute path, or one that breaks the [path rules](#path-rules), is ignored and the fallback applies;
 4. computes `version` and writes `lists/<id>.json`, then adds the game to `index.json`.
 
-A game is **skipped** (reported by the indexer, absent from the index) when: its guid is missing, invalid or the all-zero template guid; two folders have the same guid (both skipped); any path breaks the [path rules](#path-rules); a symlink points outside the game folder or is absolute; a file name ends in `.part` (reserved by the client).
+A game is **skipped** (reported by the indexer, absent from the index) when: its guid is missing, invalid or the all-zero template guid; two folders have the same guid (both skipped); any path breaks the [path rules](#path-rules); a symlink points outside the game folder or is absolute; a file name ends in `.part` (reserved by the client); an entry is neither a regular file, a directory nor a symlink (FIFO, socket, device); the file list would exceed the client's 64 MiB limit.
 
 The indexer may cache hashes by `(path, size, mtime)` to avoid rehashing unchanged games; that is an optimization, not part of the contract.
 
