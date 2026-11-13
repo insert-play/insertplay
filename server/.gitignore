@@ -1,0 +1,5 @@
+# Local settings and the token: never in git.
+.env
+*.env
+token*
+!.env.example
