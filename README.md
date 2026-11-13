@@ -109,6 +109,8 @@ A card whose manifest declares the game's [RetroAchievements](https://retroachie
 
 The plugin relies on undocumented Steam client APIs (`SteamClient.*`); the calls in use and how they were measured are in [docs/steam-api-notes.md](docs/steam-api-notes.md). A Steam update can break them.
 
+Installing games from a home server ("Biblioteca Remota", the remote library) is in progress; its server layout, index format and backend RPCs are specified in [docs/remote-library.md](docs/remote-library.md).
+
 ## Known limitations
 
 - The shortcut registry is per device, but shortcuts are per Steam account: with two accounts on one device, a card can get a shortcut in each ([#8](https://github.com/insert-play/insertplay/issues/8)).
