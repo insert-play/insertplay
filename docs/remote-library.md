@@ -63,7 +63,7 @@ For each game folder it:
 
 1. reads `shortcut-identity.json` (guid, lowercased) and `steam-shortcut.json` (stored as is in the index as `manifest`);
 2. walks the folder, without following symlinks, and builds the file list: every regular file with its size, sha256 and [`executable`](#executable-files) flag, every empty directory, and every symlink that stays inside the game folder;
-3. resolves the artwork the same way the plugin does for a card (the manifest path, then the fallback `steam-artwork/<kind>.png`). `{SD_ROOT}/` at the start of an artwork path is removed; an absolute path outside the game folder is ignored;
+3. resolves the artwork the same way the plugin does for a card (the manifest path, then the fallback `steam-artwork/<kind>.png`). `{SD_ROOT}/` at the start of an artwork path is removed; an absolute path, or one that breaks the [path rules](#path-rules), is ignored and the fallback applies;
 4. computes `version` and writes `lists/<id>.json`, then adds the game to `index.json`.
 
 A game is **skipped** (reported by the indexer, absent from the index) when: its guid is missing, invalid or the all-zero template guid; two folders have the same guid (both skipped); any path breaks the [path rules](#path-rules); a symlink points outside the game folder or is absolute; a file name ends in `.part` (reserved by the client).
@@ -72,7 +72,7 @@ The indexer may cache hashes by `(path, size, mtime)` to avoid rehashing unchang
 
 ### `version`
 
-The first 16 hex digits of the sha256 of the game's file list (the `files`, `dirs` and `links` arrays serialized as compact JSON with sorted keys). It changes whenever any file, directory or link changes, and needs no new field in the card format. The client only compares versions for equality.
+The first 16 hex digits of the sha256 of the game's file list: in Python, `sha256(json.dumps({"files": files, "dirs": dirs, "links": links}, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()[:16]`, with `dirs` and `links` as `[]` when the game has none. It changes whenever any file, directory or link changes, and needs no new field in the card format. The client only compares versions for equality.
 
 ## `index.json` v1
 
@@ -166,6 +166,12 @@ The guids, sizes and hashes above are illustrative, not the real test games of [
 
 All sizes are JSON integers in bytes; all sha256 values are 64 lowercase hex digits.
 
+What the client checks in the index, besides `schemaVersion`:
+
+- **URLs stay on the server.** `library` and every `games[].files` are relative URLs: no scheme, no host, no leading `/`, no `\`, no `?` or `#`, no `.` or `..` segment, and they resolve under the base URL (same scheme, host and port, path starting with the base path). Anything else is `bad_index` for the whole index: an index must never make the client send the token to another server.
+- **`id`** matches `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$` (lowercase), is not the all-zero template guid and is unique in the index. It becomes a folder name on the device, so a game with a bad `id` is dropped from the list (reported in the plugin log) and never reaches the disk.
+- **`path`** and every `artwork.<kind>.path` follow the [path rules](#path-rules); `artwork` kinds outside the five known ones are ignored. A game that breaks this is dropped like a bad `id`.
+
 Limits the client enforces: `index.json` up to 16 MiB, a file list up to 64 MiB (a game with ~32 000 entries makes a file list of about 4 MiB).
 
 ## Per-game file list
@@ -202,7 +208,13 @@ Limits the client enforces: `index.json` up to 16 MiB, a file list up to 64 MiB 
 | `id`, `version` | Must equal the index entry; otherwise `bad_index`. |
 | `files[]` | Every regular file: `path` (see the [path rules](#path-rules)), `size`, `sha256`, `executable`. Sorted by `path`. |
 | `dirs[]` | Optional. Empty directories to create (a directory with files is created implicitly). |
-| `links[]` | Optional. Symlinks inside the game: `path` and `target`. The target is relative, with no backslash and no leading `/`, and `dirname(path)` joined with `target` and normalized must stay inside the game folder. The client checks it again and refuses the game otherwise. |
+| `links[]` | Optional. Symlinks inside the game: `path` and `target`. The target is relative, non-empty, follows the character rules of the [path rules](#path-rules) (`..` segments allowed), and `dirname(path)` joined with `target` and normalized must stay inside the game folder. The client checks it again and refuses the game otherwise. |
+
+Symlinks are where a lexical check alone falls short (`x → .` and then `sub/y → ../x/..` normalizes inside the folder but resolves to its parent), so the client also:
+
+- creates the links only after every file is verified (step 4 of [Install](#install)), deleting and recreating any link already in `.incoming/<id>/` from an interrupted run;
+- after creating them, resolves every link with `realpath` and refuses the game (`bad_path`) if one lands outside `.incoming/<id>/`;
+- never writes or creates anything through a symlink: every file and directory is created with its parent checked not to be a link (`O_NOFOLLOW`, `lstat`).
 
 ### Executable files
 
@@ -224,10 +236,10 @@ Every `path` in a file list (and `games[].path`, which is a single segment) must
 - free of empty segments (no leading `/`, no trailing `/`, no `//`) and of `.` and `..` segments;
 - free of `\`, NUL and other control characters (U+0000 to U+001F, U+007F);
 - at most 255 bytes per segment and 4096 bytes in total;
-- unique, and never both a file and a directory (no `a` as a file next to `a/b`);
+- unique across `files`, `dirs` and `links` together, and never an ancestor of another entry when it is a file or a link (no `a` as a file or link next to `a/b`);
 - not ending in `.part` (reserved for the client's partial files).
 
-The indexer refuses a game that breaks them; **the client enforces them again** on every list it reads and refuses the whole game (`bad_path`), never just the file. Paths are URL-encoded segment by segment when building a download URL: `<base>/<library>/<quote(game path)>/<quote(file path, safe="/")>`.
+The indexer refuses a game that breaks them; **the client enforces them again** on every list it reads and refuses the whole game (`bad_path`), never just the file. Paths are URL-encoded segment by segment when building a download URL: `urljoin(base, library) + quote(game path) + "/" + quote(file path, safe="/")`.
 
 ## Client
 
@@ -240,7 +252,7 @@ The indexer refuses a game that breaks them; **the client enforces them again** 
 | `~/homebrew/data/InsertPlay/library/state.json` | Queue, per-game state, installed games (id, version, size, install date). |
 | `~/homebrew/data/InsertPlay/library/index.json` | Last index fetched, so the panel lists games without the server. |
 | `~/homebrew/data/InsertPlay/library/lists/<id>.json` | File list pinned when the install started. |
-| `~/homebrew/data/InsertPlay/library/artwork/<id>/<kind>.png` | Artwork cache (see [Artwork](#artwork)). |
+| `~/homebrew/data/InsertPlay/library/artwork/<id>/<kind>.<ext>` | Artwork cache (see [Artwork](#artwork)). |
 | `~/homebrew/settings/InsertPlay/remote_library.json` | Server URL and token, mode `0600`. |
 
 `~/homebrew/data/InsertPlay` is Decky's `DECKY_PLUGIN_RUNTIME_DIR` and `~/homebrew/settings/InsertPlay` is `DECKY_PLUGIN_SETTINGS_DIR`. State files are written atomically (temporary file + rename, like the registry).
@@ -257,27 +269,39 @@ One game downloads at a time; the others wait in a FIFO queue. For the active ga
    - a file already verified (recorded in the state) is skipped;
    - a `.part` with `n` bytes resumes with `Range: bytes=n-`; the answer must be `206` with `Content-Range: bytes n-<size-1>/<size>`. A `200` restarts the file from 0; a `416` or a different total size means the server changed (`server_changed`);
    - a `.part` larger than `size` is deleted;
+   - the client reads at most `size − n` bytes of a body; a longer or shorter body is `server_changed` (a shorter one only after the retries, since a dropped connection also ends a body early);
    - the sha256 is computed while writing (an existing `.part` is hashed first);
    - at `size` bytes, a hash mismatch deletes the `.part` and downloads the file again, once; a second mismatch is `hash_mismatch`;
    - a match renames `.part` to the final name with mode `0644`/`0755` and records the file as verified.
 4. **Creates** the `dirs` and the `links`.
 5. **Installs**: renames `.incoming/<id>/` to `~/Games/InsertPlay/<id>/` (atomic, same filesystem) and records the game as installed with its `version`. Only then does the state become `installed`. A half-downloaded game never looks installed.
 
-Network errors (timeout, refused connection, reset, e.g. after a suspend) are retried with backoff (2, 5, 10, 30, 60 s); after that the game goes to `error` (`unreachable`) and keeps its verified files. Socket timeout: 30 s. Redirects are not followed.
+If `~/Games/InsertPlay/<id>/` already exists and the state doesn't record the game as installed, the install stops with `io_error`: the client never merges into or deletes a folder it didn't install.
+
+HTTP answers during an install:
+
+| Answer | Outcome |
+|---|---|
+| Network error (timeout, refused connection, reset, e.g. after a suspend) or `5xx` | Retried with backoff (2, 5, 10, 30, 60 s); after that the game goes to `error` (`unreachable`) and keeps its verified files. |
+| `401` | `unauthorized` at once, no retry. |
+| `404` or another `4xx` on a file | `server_changed`. |
+| `3xx` | Error (`server_changed`); redirects are never followed. |
+
+Socket timeout: 30 s.
 
 The state is saved at each file boundary and at most every 2 s during a file. When the plugin loads, games that were `downloading` or `queued` go back to the queue and resume; `paused` and `error` stay as they were.
 
-Resuming uses the pinned file list. If the server's file list changed in the meantime, the client notices by a size or `416` mismatch and stops with `server_changed`; cancelling and installing again starts with the new list.
+Resuming uses the pinned file list. If the server's file list changed in the meantime, the client notices by a size, `404` or `416` mismatch and stops with `server_changed` (a file changed with the same size shows up as `hash_mismatch`); cancelling and installing again starts with the new list.
 
 ### Uninstall and cancel
 
 - **Uninstall** deletes `~/Games/InsertPlay/<id>/` and the game's state, list and installed record. The game goes back to `not_installed` (its artwork cache stays while the game is in the index). Saves written inside the game folder (memory cards, `CLAW.USR`, a Wine prefix) are deleted with it: the panel must say so before confirming.
 - **Cancel** stops a queued, downloading, paused or failed install and deletes `.incoming/<id>/`. The game goes back to `not_installed`.
-- Before deleting, the client checks that the folder is exactly `~/Games/InsertPlay/<id>` or `~/Games/InsertPlay/.incoming/<id>` with `<id>` a valid guid, that it is not a symlink, and deletes without following symlinks. Nothing outside these folders and the state folder is ever deleted.
+- Before deleting, the client checks that `<id>` is a valid lowercase guid (the regex in [`index.json` v1](#indexjson-v1)), that the folder is exactly `~/Games/InsertPlay/<id>` or `~/Games/InsertPlay/.incoming/<id>` (its parent's `realpath` equal to the `realpath` of `~/Games/InsertPlay` or of `.incoming`), that it is not a symlink, and deletes without following symlinks (`shutil.rmtree` on a checked real directory). In the state folder, only `lists/<id>.json` and `artwork/<id>/`, with the same checks. Nothing outside these paths is ever deleted.
 
 ### Artwork
 
-The "Instalar" shortcut exists before the game is downloaded, so it needs its artwork first. On every index refresh the backend downloads each game's `artwork` files into `library/artwork/<id>/<kind>.png`, checked by sha256 and skipped when the cached hash already matches; artwork of games no longer in the index (and not installed) is removed. The frontend reads it with `remote_artwork_base64`, and #45 lets `shortcut_icon` take the cached icon as its source (today it accepts only files on a mounted card). After install the cache is still the source, so the artwork doesn't change between "Instalar" and "Jogar".
+The "Instalar" shortcut exists before the game is downloaded, so it needs its artwork first. On every index refresh the backend downloads each game's `artwork` files into `library/artwork/<id>/<kind>.<ext>`, keeping the source's extension (`png`, `jpg` or `jpeg`; any other extension is skipped), since the frontend tells Steam the image format from it. Each file is checked by sha256 against the index (and limited to its `size`) and skipped when the cached hash already matches; artwork of games no longer in the index (and not installed) is removed. The frontend reads it with `remote_artwork_base64`, and #45 lets `shortcut_icon` take the cached icon as its source (today it accepts only files on a mounted card). After install the cache is still the source, so the artwork doesn't change between "Instalar" and "Jogar".
 
 ## Backend RPC contract
 
@@ -290,7 +314,7 @@ Actions return `{"ok": true, ...}` or `{"ok": false, "code": "<code>", "message"
 | `code` | When |
 |---|---|
 | `not_configured` | No URL or no token. |
-| `bad_config` | `remote_set_config` with a URL that is not `http://` or `https://`. |
+| `bad_config` | `remote_set_config` with a URL that is not `http://` or `https://`, has user info (`user:pass@`), a query or a fragment, or a token with characters not allowed in an HTTP header (control characters, spaces). |
 | `unauthorized` | The server answered `401`. |
 | `unreachable` | Connection error or timeout after the retries. |
 | `bad_index` | Index or file list unreadable, wrong `schemaVersion`, too big, hash or `id`/`version` mismatch. |
@@ -345,7 +369,7 @@ The shape every method below uses for a game:
 | `installed` | Folder in place, every hash checked. | `installedVersion`; `updateAvailable` when the index has another `version` (updating is out of the POC) |
 | `error` | Stopped by an error; files kept. | `error: {"code", "message"}` |
 
-- `percent` is `floor(100 × bytesDone / bytesTotal)`, capped at 99 until the game is `installed`; `bytesDone` counts verified files plus `.part` bytes.
+- `percent` is `floor(100 × bytesDone / bytesTotal)` (0 when `bytesTotal` is 0), capped at 99 until the game is `installed`; `bytesDone` counts verified files plus `.part` bytes.
 - `shortcut` has the shape of a card in `current_cards` (`manifest.load_card`), with `{SD_ROOT}` resolved to `installPath` and the artwork pointing to the cache, so #45 creates the shortcut with the code it already uses for cards. It is present in every state, including `not_installed`.
 - `inIndex: false`: an installed game that is no longer in the index. It stays installed and can be uninstalled; it can't be installed again.
 
@@ -357,19 +381,19 @@ The shape every method below uses for a game:
 | `remote_set_config(url, token)` | `url`: base URL or `""` to clear; `token`: new token, `""` to clear, `null` to keep the current one | `{"ok": true, "url", "tokenSet"}` or an error (`bad_config`). Does not contact the server. |
 | `remote_refresh()` | — | Fetches `index.json` and the artwork. `{"ok": true, "games": [status…], "generatedAt"}` or an error; on error the cached index stays. |
 | `remote_games()` | — | From the cached index and the state, no network: `{"ok": true, "games": [status…], "stale": bool, "fetchedAt": epoch seconds or null}`. `stale` is true when the last refresh failed. Installed games missing from the index are included with `inIndex: false`. |
-| `remote_install(id)` | guid | Checks the config, the state and the free space, then queues. `{"ok": true, "game": status}` (`queued` or `downloading`), or an error (`no_space` with `needed`/`free`). On a game in `error` or `paused`, it retries keeping the verified files. On `installed`: `invalid_state`. |
+| `remote_install(id)` | guid | Checks the config, the state and the free space, then queues. `{"ok": true, "game": status}` (`queued` or `downloading`), or an error (`no_space` with `needed`/`free`). On a game already `queued` or `downloading`, it changes nothing and returns `ok` with the status (a second press of "Instalar" is harmless). On a game in `error` or `paused`, it retries keeping the verified files. On `installed`: `invalid_state`. |
 | `remote_pause(id)` | guid | `downloading` or `queued` → `paused`. The worker stops after the current block and starts the next game in the queue. `{"ok": true, "game": status}`. |
 | `remote_resume(id)` | guid | `paused` or `error` → `queued` (at the end of the queue; starts at once if nothing is active). |
 | `remote_cancel(id)` | guid | Any state except `installed` and `not_installed` → `not_installed`, deleting `.incoming/<id>/`. |
-| `remote_uninstall(id)` | guid | `installed` → `not_installed`, deleting the install folder. The frontend checks first that the game isn't running (`SteamUIStore.RunningApps`). |
+| `remote_uninstall(id)` | guid | `installed` → `not_installed`, deleting the install folder (a game with `inIndex: false` then leaves the list). The frontend checks first that the game isn't running (`SteamUIStore.RunningApps`). |
 | `remote_progress()` | — | `{"active": id or null, "queue": [id…], "games": [status…]}` with only the games in `queued`, `downloading`, `paused` or `error`. Cheap: for a timer in the frontend. |
-| `remote_artwork_base64(id, kind)` | guid, artwork kind | Base64 of the cached artwork, or `""` if there is none. Reads only from `library/artwork/<id>/`. |
+| `remote_artwork_base64(id, kind)` | guid, artwork kind | Base64 of the cached artwork, or `""` if there is none. `id` must be a valid guid and `kind` one of the five kinds; it reads only from `library/artwork/<id>/`. |
 
 Event: the backend emits `remote_state` (payload: the `remote_progress()` result) when a game changes state, and at most once a second while downloading. The frontend may use the event, the timer, or both; both carry the same data.
 
 ### What #45 builds on this
 
 - Shortcuts for library games are created from `status.shortcut` and recorded in the same registry (`guid → appid`) with a mark such as `source: "library"`, so they are not hidden when no card is mounted.
-- "Instalar" and the progress come from the status: `not_installed`/`error` → `installed=false, display_status=9`; `downloading`/`queued` → `display_status=7` and `status_percentage=percent`; `installed` → the normal "Jogar". The Steam side is in [steam-api-notes.md](steam-api-notes.md#install-button-and-download-progress-on-a-shortcut-measured-2026-11-13-steamos-395-decky-v331).
+- "Instalar" and the progress come from the status: `not_installed`/`error` → `installed=false, display_status=9`; `downloading`/`queued` → `display_status=7` and `status_percentage=percent`; `installed` → the normal "Jogar". How Steam shows `paused` is not measured yet (#45 measures it; keeping `display_status=7` with the percent is the first candidate). The Steam side is in [steam-api-notes.md](steam-api-notes.md#install-button-and-download-progress-on-a-shortcut-measured-2026-11-13-steamos-395-decky-v331).
 - The "Instalar" button calls `SteamClient.Installs.OpenInstallWizard([appid], "0")`: for an appid of a library game, the frontend calls `remote_install(id)`; for any other, it forwards the call to Steam.
 - A physical card with the same guid is the same shortcut; the inserted card wins for `{SD_ROOT}` while it is mounted.
