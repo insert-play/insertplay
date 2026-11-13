@@ -164,6 +164,20 @@ Library DOM (window "Steam — Modo Big Picture", 854×534 CSS px on the Deck): 
 
 The staging needed 88 GB and the card had 26 GB free, so Steam most likely picked another library with room. A small update that fits on the card was not measured; it probably stages in the card's own `steamapps/downloading`. In practice: a big update of a card game needs that much free space on the internal drive for a while, and the card must stay in until the update finishes, since the last step writes to it.
 
+## "Install" button and download progress on a shortcut (measured 2026-11-13, SteamOS 3.9.5, Decky v3.3.1)
+
+Groundwork for the network library (games installed from a home server). Test shortcut `IP Teste Instalar` (`/bin/bash -c 'sleep 5'`), removed afterwards; Steam restarted at the end to drop the injected state. Nothing here is used by the plugin yet.
+
+| Call / situation | Result |
+|---|---|
+| `appStore.GetAppOverviewByAppID(id).per_client_data` | Every app has it, shortcuts included. Shortcut: `[{clientid:"0", display_status:11, status_percentage:100, installed:true, …}]`. Uninstalled Steam game: `display_status:9`, no `installed`. The overview's `installed`, `display_status` and `status_percentage` are getters over it. Values seen: 9 ready to install, 11 ready to launch, 7 downloading. |
+| `per_client_data[0].installed = false; display_status = 9` on a shortcut | The game page shows the blue **"Instalar"** (Install) button, but only on its **next render** (leave the page and come back): the overview is not observable. |
+| Pressing that "Instalar" | Calls `SteamClient.Installs.OpenInstallWizard([appid], "0")`. Measured by wrapping the function (call logged, not forwarded). It is the hook point: handle the plugin's own appids, forward the others. |
+| `display_status = 7; status_percentage = 42` | Game page: "Pausar" (Pause) button, "BAIXANDO / Progresso: 42%" (Downloading / Progress) and a progress bar under the button. |
+| `downloadsStore.OnDownloadItems(true, [{remote_client_id:"0", item_data:[item, …real]}])` + `downloadsStore.OnDownloadOverview({…overview, update_appid:id, update_state:"Downloading", …})` | The top bar shows the download indicator (icon with a blue bar). `/library/downloads` (the route of the gamepad UI; `/downloads` renders nothing) opens, but the "downloading now" header stayed empty with a minimal item copied from a finished one; the "A seguir" (Up next) queue lists only `queue_index > 0`. Not investigated further. |
+| `OnDownloadOverview` without `history` | It does `m_DownloadHistory.set(id, overview.history)`; with `undefined`, the speed graph of `/library/downloads` throws `reading 'length'` and Decky's error screen **stays** even after the store is fixed, until Steam restarts. Always pass `history: downloadsStore.DownloadHistory`. |
+| How long the injected state lasts | Memory only: a Steam restart brings back `display_status:11`. During the download injection Steam rewrote `per_client_data` once (back to 11 within 29 s); idle, with a 250 ms poll, it stayed for 90 s. A real implementation has to re-apply on `RegisterForAppOverviewChanges` and on its own timer, like the achievements store. |
+
 ## Plugin installation through Decky (measured 2026-10-24, Decky v3.3.0)
 
 Not a Steam API, but it is the other undocumented global the plugin uses (`src/selfupdate.ts`).
