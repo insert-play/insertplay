@@ -18,6 +18,7 @@ def main(tmp_path, monkeypatch):
     fake = types.ModuleType("decky")
     fake.DECKY_PLUGIN_SETTINGS_DIR = str(tmp_path / "settings")
     fake.DECKY_PLUGIN_RUNTIME_DIR = str(tmp_path / "data")
+    fake.DECKY_USER_HOME = str(tmp_path / "home")
     fake.logger = logging.getLogger("fake-decky")
 
     async def emit(*args):
@@ -410,3 +411,36 @@ def test_ra_game_network_failure_is_silent(main, monkeypatch):
     assert emitted == []
     assert not [e for e in asyncio.run(plugin.log_tail(50)) if e["kind"] == "error"]
     asyncio.run(plugin._unload())
+
+
+def test_remote_library_rpcs_never_return_the_token(main, tmp_path):
+    secret = "s3cr3t-token-value"
+
+    async def scenario():
+        plugin = main.Plugin()
+        await plugin._main()
+        try:
+            assert await plugin.remote_get_config() == {"url": None, "tokenSet": False}
+            assert (await plugin.remote_games())["games"] == []
+            assert (await plugin.remote_refresh())["code"] == "not_configured"
+            assert (await plugin.remote_set_config("ftp://x/", secret))["code"] == "bad_config"
+            out = await plugin.remote_set_config("http://127.0.0.1:9/", secret)
+            assert out == {"ok": True, "url": "http://127.0.0.1:9/", "tokenSet": True}
+            assert await plugin.remote_get_config() == {"url": "http://127.0.0.1:9/", "tokenSet": True}
+            assert (await plugin.remote_install("../../etc"))["code"] == "unknown_game"
+            assert (await plugin.remote_install("fa41e0e7-0133-4f21-b5f4-1a143a2f52ef"))["code"] == "unknown_game"
+            assert await plugin.remote_progress() == {"active": None, "queue": [], "games": []}
+            assert await plugin.remote_artwork_base64("x", "capsule") == ""
+            refresh = await plugin.remote_refresh()  # nothing listens on port 9
+            assert refresh["code"] == "unreachable"
+            return await plugin.log_tail(50)
+        finally:
+            await plugin._unload()
+            assert not plugin.remote._thread.is_alive()
+
+    tail = asyncio.run(scenario())
+    assert any(e["kind"] == "remote" for e in tail)
+    assert secret not in json.dumps(tail)
+    config = tmp_path / "settings" / "remote_library.json"
+    assert oct(config.stat().st_mode & 0o777) == "0o600"
+    assert not (tmp_path / "home" / "Games").exists()  # nothing created before an install

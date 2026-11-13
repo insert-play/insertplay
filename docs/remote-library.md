@@ -266,7 +266,7 @@ One game downloads at a time; the others wait in a FIFO queue. For the active ga
 1. **Fetches the file list**, checks `filesSha256`, `id`, `version` and the path rules, and pins it in `lists/<id>.json`.
 2. **Checks free space** with `statvfs` on `~/Games/InsertPlay` (`f_bavail × f_frsize`): needed = `totalSize` − bytes already verified in `.incoming/<id>/` + a margin of 256 MiB. Not enough: `no_space`, nothing is downloaded. The same check runs synchronously in `remote_install`, so the user sees it at once.
 3. **Downloads each file** to `.incoming/<id>/<path>.part`:
-   - a file already verified (recorded in the state) is skipped;
+   - a file already verified is skipped. A file gets its final name in `.incoming/<id>/` only after its sha256 matched, so a regular file with the final name and the listed size counts as verified when a download resumes; the state keeps only the counters (`bytesDone`, `bytesVerified`, `filesDone`), since a list of ~30 000 verified paths rewritten every 2 s would cost more than checking the names;
    - a `.part` with `n` bytes resumes with `Range: bytes=n-`; the answer must be `206` with `Content-Range: bytes n-<size-1>/<size>`. A `200` restarts the file from 0; a `416` or a different total size means the server changed (`server_changed`);
    - a `.part` larger than `size` is deleted;
    - the client reads at most `size − n` bytes of a body; a longer or shorter body is `server_changed` (a shorter one only after the retries, since a dropped connection also ends a body early);
@@ -287,9 +287,9 @@ HTTP answers during an install:
 | `404` or another `4xx` on a file | `server_changed`. |
 | `3xx` | Error (`server_changed`); redirects are never followed. |
 
-Socket timeout: 30 s.
+Socket timeout: 30 s. All requests of an install go over one persistent HTTP/1.1 connection (keep-alive), reopened after an error: with ~30 000 files, a connection per file would cost more than the files themselves.
 
-The state is saved at each file boundary and at most every 2 s during a file. When the plugin loads, games that were `downloading` or `queued` go back to the queue and resume; `paused` and `error` stay as they were.
+The state is saved at every state change and at most every 2 s while downloading (a game with ~30 000 small files would otherwise rewrite it ~30 000 times). When the plugin loads, games that were `downloading` or `queued` go back to the queue and resume; `paused` and `error` stay as they were.
 
 Resuming uses the pinned file list. If the server's file list changed in the meantime, the client notices by a size, `404` or `416` mismatch and stops with `server_changed` (a file changed with the same size shows up as `hash_mismatch`); cancelling and installing again starts with the new list.
 

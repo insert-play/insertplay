@@ -2,6 +2,7 @@
 import json
 import os
 import tempfile
+import threading
 import time
 
 
@@ -93,8 +94,14 @@ class EventLog:
 
     def __init__(self, path: str, limit: int = 1000, keep: int = 500):
         self.path, self.limit, self.keep = path, limit, keep
+        self._lock = threading.Lock()
 
     def add(self, kind: str, message: str) -> None:
+        # the remote library's worker thread logs here too
+        with self._lock:
+            self._add(kind, message)
+
+    def _add(self, kind: str, message: str) -> None:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         line = json.dumps({"ts": time.time(), "kind": kind, "message": message}, ensure_ascii=False)
         with open(self.path, "a", encoding="utf-8") as f:
