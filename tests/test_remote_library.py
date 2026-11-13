@@ -4,6 +4,7 @@ import hashlib
 import http.server
 import json
 import os
+import shutil
 import socket
 import stat
 import sys
@@ -422,6 +423,8 @@ def test_link_that_escapes_through_another_link_is_refused(env, server):
         (lambda i: i["games"][0].update(id="00000000-0000-0000-0000-000000000000"), True),
         (lambda i: i["games"][0].update(path="a/b"), True),
         (lambda i: i["games"].append(dict(i["games"][0])), True),  # duplicate id
+        (lambda i: i["games"][0].pop("files"), True),
+        (lambda i: i["games"][0].update(id=["not", "hashable"]), True),
     ],
 )
 def test_bad_index(env, server, edit, dropped):
@@ -616,6 +619,9 @@ def test_path_rules():
     assert not rl._path_ok("a/b", single=True)
     assert rl._target_ok("a/b", "../c") and rl._target_ok("a/b", "c")
     assert not rl._target_ok("a/b", "../../c") and not rl._target_ok("a", "/c") and not rl._target_ok("a", "")
+    # empty segments: allowed by the contract (character rules only) and kept by the indexer
+    assert rl._target_ok("a/b", "c//d") and rl._target_ok("a/b", "c/") and rl._target_ok("a/b", "./c")
+    assert not rl._target_ok("a", "x//..//..")
 
 
 def test_config_validation_and_privacy(env):
@@ -631,3 +637,99 @@ def test_config_validation_and_privacy(env):
     assert lib.set_config("http://192.168.1.83:8080/", None)["tokenSet"] is True  # null keeps
     assert lib.set_config("http://192.168.1.83:8080/", "")["tokenSet"] is False
     assert lib.set_config("", None) == {"ok": True, "url": None, "tokenSet": False}
+
+
+def test_leftover_incoming_folder_unknown_to_the_state_is_never_reused(env, server):
+    """A final name in .incoming counts as verified. Files left there by an install the
+    state no longer knows (state lost, a cancel that timed out) must not skip the hash."""
+    files = game_files()
+    publish(server, files)
+    lib = ready(env, server, start=False)
+    stale = os.path.join(env.games_root, ".incoming", GID, "data", "big.bin")
+    os.makedirs(os.path.dirname(stale))
+    with open(stale, "wb") as f:
+        f.write(b"z" * len(files["data/big.bin"]))  # same size, other content
+    lib.start()
+    try:
+        assert lib.install(GID)["ok"]
+        assert wait_state(lib, ("installed", "error"))["state"] == "installed"
+        with open(os.path.join(env.games_root, GID, "data", "big.bin"), "rb") as f:
+            assert f.read() == files["data/big.bin"]
+    finally:
+        lib.stop()
+
+
+INDEXER = os.path.join(os.path.dirname(__file__), "..", "server", "indexer", "remote_library_index.py")
+
+
+@pytest.mark.skipif(not os.path.isfile(INDEXER), reason="server/indexer not in this checkout")
+def test_indexer_output_installs_with_the_engine(env, server, tmp_path):
+    """Contract check between #44 and #47: the real indexer builds index.json and the file
+    list from a library folder, the test server serves them, the engine installs the game."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("remote_library_index", INDEXER)
+    indexer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(indexer)
+
+    files = game_files()
+    files["data/sub dir/ação #1 [x] 100%.txt"] = "ção".encode()
+    files["data/%2e"] = b"literal name"
+    game = os.path.join(server.root, "library", "jogo-teste")
+    for rel, data in files.items():
+        path = os.path.join(game, *rel.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+    os.makedirs(os.path.join(game, "saves", "memcards"))
+    os.symlink("big.bin", os.path.join(game, "data", "link.bin"))
+    os.symlink("data//", os.path.join(game, "data-dir"))
+    out = str(tmp_path / "index-out")  # the indexer refuses an output folder around the library
+    result = indexer.build_index(os.path.join(server.root, "library"), out, use_cache=False)
+    assert [r["entry"]["id"] for r in result["games"]] == [GID] and result["skipped"] == []
+    shutil.copy(os.path.join(out, "index.json"), server.root)
+    shutil.copytree(os.path.join(out, "lists"), os.path.join(server.root, "lists"))
+
+    lib = ready(env, server)
+    try:
+        st = status(lib)
+        assert st["bytesTotal"] == sum(map(len, files.values())) and st["fileCount"] == len(files)
+        assert lib.artwork_base64(GID, "capsule")
+        assert lib.install(GID)["ok"]
+        st = wait_state(lib, ("installed", "error"))
+        assert st["state"] == "installed", st
+        root = os.path.join(env.games_root, GID)
+        for rel, data in files.items():
+            path = os.path.join(root, *rel.split("/"))
+            with open(path, "rb") as f:
+                assert f.read() == data, rel
+            expect = 0o755 if rel in ("insertplay-start.sh", "bin/tool") else 0o644
+            assert stat.S_IMODE(os.lstat(path).st_mode) == expect, rel
+        assert os.path.isdir(os.path.join(root, "saves", "memcards"))
+        assert os.readlink(os.path.join(root, "data", "link.bin")) == "big.bin"
+        assert os.readlink(os.path.join(root, "data-dir")) == "data//"
+    finally:
+        lib.stop()
+
+
+def test_stop_before_start_keeps_the_saved_state(env, server):
+    """Decky can unload the plugin before _main started the engine: stop() must not save
+    an empty state over the installed games."""
+    publish(server, game_files())
+    lib = ready(env, server)
+    try:
+        assert lib.install(GID)["ok"]
+        assert wait_state(lib, ("installed", "error"))["state"] == "installed"
+    finally:
+        lib.stop()
+    with open(os.path.join(env.data_dir, "state.json"), encoding="utf-8") as f:
+        state = json.load(f)
+    state["queue"] = 7  # a damaged queue doesn't stop the load either
+    with open(os.path.join(env.data_dir, "state.json"), "w", encoding="utf-8") as f:
+        json.dump(state, f)
+    env.make(start=False).stop()
+    again = env.make()
+    try:
+        assert status(again)["state"] == "installed"
+    finally:
+        again.stop()

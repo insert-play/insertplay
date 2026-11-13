@@ -222,7 +222,9 @@ def _target_ok(path: str, target) -> bool:
         return False
     if len(raw) > 4096 or "\\" in target or any(ord(c) < 0x20 or ord(c) == 0x7F for c in target):
         return False
-    if any(seg == "" or len(seg.encode("utf-8")) > 255 for seg in target.split("/")):
+    # empty segments ("a//b", "dir/") are allowed: the contract applies only the character
+    # rules to targets, and the indexer keeps such links as they are on disk
+    if any(len(seg.encode("utf-8")) > 255 for seg in target.split("/")):
         return False
     joined = posixpath.normpath(posixpath.join(posixpath.dirname(path), target))
     return joined != ".." and not joined.startswith("../") and not joined.startswith("/")
@@ -310,7 +312,7 @@ def parse_index(raw: bytes, base: str, log=None) -> dict:
     for game in games:
         if isinstance(game, dict) and "files" in game:
             resolve_relative(base, game.get("files"))
-    seen = collections.Counter(g.get("id") for g in games if isinstance(g, dict))
+    seen = collections.Counter(g.get("id") for g in games if isinstance(g, dict) and isinstance(g.get("id"), str))
     out = []
     for game in games:
         if not isinstance(game, dict):
@@ -324,7 +326,9 @@ def parse_index(raw: bytes, base: str, log=None) -> dict:
             log(f"index: duplicate id {gid}, dropped")
             continue
         problem = None
-        if not _path_ok(game.get("path"), single=True):
+        if "files" not in game:
+            problem = "files"
+        elif not _path_ok(game.get("path"), single=True):
             problem = "path"
         elif not isinstance(game.get("version"), str) or not VERSION_RE.match(game["version"]):
             problem = "version"
@@ -609,6 +613,7 @@ class RemoteLibrary:
         self._cv = threading.Condition(self._lock)
         self._stop = threading.Event()
         self._thread = None
+        self._loaded = False  # stop() saves the state only after start() loaded it
         self._games = {}
         self._queue = []
         self._active = None
@@ -623,6 +628,7 @@ class RemoteLibrary:
         """Loads the state and starts the worker. `downloading` and `queued` games resume."""
         with self._lock:
             self._load()
+            self._loaded = True
             self._stop.clear()
             self._thread = threading.Thread(target=self._run, name="insertplay-remote", daemon=True)
             self._thread.start()
@@ -634,7 +640,10 @@ class RemoteLibrary:
         if self._thread:
             self._thread.join(UNLOAD_WAIT_SECONDS)
         with self._lock:
-            self._save(force=True)
+            # an unload before start() (or a failed load) must not overwrite the saved state
+            # with an empty one: installed games would lose their records
+            if self._loaded:
+                self._save(force=True)
 
     def _load(self) -> None:
         cached = _read_json(self.index_path)
@@ -655,7 +664,8 @@ class RemoteLibrary:
                 continue
             self._games[gid] = entry
         resumed = [g for g, e in self._games.items() if e["state"] == "downloading"]
-        saved_queue = [g for g in data.get("queue", []) if isinstance(g, str)]
+        saved_queue = data.get("queue") if isinstance(data.get("queue"), list) else []
+        saved_queue = [g for g in saved_queue if isinstance(g, str)]
         queue = resumed + [g for g in saved_queue if g in self._games and self._games[g]["state"] == "queued"]
         queue += [g for g, e in self._games.items() if e["state"] == "queued" and g not in queue]
         for gid in resumed:
@@ -928,9 +938,20 @@ class RemoteLibrary:
             with self._lock:
                 entry = self._games.get(gid)
                 if entry is None:
+                    if idx is None:  # cancelled meanwhile, and no longer in the index
+                        raise RemoteError("unknown_game", gid)
+                    if self._active == gid:
+                        raise RemoteError("invalid_state", "the previous download is still stopping")
                     entry = {k: idx[k] for k in ("version", "path", "name", "totalSize", "fileCount", "filesUrl",
                                                   "filesSha256", "libraryUrl", "manifest")}
                     entry.update({"bytesDone": 0, "bytesVerified": 0, "filesDone": 0})
+                    # leftovers of an install the state no longer knows (state lost, a cancel
+                    # that timed out, maybe another version): a final name there would count as
+                    # verified, so the first scan hashes those files instead (.part files are
+                    # hashed anyway when they complete)
+                    if os.path.lexists(os.path.join(self.incoming_root, gid)):
+                        entry["rehash"] = True
+                        _remove_file(os.path.join(self.lists_dir, f"{gid}.json"))
                     self._games[gid] = entry
                 elif entry["state"] not in ("paused", "error"):
                     return {"ok": True, "game": self._status(gid)}
@@ -1181,16 +1202,23 @@ class RemoteLibrary:
             files = listing["files"]
 
             # what an earlier run left: a final name exists only after its sha256 matched
+            # (unless the folder predates the state: then `rehash` checks every final name)
+            rehash = bool(entry.get("rehash"))
             verified, done, files_done = set(), 0, 0
             for f in files:
                 final = os.path.join(folder, f["path"])
                 try:
                     st = os.lstat(final)
                     if stat.S_ISREG(st.st_mode) and st.st_size == f["size"]:
-                        verified.add(f["path"])
-                        done += f["size"]
-                        files_done += 1
-                        continue
+                        if rehash:
+                            self._check(gid, entry)
+                        if not rehash or _sha256_file(final) == f["sha256"]:
+                            verified.add(f["path"])
+                            done += f["size"]
+                            files_done += 1
+                            continue
+                    if rehash and not stat.S_ISDIR(st.st_mode):
+                        os.unlink(final)
                 except OSError:
                     pass
                 try:
@@ -1203,6 +1231,7 @@ class RemoteLibrary:
             with self._lock:
                 self._check(gid, entry)
                 entry.update({"bytesDone": done, "bytesVerified": verified_bytes, "filesDone": files_done})
+                entry.pop("rehash", None)
                 entry["fileCount"], entry["totalSize"] = len(files), sum(f["size"] for f in files)
                 self._save(force=True)
             self._space_check(entry["totalSize"], verified_bytes)
