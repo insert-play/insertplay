@@ -13,6 +13,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "py_modules"))
 
 from insertplay_decky import cards, icons, plugin_package, prefixes  # noqa: E402
 from insertplay_decky import retroachievements as ra  # noqa: E402
+from insertplay_decky import remote_library  # noqa: E402
 from insertplay_decky.manifest import GUID_RE, CardError, load_card  # noqa: E402
 from insertplay_decky.store import EventLog, Registry, Settings  # noqa: E402
 
@@ -81,9 +82,12 @@ def _steam_card(mount: str, libraries: list) -> tuple:
     return real, libs
 
 
+def _home() -> str:
+    return getattr(decky, "DECKY_USER_HOME", None) or os.path.expanduser("~")
+
+
 def _steam_root() -> str:
-    home = getattr(decky, "DECKY_USER_HOME", None) or os.path.expanduser("~")
-    return os.path.join(home, ".local", "share", "Steam")
+    return os.path.join(_home(), ".local", "share", "Steam")
 
 
 class Plugin:
@@ -107,6 +111,27 @@ class Plugin:
         self.ra_cache = ra.Cache(os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "ra-cache"))
         self.mounted = {}
         self.watcher = None
+        self.loop = None
+        self.remote = remote_library.RemoteLibrary(
+            games_root=os.path.join(_home(), "Games", "InsertPlay"),
+            data_dir=os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "library"),
+            config_path=os.path.join(settings_dir, "remote_library.json"),
+            log=self._remote_log,
+            on_change=self._remote_emit,
+        )
+
+    def _remote_log(self, message: str) -> None:
+        """Called from the download thread too. Messages never carry the token."""
+        decky.logger.info("InsertPlay: remote: %s", message)
+        try:
+            self.log.add("remote", message)
+        except Exception:
+            pass
+
+    def _remote_emit(self, progress: dict) -> None:
+        loop = self.loop
+        if loop is not None and not loop.is_closed():
+            asyncio.run_coroutine_threadsafe(decky.emit("remote_state", progress), loop)
 
     async def _main(self):
         self._setup()
@@ -114,6 +139,13 @@ class Plugin:
         # with current_cards() and reconciles without auto-launch. So restarting
         # plugin_loader with the card inserted doesn't start the game by itself.
         self.mounted = {c["real"]: c for c in await asyncio.to_thread(cards.find_cards, cards.default_media_roots())}
+        self.loop = asyncio.get_running_loop()
+        # downloads that were running or queued when the plugin stopped resume here; a
+        # failure here must not keep the card RPCs waiting for `ready`
+        try:
+            await asyncio.to_thread(self.remote.start)
+        except Exception:
+            decky.logger.exception("InsertPlay: remote library did not start")
         self.ready = True
         self.watcher = asyncio.get_event_loop().create_task(self._watch())
         decky.logger.info("InsertPlay: started with %d card(s)", len(self.mounted))
@@ -121,6 +153,9 @@ class Plugin:
     async def _unload(self):
         if self.watcher:
             self.watcher.cancel()
+        remote = getattr(self, "remote", None)
+        if remote is not None:
+            await asyncio.to_thread(remote.stop)
 
     async def _watch(self):
         while True:
@@ -366,6 +401,52 @@ class Plugin:
         if not cached or (cached.get("unlocked"), cached.get("total")) != (game["unlocked"], game["total"]):
             self.log.add("achievements", f"{game['title'] or game_id}: {game['unlocked']}/{game['total']}")
         return {**fresh, "stale": False}
+
+    # Remote library (docs/remote-library.md). Actions return {"ok": ...}; None = "don't know".
+
+    @guarded(lambda: None)
+    async def remote_get_config(self) -> dict:
+        return await asyncio.to_thread(self.remote.get_config)
+
+    @guarded(lambda: None)
+    async def remote_set_config(self, url: str, token=None) -> dict:
+        return await asyncio.to_thread(self.remote.set_config, url, token)
+
+    @guarded(lambda: None)
+    async def remote_refresh(self) -> dict:
+        return await asyncio.to_thread(self.remote.refresh)
+
+    @guarded(lambda: None)
+    async def remote_games(self) -> dict:
+        return await asyncio.to_thread(self.remote.games)
+
+    @guarded(lambda: None)
+    async def remote_install(self, game_id: str) -> dict:
+        return await asyncio.to_thread(self.remote.install, game_id)
+
+    @guarded(lambda: None)
+    async def remote_pause(self, game_id: str) -> dict:
+        return await asyncio.to_thread(self.remote.pause, game_id)
+
+    @guarded(lambda: None)
+    async def remote_resume(self, game_id: str) -> dict:
+        return await asyncio.to_thread(self.remote.resume, game_id)
+
+    @guarded(lambda: None)
+    async def remote_cancel(self, game_id: str) -> dict:
+        return await asyncio.to_thread(self.remote.cancel, game_id)
+
+    @guarded(lambda: None)
+    async def remote_uninstall(self, game_id: str) -> dict:
+        return await asyncio.to_thread(self.remote.uninstall, game_id)
+
+    @guarded(lambda: None)
+    async def remote_progress(self) -> dict:
+        return await asyncio.to_thread(self.remote.progress)
+
+    @guarded(str)
+    async def remote_artwork_base64(self, game_id: str, kind: str) -> str:
+        return await asyncio.to_thread(self.remote.artwork_base64, game_id, kind)
 
     @guarded(lambda: None)
     async def log_add(self, kind: str, message: str) -> None:
