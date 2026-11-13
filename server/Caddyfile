@@ -1,0 +1,63 @@
+# InsertPlay remote library server (contract: docs/remote-library.md).
+#
+#   /index.json          -> /srv/index/index.json
+#   /lists/<guid>.json   -> /srv/index/lists/<guid>.json
+#   /library/<path>      -> /srv/library/<path>   (the library root, read-only)
+#   anything else        -> 404
+#
+# Every request needs "Authorization: Bearer <token>" (401 otherwise), checked before
+# anything else. INSERTPLAY_TOKEN comes from the token env file (see README.md); the
+# compose service refuses to start when it is missing or shorter than 32 characters.
+{
+	admin off
+	auto_https off
+	persist_config off
+	servers {
+		# Plain HTTP on the LAN; no HTTP/3 (it would need TLS anyway).
+		protocols h1 h2c
+	}
+}
+
+:8080 {
+	route {
+		@unauthorized not header Authorization "Bearer {env.INSERTPLAY_TOKEN}"
+		respond @unauthorized 401 {
+			close
+		}
+
+		@method not method GET HEAD
+		respond @method 405
+
+		# "." and ".." segments, also percent-encoded, and backslashes: 404, never a
+		# cleaned-up path. {http.request.orig_uri.path} is the path as sent.
+		@dotted expression `{http.request.orig_uri.path}.matches("(?i)(^|/)(\\.|%2e){1,2}(/|$)|\\\\|%5c|%00")`
+		respond @dotted 404
+
+		@index path /index.json
+		handle @index {
+			root * /srv/index
+			file_server
+		}
+
+		@list path_regexp ^/lists/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$
+		handle @list {
+			root * /srv/index
+			file_server
+		}
+
+		handle_path /library/* {
+			root * /srv/library
+			# A directory answers 404: no listing, no index.html, no redirect to "dir/".
+			@dir file {
+				try_files {path}/
+			}
+			respond @dir 404
+			file_server {
+				index ""
+				disable_canonical_uris
+			}
+		}
+
+		respond 404
+	}
+}
