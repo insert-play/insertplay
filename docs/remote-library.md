@@ -8,7 +8,7 @@ This document is the contract between the three parts of the proof of concept:
 - the **download engine** in the plugin backend ([#47](https://github.com/insert-play/insertplay/issues/47)): `py_modules/insertplay_decky/remote_library.py` and its RPCs in `main.py`;
 - the **Steam and panel integration** in the frontend ([#45](https://github.com/insert-play/insertplay/issues/45)).
 
-Scope of v1: home network only, one server, install and uninstall. Game updates, cloud saves, access from outside the LAN and installing to a microSD card are out of scope.
+Scope of v1: home network only, one server, install and uninstall. Game updates, access from outside the LAN and installing to a microSD card are out of scope. [Save sync](#saves) ([#63](https://github.com/insert-play/insertplay/issues/63)) came later and is described at the end.
 
 ## Server
 
@@ -401,3 +401,81 @@ Implemented in `src/flow.ts` (shortcuts, panel actions) and `src/remote-steam.ts
 - Steam has no uninstall entry for a non-Steam shortcut: the panel's "Desinstalar" calls `remote_uninstall(id)` after a confirmation that says saves inside the game folder go with it, and refuses while the game is running.
 - A physical card with the same guid is the same shortcut; the inserted card wins for `{SD_ROOT}` (and the page shows "Jogar") while it is mounted. When it leaves, the shortcut goes back to the install folder and the library state.
 - Library tabs (#52, `src/library-tabs.tsx`): every library shortcut is listed in Game Mode's "Todos os jogos" tab; an `installed` game also in "Instalados". Membership comes from the game state, not from Steam's `per_client_data`, which the plugin rewrites for "Instalar".
+
+## Saves
+
+Save sync ([#63](https://github.com/insert-play/insertplay/issues/63)) keeps the latest save of each remote library game on the server, so the same game can be played on two devices. v1 covers non-Steam games of the library, by guid, whether installed from the library or played from a card with the same guid.
+
+### Key
+
+A save is stored under a **key**: the game's lowercase guid today, `steam-<appid>` for Steam games later. Regex: `^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|steam-[0-9]{1,10})$`.
+
+### Server API
+
+Served by the save server ([`server/saves/saves_server.py`](../server/saves/saves_server.py)) behind Caddy, under the same base URL and token. `/saves/*` is the only route that accepts `PUT` and `POST`; the save server checks the token again.
+
+| Request | Answer |
+|---|---|
+| `GET saves/<key>/meta` | `200` with `meta.json`, `404` with no save yet. |
+| `GET saves/<key>/current.tar.gz` | `200` with the save and the `X-Save-Rev` and `X-Save-Hash` of that same file (a `meta` read before may already be stale), `404` with none. |
+| `PUT saves/<key>/current.tar.gz` | Replaces the save. `201` (first save) or `200`, with `{"meta": …, "backup": …}`. |
+| `GET saves/<key>/strategy.json` | `200` with the inferred strategy, `404` with none. |
+| `PUT saves/<key>/strategy.json` | Stores it (a JSON object with a non-empty `strategy`, at most 64 KiB). |
+| `GET saves/<key>/backups` | `{"backups": [{"name", "size", "mtime"}…], "limit"}`, newest first. |
+| `GET saves/<key>/backups/<name>` | One backup. |
+| `POST saves/<key>/backups` | Stores a save the device is about to overwrite, or that lost a conflict. Header `X-Save-Device`. `200` with `{"stored": true, "name"}` or `{"stored": false, "reason": "limit"}`. |
+
+`meta.json`: `{"rev": "<n>", "hash": "<sha256>", "newestMtime": <unix time>, "device": "<name>", "uploadedAt": <unix time>, "size": <bytes>}`.
+
+`PUT current.tar.gz` needs a body with `Content-Length` (no chunked encoding) and:
+
+- `If-Match: <rev>` with the rev the device last saw, or `If-None-Match: *` for the first save of the key. Missing: `428`. A rev that no longer matches (the other device uploaded first), or `*` when a save already exists: `409` with `{"error": "conflict", "meta": <current meta or null>}`. Nothing changes; the device pulls and decides again.
+- `X-Save-Hash` (the [save hash](#save-hash), 64 hex digits), `X-Save-Newest-Mtime` (newest file time of the save), `X-Save-Device` (letters, digits, `.`, `_`, `-`; up to 64). Invalid: `400`.
+- `X-Save-Backup: 1` keeps the save being replaced as a backup named after the device that made it.
+
+Other errors: `411` without a plain `Content-Length`, `400` when the body ends early, `507` when the server's disk fails (the old save stays), `405` for other methods, `500` in JSON for anything unexpected. A meta edited by hand without a valid `rev` counts as rev `0`.
+
+Backups are kept within `INSERTPLAY_SAVE_BACKUP_MB` per game (default 50), oldest removed first. The limit applies only to backups: a save larger than it gets no backup (`"stored": false, "reason": "limit"`) and still syncs normally (Alan Wake 2: 159 MB). Bodies larger than `INSERTPLAY_SAVE_MAX_MB` (default 1024): `413`. Uploads are written to a temporary file and renamed, under a lock per key.
+
+### Where a game keeps its save
+
+In order:
+
+1. the `saves` block of the game's `steam-shortcut.json` ([card-format.md](card-format.md#saves));
+2. `saves/<key>/strategy.json` on the server, written by an earlier inference;
+3. **inference**: with `game.emulator` declared, that emulator's strategy; with a `prefix/` folder and no `game` block, `proton-default`. It counts only when the strategy's folder exists and has at least one file. The result (strategy and its default `exclude`) is written to the server, never to the manifest: the library stays read-only.
+
+No strategy found: the game opens without sync and the plugin shows an error notification.
+
+### Save hash
+
+The sha256 of the sorted list of `(path, size, sha256)` of every regular file of the save, paths relative to the game folder with `/`. Symlinks are never followed nor stored (a Proton prefix has `My Documents → Documents`, which would count every file twice). Excluded paths are left out.
+
+### Client
+
+State per key on the device: `lastSyncedHash` (the hash both sides had after the last sync), `lastRev` (the server rev then) and a pending upload flag.
+
+**When the game opens**, before the game itself:
+
+| Server | Local save | Action |
+|---|---|---|
+| no save | any | upload the local one (if any) |
+| same hash as local | | nothing |
+| changed since `lastSyncedHash` | unchanged | download. The local save it replaces is sent to the backups first, when backups are on |
+| changed | changed too (or no `lastSyncedHash` and different) | the newer `newestMtime` wins; the loser goes to the backups |
+| unreachable (~10 s) | | play with the local save; the upload stays pending |
+
+A download extracts to a `.partial` folder next to each save folder and renames it over the old one; excluded paths already on the device stay as they are.
+
+**When the game closes**, the save is uploaded if its hash changed. A pending upload is retried on the next close, when the plugin starts and periodically. An upload never runs while the game is open (a lock per key, held by the launch wrapper for the whole game).
+
+### Launch hook
+
+With sync on, the shortcut of a library game (card or install) runs a wrapper before the card's script: `"~/.local/share/insertplay/bin/insertplay-run" <key> -- "<root>/insertplay-start.sh" --guid <guid>`. The card and the manifest are not changed. The wrapper:
+
+- checks that `<root>/shortcut-identity.json` has the same guid as `<key>` (the card's guard refuses a wrong card but exits 0);
+- downloads the save, runs the script without `exec` and uploads at the end;
+- after Steam's "Sair do jogo", which kills the whole game ~1.7 s after SIGTERM (measured: [steam-api-notes.md](steam-api-notes.md#save-sync-launch-hook-issue-63-stage-0-measured-2026-11-14-steamos-395-decky-v331)), starts the upload in a detached `systemd-run --user` unit that waits for the lock;
+- falls back to running the script directly when `python3` or its module is missing, or sync is off.
+
+The plugin also uploads when Steam reports the game closed, as a safety net. The wrapper lives outside the plugin folder so it keeps working when the plugin is removed.
