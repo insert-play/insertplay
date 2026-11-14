@@ -51,26 +51,35 @@ function track(location: { pathname: string; key?: string }, action: string) {
  *  replaces the current entry instead of stacking another one. */
 export function openCategory(category: Category) {
   const path = `${ROUTE}/${category}`;
+  ensureTracking();
   const history = windowHistory();
   if (history && isOurs(history.location?.pathname)) history.replace(path);
   else Navigation.Navigate(path);
   Navigation.CloseSideMenus();
 }
 
+/** Starts following the history if not yet: at load the window may not exist (Steam still
+ *  starting), so opening a category tries again before the first route entry. */
+function ensureTracking() {
+  if (unlisten) return;
+  const history = windowHistory();
+  if (!history) return;
+  stack = [[history.location?.key, history.location?.pathname]];
+  unlisten = history.listen(track);
+}
+
 /** Registers the route; no `exact`, so the category sub-paths match. */
 export function addSettingsRoute() {
   routerHook.addRoute(ROUTE, SettingsPage);
-  const history = windowHistory();
-  if (history) {
-    stack = [[history.location?.key, history.location?.pathname]];
-    unlisten = history.listen(track);
-  }
+  ensureTracking();
 }
 
 /** Leaves the route if it is open, then removes it. Measured: removing it while open keeps the
  *  page until the next navigation, and then the path renders an empty screen; so does going
  *  back later into an entry of the removed route. Goes back past every route entry on top of
- *  the history in one step. */
+ *  the history in one step. Known limit: route entries below another screen (e.g. the browser
+ *  opened by "Abrir página da chave") stay in the history; going back into one later shows an
+ *  empty screen until the next navigation. */
 export function removeSettingsRoute() {
   unlisten?.();
   unlisten = null;
