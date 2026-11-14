@@ -68,6 +68,7 @@ import {
   steamCardsPresent,
   warnIfRaRefused,
 } from "./flow";
+import { installLibraryTabs, patchLibraryTabs, stopLibraryTabs } from "./library-tabs";
 import { installRemoteSteam, stopRemoteSteam } from "./remote-steam";
 import { InstallType, installFromCard, notifyNewerPackage } from "./selfupdate";
 import { onAppClosed, onInstallFoldersChanged } from "./steam";
@@ -731,9 +732,12 @@ export default definePlugin(() => {
   const stopFolders = onInstallFoldersChanged(() => void onSteamLibrariesChanged());
   // The library window may not exist when the plugin loads (game running, Steam
   // starting). Entering the library is the trigger to attach the badges to it.
+  // Also puts the plugin's shortcuts in the "Todos os jogos" and "Instalados" tabs (#52):
+  // their contents come from refreshTabs (flow.ts), after reconcile and on every event.
+  installLibraryTabs();
   const libraryPatch = routerHook.addPatch("/library", (tree: unknown) => {
     showBadges();
-    return tree;
+    return patchLibraryTabs(tree);
   });
   const portableTimer = setInterval(() => void portableTick(), PORTABLE_TICK_MS);
   // Before reconcile, which publishes the achievements. A part not found is logged and the
@@ -763,6 +767,7 @@ export default definePlugin(() => {
       stopFolders();
       clearInterval(portableTimer);
       routerHook.removePatch("/library", libraryPatch);
+      stopLibraryTabs();
       stopAppClosed();
       removeEventListener("remote_state", remoteState);
       stopRemoteSteam();
