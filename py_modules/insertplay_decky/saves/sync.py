@@ -425,8 +425,10 @@ class Sync:
                 return self._record(op, "unchanged", hash=snap.hash, rev=meta.get("rev"))
             local_changed = not snap.empty and snap.hash != self._base("lastLocalHash")
             server_changed = meta.get("hash") != self._base("lastServerHash")
-            if not local_changed and not server_changed:
-                # same as the last sync on both sides (the device excludes part of it)
+            if not local_changed and not server_changed and not snap.empty:
+                # same as the last sync on both sides (the device excludes part of it). An
+                # empty local save is not "the same": it was deleted, and is downloaded again
+                # below (else the game makes a blank one and the push uploads it)
                 return self._record(op, "unchanged", hash=snap.hash, rev=meta.get("rev"))
             if not local_changed:
                 backup = self._backup_local(snap) if (self.config["backup"] and not snap.empty) else None
