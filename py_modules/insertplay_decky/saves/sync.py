@@ -349,7 +349,8 @@ class Sync:
             if self.state.get("pending"):
                 self.state["pending"] = False
                 self._save()
-            return self._record("push", "unchanged", hash=snap.hash, rev=self.state.get("lastRev"))
+            # not written to last/<key>.json: the panel keeps showing the upload that matters
+            return self._record("push", "unchanged", hash=snap.hash, rev=self.state.get("lastRev"), persist=False)
         if offline:
             return self._offline("push", snap, "server unreachable")
         rev = self.state.get("lastRev") if self.state.get("lastSyncedHash") else None

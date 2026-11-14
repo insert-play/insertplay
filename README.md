@@ -53,6 +53,11 @@ Category **Cartões**:
   - **Abrir página do jogo** (open the game's page): the notification and the game's page in the library.
   - **Abrir jogo** (open the game): starts the game. The default, and what the old "Iniciar ao inserir" toggle did when on; a setting saved with the toggle off becomes "Nenhum".
 
+Category **Biblioteca Remota**:
+
+- **Sincronizar saves** (sync saves, off by default): keeps the latest save of each remote library game on the server, so the same game continues on another device. Also for a card with the same game (same guid). See [Save sync](#save-sync-remote-library).
+- **Guardar backup dos saves** (keep save backups, on by default): the save replaced on the server is kept as a backup, up to 50 MB per game.
+
 Category **Geral**:
 
 - **Ocultar ao remover o cartão** (hide when the card is removed): hides the shortcut while its card is out.
@@ -117,6 +122,12 @@ A card whose manifest declares the game's [RetroAchievements](https://retroachie
 The plugin relies on undocumented Steam client APIs (`SteamClient.*`); the calls in use and how they were measured are in [docs/steam-api-notes.md](docs/steam-api-notes.md). A Steam update can break them.
 
 Installing games from a home server ("Biblioteca Remota", the remote library) is a proof of concept on the home network: the panel takes the server address and token and lists its games; each one gets a shortcut that shows "Instalar", the download progress and then "Jogar" in Steam's own game page. The server layout, index format and backend RPCs are specified in [docs/remote-library.md](docs/remote-library.md).
+
+## Save sync (remote library)
+
+With **Sincronizar saves** on, each remote library game launches through a small wrapper (`~/.local/share/insertplay/bin/insertplay-run`) that downloads the newest save from the server before the game and uploads it when the game closes. If both devices changed the save, the newest one wins and the other goes to the server's backups. With the server down, the game opens with the local save after a few seconds and the upload happens later. A notification says what happened (save downloaded, sent, server down).
+
+Where each game keeps its save comes from the `saves` block of its card ([docs/card-format.md](docs/card-format.md#saves)): emulator memory cards, a file in the game folder, or the Wine prefix. A card without the block still syncs when the plugin can tell the strategy; otherwise a notification says the game has no sync. The server side, the algorithm and the files on the device are in [docs/remote-library.md](docs/remote-library.md#saves).
 
 ## Known limitations
 

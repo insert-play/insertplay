@@ -5,6 +5,7 @@ import { Card, logAdd } from "./backend";
 import { installAchievements, stopAchievements } from "./achievements";
 import {
   onGameClosed,
+  onGameStarted,
   onInserted,
   onRemoved,
   onSteamLibrariesChanged,
@@ -20,7 +21,7 @@ import { addSettingsRoute, removeSettingsRoute } from "./panel/route";
 import { Panel } from "./panel/summary";
 import { installRemoteSteam, stopRemoteSteam } from "./remote-steam";
 import { notifyNewerPackage } from "./selfupdate";
-import { onAppClosed, onInstallFoldersChanged } from "./steam";
+import { onAppClosed, onAppStarted, onInstallFoldersChanged } from "./steam";
 import { showBadges, stopBadges } from "./steam-badges";
 
 const PORTABLE_TICK_MS = 30_000;
@@ -51,6 +52,8 @@ export default definePlugin(() => {
   const achievementsFailed = installAchievements();
   if (achievementsFailed.length) void logAdd("error", `achievements patch: ${achievementsFailed.join("; ")}`);
   const stopAppClosed = onAppClosed((appid) => void onGameClosed(appid));
+  // save sync (#63): reports what the launch wrapper downloaded
+  const stopAppStarted = onAppStarted((appid) => void onGameStarted(appid));
   // Remote library (#45): Steam's buttons on its shortcuts, and the backend's progress
   const remoteFailed = installRemoteSteam(remoteSteamHandlers);
   if (remoteFailed.length) void logAdd("error", `remote library patch: ${remoteFailed.join("; ")}`);
@@ -76,6 +79,7 @@ export default definePlugin(() => {
       routerHook.removePatch("/library", libraryPatch);
       stopLibraryTabs();
       stopAppClosed();
+      stopAppStarted();
       removeEventListener("remote_state", remoteState);
       stopRemoteSteam();
       stopBadges();

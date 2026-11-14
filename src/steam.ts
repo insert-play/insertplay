@@ -286,6 +286,16 @@ export function onAppClosed(callback: (appid: number) => void): () => void {
   return () => registration?.unregister?.();
 }
 
+/** Notifies when a game starts, with its appid. Same notification as `onAppClosed`, with
+ *  `bRunning: true`; for a shortcut it comes as soon as Steam starts the launch command (the
+ *  save sync wrapper runs its download after it). Returns the unsubscribe function. */
+export function onAppStarted(callback: (appid: number) => void): () => void {
+  const registration = client()?.GameSessions?.RegisterForAppLifetimeNotifications?.((e: any) => {
+    if (e && e.bRunning === true && Number(e.unAppID) > 0) callback(Number(e.unAppID));
+  });
+  return () => registration?.unregister?.();
+}
+
 export function appName(appid: number): string {
   return apps()?.GetAppOverviewByAppID?.(appid)?.display_name || `app ${appid}`;
 }
