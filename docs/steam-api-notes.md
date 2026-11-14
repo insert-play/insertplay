@@ -199,6 +199,14 @@ What `src/remote-steam.ts` relies on. Measured on the Deck with an `IP Teste Ins
 
 End to end on the Deck (both games, `out/screens/`): "Instalar" → button pressed → "BAIXANDO / Progresso: N%" (Steam's "Pausar" and "Retomar" paused and resumed the engine) → "Jogar" → the game ran (gamescope screenshot: Test Drive 6 intro, Captain Claw main menu) → closed → panel "Desinstalar" (confirm modal) → folder gone, "Instalar" again. Test Drive 6 (580 MB, 15 files) installed in 57 s and 46 s; Captain Claw (2.3 GB, 27 339 files) in 1064 s, ~135 KB/s while on the small files.
 
+Download speed and CPU (#45, 2026-11-14, main 70cd9b0): Test Drive 6 (580 MB, 15 files) from the BeaglePlay, sampled every second from `/proc` during the download:
+- **Speed:** "Instalar" → "Jogar" in 9.0 s; the install folder grew ~65–70 MB/s.
+- **Plugin backend:** `InsertPlay` process (`urllib` + SHA-256) at 29–37 % of one core.
+- **Whole Deck:** 13–24 % busy (8 threads).
+- **Afterwards:** idle back to 0 %.
+
+So the stdlib download is not the bottleneck: what costs is the time per small file (#61).
+
 Screenshots of the running game: the plain `screenshot` captures Steam's CEF window, not the game. `XDG_RUNTIME_DIR=/run/user/1000 gamescopectl screenshot /tmp/x.png` (over SSH) captures what is on screen.
 
 ## Library tabs "Todos os jogos" / "Instalados" (issue #52, measured 2026-11-14, SteamOS 3.9.5, Decky v3.3.1)
