@@ -6,6 +6,7 @@ import {
   PortableResults,
   PortableStatus,
   RegistryRecord,
+  RemoteGame,
   artworkBase64,
   currentCards,
   getSettings,
@@ -18,9 +19,20 @@ import {
   raStatus,
   registryAll,
   registryPut,
+  remoteArtworkBase64,
+  remoteCancel,
+  remoteGames,
+  remoteGetConfig,
+  remoteInstall,
+  remotePause,
+  remoteRefresh,
+  remoteResume,
+  remoteUninstall,
   shortcutIcon,
 } from "./backend";
+import { RemoteDisplay, setRemoteDisplay } from "./remote-steam";
 import {
+  ShortcutSpec,
   addShortcut,
   appIcon,
   appName,
@@ -88,6 +100,53 @@ export function enqueue<T>(work: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/** Where a shortcut comes from: a card or a remote library game. */
+interface ShortcutSource {
+  guid: string;
+  spec: ShortcutSpec;
+  artwork?: Record<string, string>;
+  toBase64: (path: string) => Promise<string>;
+  icon?: string | null;
+  raGameId: number | null;
+  /** Extra fields saved in the registry record (e.g. `source: "library"`). */
+  record?: Partial<RegistryRecord>;
+}
+
+/** Creates or updates the shortcut of `src.guid` and saves the registry record. Shared by
+ *  cards and the remote library, so the same guid is always the same shortcut. */
+async function ensureShortcut(src: ShortcutSource, update = true): Promise<{ appid: number; created: boolean }> {
+  const { guid, spec } = src;
+  // Only the registry ties a shortcut to a card, always by guid. Adopting by name
+  // overwrote other people's shortcuts with the same name and made two cards with the
+  // same name share a shortcut (PR #2 review). An appid another guid also claims
+  // is not trustworthy: we create our own shortcut.
+  const registry = await loadRegistry();
+  const known = registry[guid];
+  const claimedByOther =
+    known !== undefined &&
+    Object.entries(registry).some(([other, record]) => other !== guid && record.appid === known.appid);
+  let appid = known && !claimedByOther && shortcutExists(known.appid) ? known.appid : null;
+  let created = false;
+
+  if (appid === null) {
+    appid = await addShortcut(spec);
+    created = true;
+    await logAdd("add", `${spec.appName}: shortcut ${appid} created`);
+  } else if (update) {
+    updateShortcut(appid, spec);
+  }
+
+  let artworkApplied = Boolean(known?.artworkApplied) && !created && known?.appid === appid;
+  if (!artworkApplied && src.artwork && Object.keys(src.artwork).length) {
+    const failed = await applyArtwork(appid, src.artwork, src.toBase64);
+    if (failed.length) await logAdd("error", `${spec.appName}: artwork failed: ${failed.join("; ")}`);
+    artworkApplied = failed.length === 0;
+  }
+  if (src.icon) await ensureIcon(spec.appName, guid, src.icon, appid);
+  await saveRecord(guid, { appid, appName: spec.appName, artworkApplied, raGameId: src.raGameId, ...src.record });
+  return { appid, created };
+}
+
 /** Ensures the card's shortcut exists and makes it visible. `launch` is only true on a
  *  real insertion; the load-time reconciliation never opens the page or starts a game. Returns the appid. */
 async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
@@ -97,41 +156,23 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
     toaster.toast({ title: TITLE, body: `Cartão ${card.label} não pôde ser lido: ${why}`, duration: 10000 });
     return null;
   }
-  const spec = {
-    appName: card.appName,
-    exe: card.exe,
-    startDir: card.startDir ?? card.mount,
-    launchOptions: card.launchOptions ?? "",
-  };
-  // Only the registry ties a shortcut to a card, always by guid. Adopting by name
-  // overwrote other people's shortcuts with the same name and made two cards with the
-  // same name share a shortcut (PR #2 review). An appid another guid also claims
-  // is not trustworthy: we create our own shortcut.
-  const registry = await loadRegistry();
-  const known = registry[card.guid];
-  const claimedByOther =
-    known !== undefined &&
-    Object.entries(registry).some(([guid, record]) => guid !== card.guid && record.appid === known.appid);
-  let appid = known && !claimedByOther && shortcutExists(known.appid) ? known.appid : null;
-  let created = false;
-
-  if (appid === null) {
-    appid = await addShortcut(spec);
-    created = true;
-    await logAdd("add", `${card.appName}: shortcut ${appid} created`);
-  } else {
-    updateShortcut(appid, spec);
-  }
-
-  let artworkApplied = Boolean(known?.artworkApplied) && !created && known?.appid === appid;
-  if (!artworkApplied && card.artwork && Object.keys(card.artwork).length) {
-    const failed = await applyArtwork(appid, card.artwork, (p) => artworkBase64(p));
-    if (failed.length) await logAdd("error", `${card.appName}: artwork failed: ${failed.join("; ")}`);
-    artworkApplied = failed.length === 0;
-  }
-  if (card.icon) await ensureIcon(card, appid);
   const raGameId = card.game?.retroAchievements?.gameId ?? null;
-  await saveRecord(card.guid, { appid, appName: card.appName, artworkApplied, raGameId });
+  const { appid } = await ensureShortcut({
+    guid: card.guid,
+    spec: {
+      appName: card.appName,
+      exe: card.exe,
+      startDir: card.startDir ?? card.mount,
+      launchOptions: card.launchOptions ?? "",
+    },
+    artwork: card.artwork,
+    toBase64: (p) => artworkBase64(p),
+    icon: card.icon,
+    raGameId,
+  });
+  // the inserted card wins over a remote library install of the same guid ({SD_ROOT} = the
+  // card); the library spec is applied again when the card leaves
+  libraryApplied.delete(card.guid);
   setHidden(appid, false);
   cardApps.set(card.mount, appid);
   // outside the queue: the API can take seconds and the game may already be starting
@@ -171,17 +212,17 @@ async function onInsert(appid: number, name: string, run: (appid: number) => voi
 /** Shortcut icon from the copy on the SSD (issue #17). Runs on every insertion, not only
  *  on creation: a new icon on the card becomes a new path. The backend decides whether to
  *  apply it (it does not overwrite an icon the user chose). A failure does not stop the flow. */
-async function ensureIcon(card: Card, appid: number): Promise<void> {
+async function ensureIcon(name: string, guid: string, source: string, appid: number): Promise<void> {
   try {
     const steamid = currentSteamId();
     if (!steamid) throw new Error("unknown Steam account");
-    const icon = await shortcutIcon(steamid, appid, card.guid!, card.icon!);
+    const icon = await shortcutIcon(steamid, appid, guid, source);
     if (!icon) throw new Error("backend refused (see log)");
     if (!icon.apply) return;
     setShortcutIcon(appid, icon.path);
-    await logAdd("icon", `${card.appName}: ${icon.path}`);
+    await logAdd("icon", `${name}: ${icon.path}`);
   } catch (err) {
-    await logAdd("error", `${card.appName}: icon failed: ${err instanceof Error ? err.message : err}`);
+    await logAdd("error", `${name}: icon failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -308,6 +349,9 @@ async function syncAbsent(): Promise<void> {
   const presentAppids = new Set(registry.filter(([guid]) => present.has(guid)).map(([, r]) => r.appid));
   for (const [guid, record] of registry) {
     if (present.has(guid) || presentAppids.has(record.appid) || !shortcutExists(record.appid)) continue;
+    // a remote library game has no card to wait for (#45); while the library list is
+    // unknown, none of its shortcuts is hidden
+    if (record.source === "library" && (libraryGames === null || libraryGames.some((g) => g.id === guid))) continue;
     if (isHidden(record.appid) !== hide) setHidden(record.appid, hide);
   }
 }
@@ -371,7 +415,11 @@ export async function refreshBadges(): Promise<void> {
 export const onInserted = (card: Card) =>
   enqueue(() => ensureCard(card, true))
     .catch((err) => report(`Inserção de ${card.label}`, err))
-    .finally(refreshBadges);
+    .finally(() => {
+      void refreshBadges();
+      // a library game with this guid: the card's "Jogar" wins while it is in
+      if (card.guid && libraryGames?.some((g) => g.id === card.guid)) void refreshLibrary(true);
+    });
 
 export const onRemoved = (card: { mount: string; label: string }) =>
   enqueue(async () => {
@@ -382,7 +430,11 @@ export const onRemoved = (card: { mount: string; label: string }) =>
     toaster.toast({ title: TITLE, body: `Cartão ${card.label} removido`, logo: gameLogo(appid) });
   })
     .catch((err) => report(`Remoção de ${card.label}`, err))
-    .finally(refreshBadges);
+    .finally(() => {
+      void refreshBadges();
+      // the shortcut of a library game goes back to the install folder (or "Instalar")
+      if (libraryGames?.length) void refreshLibrary(true);
+    });
 
 /** Mounted Steam library seen in Steam's last notification, per library folder. */
 interface SteamCard {
@@ -701,3 +753,231 @@ export const launchCard = (card: Card) =>
     const appid = await ensureCard(card, false);
     if (appid !== null) runGame(appid);
   }).catch((err) => report(`Início de ${card.label}`, err));
+
+// ---- Remote library ("Biblioteca Remota", #45). The engine is the backend (#47); this part
+// keeps one shortcut per library game and tells remote-steam.ts what the game page shows.
+
+/** Games last read from the backend (`remote_games`); `null` = not read yet or it failed. */
+let libraryGames: RemoteGame[] | null = null;
+/** guid → shortcut appid of every library game. */
+const libraryApps = new Map<string, number>();
+/** guid → spec last applied to the shortcut this session: `updateShortcut` makes Steam
+ *  replace the overview (and our "Instalar"), so it runs only when something changed. */
+const libraryApplied = new Map<string, string>();
+/** Guids of the InsertPlay cards mounted at the last sync: the card wins over the library. */
+let libraryCardGuids = new Set<string>();
+/** Last state per guid, to toast "instalado" / errors once, on the transition. */
+const lastStates = new Map<string, RemoteGame["state"]>();
+const libraryAchievements = new Set<number>();
+const libraryListeners = new Set<() => void>();
+
+export const remoteLibraryGames = (): RemoteGame[] | null => libraryGames;
+
+/** Notifies when the library list or a game state changes. Returns the unsubscribe function. */
+export function onRemoteLibraryChange(callback: () => void): () => void {
+  libraryListeners.add(callback);
+  return () => void libraryListeners.delete(callback);
+}
+
+function displayOf(game: RemoteGame): RemoteDisplay {
+  switch (game.state) {
+    case "downloading":
+      return { status: 7, percent: game.percent, speed: game.speed };
+    case "queued":
+      return { status: 23, percent: game.percent, speed: 0 };
+    case "paused":
+      return { status: 22, percent: game.percent, speed: 0 };
+    case "installed":
+      return { status: null, percent: 100, speed: 0 };
+    default: // not_installed, error
+      return { status: 9, percent: 0, speed: 0 };
+  }
+}
+
+/** What each library shortcut shows. A mounted card with the same guid: Steam's own "Jogar". */
+function publishLibrary(): void {
+  const display = new Map<number, RemoteDisplay>();
+  for (const game of libraryGames ?? []) {
+    const appid = libraryApps.get(game.id);
+    if (appid === undefined || libraryCardGuids.has(game.id)) continue;
+    display.set(appid, displayOf(game));
+  }
+  setRemoteDisplay(libraryApps.values(), display);
+  libraryListeners.forEach((callback) => callback());
+}
+
+/** Toasts for transitions seen since the last read (none on the first read: plugin load). */
+function announceLibrary(games: RemoteGame[], first: boolean): void {
+  for (const game of games) {
+    const before = lastStates.get(game.id);
+    lastStates.set(game.id, game.state);
+    if (first || before === undefined || before === game.state) continue;
+    const logo = gameLogo(libraryApps.get(game.id));
+    if (game.state === "installed") {
+      toaster.toast({ title: TITLE, body: `${game.name} instalado`, logo });
+    } else if (game.state === "error" && game.error) {
+      toaster.toast({ title: TITLE, body: `${game.name}: ${game.error.message}`, logo, duration: 10000 });
+    }
+  }
+}
+
+/** Shortcut of each library game, created or updated. Never toasts nor runs "Ao inserir": a
+ *  game installed from the library is a virtual card, not an insertion. */
+async function syncLibraryShortcuts(games: RemoteGame[]): Promise<void> {
+  const cards = await presentCards();
+  libraryCardGuids = new Set(cards.map((c) => c.guid).filter((g): g is string => Boolean(g)));
+  for (const game of games) {
+    const sc = game.shortcut;
+    if (!sc?.appName || !sc.exe) {
+      await logAdd("error", `remote ${game.id}: incomplete manifest`);
+      continue;
+    }
+    const record = (await loadRegistry())[game.id];
+    if (libraryCardGuids.has(game.id) && record && shortcutExists(record.appid)) {
+      // the inserted card's shortcut is this game's shortcut
+      libraryApps.set(game.id, record.appid);
+      if (record.source !== "library") await saveRecord(game.id, { source: "library" });
+      continue;
+    }
+    const spec = { appName: sc.appName, exe: sc.exe, startDir: sc.startDir, launchOptions: sc.launchOptions };
+    const key = JSON.stringify(spec);
+    const fresh = record?.source !== "library";
+    const raGameId = sc.game?.retroAchievements?.gameId ?? null;
+    const { appid, created } = await ensureShortcut(
+      {
+        guid: game.id,
+        spec,
+        artwork: sc.artwork,
+        // the cache file name is the kind: `<runtime>/library/artwork/<id>/<kind>.<ext>`
+        toBase64: (path) => remoteArtworkBase64(game.id, (path.split("/").pop() ?? "").split(".")[0]),
+        icon: sc.icon,
+        raGameId,
+        record: { source: "library" },
+      },
+      libraryApplied.get(game.id) !== key,
+    );
+    libraryApplied.set(game.id, key);
+    // a card shortcut hidden while its card was out becomes a library game: show it once
+    if (created || fresh) setHidden(appid, false);
+    if (created) await logAdd("remote", `${sc.appName}: library shortcut ${appid}`);
+    libraryApps.set(game.id, appid);
+    if (raGameId && !libraryAchievements.has(appid)) {
+      libraryAchievements.add(appid);
+      void showAchievements(appid, raGameId, "cache");
+    }
+  }
+}
+
+/** Reads the games from the backend (no network) and updates the game pages. `shortcuts`:
+ *  also create/update the shortcuts (plugin load, list refreshed, card in or out). */
+async function readLibrary(shortcuts: boolean): Promise<void> {
+  const result = await remoteGames();
+  if (!result || !result.ok) return;
+  const first = libraryGames === null;
+  libraryGames = result.games;
+  const missing = result.games.some((g) => !libraryApps.has(g.id));
+  if (shortcuts || missing) await enqueue(() => syncLibraryShortcuts(result.games));
+  announceLibrary(result.games, first);
+  publishLibrary();
+}
+
+let libraryRead: Promise<void> | null = null;
+let libraryAgain = false;
+let libraryShortcutsAgain = false;
+
+/** Coalesces bursts (the backend emits up to once a second while downloading): one read at
+ *  a time, and one more after it when something asked meanwhile. */
+export function refreshLibrary(shortcuts = false): Promise<void> {
+  if (libraryRead) {
+    libraryAgain = true;
+    if (shortcuts) libraryShortcutsAgain = true;
+    return libraryRead;
+  }
+  const run = readLibrary(shortcuts)
+    .catch((err) => report("Biblioteca Remota", err))
+    .finally(() => {
+      libraryRead = null;
+      if (libraryAgain) {
+        const again = libraryShortcutsAgain;
+        libraryAgain = libraryShortcutsAgain = false;
+        void refreshLibrary(again);
+      }
+    });
+  libraryRead = run;
+  return run;
+}
+/** Plugin load: the cached list first (works without the server), then the server's. */
+export async function startLibrary(): Promise<void> {
+  await refreshLibrary(true);
+  const config = await remoteGetConfig();
+  if (!config?.url || !config.tokenSet) return;
+  const fetched = await remoteRefresh();
+  if (fetched && !fetched.ok) await logAdd("remote", `refresh at load: ${fetched.code}`);
+  await refreshLibrary(true);
+}
+
+/** "Atualizar lista" in the panel. Returns the failure message, or null. */
+export async function refreshRemoteIndex(): Promise<string | null> {
+  const fetched = await remoteRefresh();
+  await refreshLibrary(true);
+  if (!fetched) return "veja o log de eventos";
+  return fetched.ok ? null : fetched.message;
+}
+
+const guidOf = (appid: number): string | undefined =>
+  [...libraryApps.entries()].find(([, a]) => a === appid)?.[0];
+
+const nameOf = (guid: string) => libraryGames?.find((g) => g.id === guid)?.name ?? guid;
+
+export type RemoteAction = "install" | "pause" | "resume" | "cancel" | "uninstall";
+
+/** Panel and Steam buttons. Each one re-reads the state afterwards. */
+export async function remoteAction(guid: string, action: RemoteAction): Promise<void> {
+  const name = nameOf(guid);
+  try {
+    let result: { ok: boolean; message?: string } | null;
+    if (action === "install") {
+      result = await remoteInstall(guid);
+      if (result?.ok) toaster.toast({ title: TITLE, body: `Baixando ${name}…`, logo: gameLogo(libraryApps.get(guid)) });
+    } else if (action === "pause") result = await remotePause(guid);
+    else if (action === "resume") result = await remoteResume(guid);
+    else if (action === "cancel") result = await remoteCancel(guid);
+    else {
+      const appid = libraryApps.get(guid);
+      const running = runningAppids();
+      if (!running || (appid !== undefined && running.includes(appid))) {
+        toaster.toast({ title: TITLE, body: `Feche ${name} antes de desinstalar` });
+        return;
+      }
+      result = await remoteUninstall(guid);
+      if (result?.ok) toaster.toast({ title: TITLE, body: `${name} desinstalado` });
+    }
+    if (!result?.ok) {
+      const message = result?.message ?? "veja o log de eventos";
+      await logAdd("remote", `${action} ${guid}: ${message}`);
+      toaster.toast({ title: TITLE, body: `${name}: ${message}`, duration: 10000 });
+    }
+  } catch (err) {
+    await report(`Biblioteca Remota (${name})`, err);
+  } finally {
+    await refreshLibrary();
+  }
+}
+
+/** Steam's own buttons on a library shortcut's page (remote-steam.ts). */
+export const remoteSteamHandlers = {
+  install(appid: number) {
+    const guid = guidOf(appid);
+    if (guid) void remoteAction(guid, "install");
+  },
+  resume(appid: number) {
+    const guid = guidOf(appid);
+    const state = libraryGames?.find((g) => g.id === guid)?.state;
+    // "Baixar" on a queued game: it is already waiting for its turn
+    if (guid && (state === "paused" || state === "error")) void remoteAction(guid, "resume");
+  },
+  pause(appid: number) {
+    const guid = guidOf(appid);
+    if (guid) void remoteAction(guid, "pause");
+  },
+};

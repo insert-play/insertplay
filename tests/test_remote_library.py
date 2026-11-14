@@ -291,6 +291,8 @@ def test_resumes_a_part_file_with_range(env, server):
         assert lib.install(GID)["ok"]
         assert wait_state(lib, ("installed", "error"))["state"] == "installed"
         assert file_requests(server, "data/big.bin") == [("/library/jogo-teste/data/big.bin", "bytes=1048581-")]
+        # the log is the evidence on the device that nothing was downloaded again
+        assert any(f"resuming big.bin at byte 1048581 of {len(files['data/big.bin'])} (206)" in line for line in env.logs)
     finally:
         lib.stop()
 
@@ -305,6 +307,7 @@ def test_dropped_connection_resumes_where_it_stopped(env, server):
         assert wait_state(lib, ("installed", "error"))["state"] == "installed"
         reqs = file_requests(server, "data/big.bin")
         assert reqs[0][1] is None and reqs[-1][1] is not None and len(reqs) == 2
+        assert any("on big.bin at byte" in line and "retry 1" in line for line in env.logs)
         with open(os.path.join(env.games_root, GID, "data", "big.bin"), "rb") as f:
             assert f.read() == files["data/big.bin"]
     finally:

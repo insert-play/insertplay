@@ -444,3 +444,43 @@ def test_remote_library_rpcs_never_return_the_token(main, tmp_path):
     config = tmp_path / "settings" / "remote_library.json"
     assert oct(config.stat().st_mode & 0o777) == "0o600"
     assert not (tmp_path / "home" / "Games").exists()  # nothing created before an install
+
+
+def test_shortcut_icon_accepts_the_remote_library_cache_of_the_same_guid(main, tmp_path):
+    """#45: a library shortcut gets its icon from the artwork cache, before any download.
+    Only the cache folder of that guid counts; a virtual card is never a card."""
+    from test_icons import GUID, vdf
+
+    other_guid = "fa41e0e7-0133-4f21-b5f4-1a143a2f52ef"
+    cache = tmp_path / "data" / "library" / "artwork"
+    (cache / GUID).mkdir(parents=True)
+    (cache / other_guid).mkdir(parents=True)
+    icon = cache / GUID / "icon.png"
+    icon.write_bytes(b"png")
+    (cache / other_guid / "icon.png").write_bytes(b"other")
+    config = tmp_path / "home" / ".local" / "share" / "Steam" / "userdata" / "108436075" / "config"
+    config.mkdir(parents=True)
+    steamid, appid = "76561198068701803", 2483608115
+    (config / "shortcuts.vdf").write_bytes(vdf([(appid, "")]))
+    # an installed game is a folder in the card layout under ~/Games/InsertPlay
+    virtual = tmp_path / "home" / "Games" / "InsertPlay" / GUID
+    virtual.mkdir(parents=True)
+    (virtual / "steam-shortcut.json").write_text("{}", encoding="utf-8")
+
+    async def scenario():
+        plugin = main.Plugin()
+        await plugin._main()
+        try:
+            return (
+                await plugin.shortcut_icon(steamid, appid, GUID, str(icon)),
+                await plugin.shortcut_icon(steamid, appid, GUID, str(cache / other_guid / "icon.png")),
+                await plugin.shortcut_icon(steamid, appid, GUID, str(cache / GUID)),
+                await plugin.current_cards(),
+            )
+        finally:
+            await plugin._unload()
+
+    ok, other, folder, cards = asyncio.run(scenario())
+    assert ok["apply"] is True and os.path.dirname(ok["path"]) == str(tmp_path / "data" / "icons")
+    assert other is None and folder is None
+    assert cards == []  # the virtual card never raises "card inserted"

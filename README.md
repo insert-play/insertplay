@@ -109,7 +109,7 @@ A card whose manifest declares the game's [RetroAchievements](https://retroachie
 
 The plugin relies on undocumented Steam client APIs (`SteamClient.*`); the calls in use and how they were measured are in [docs/steam-api-notes.md](docs/steam-api-notes.md). A Steam update can break them.
 
-Installing games from a home server ("Biblioteca Remota", the remote library) is in progress; its server layout, index format and backend RPCs are specified in [docs/remote-library.md](docs/remote-library.md).
+Installing games from a home server ("Biblioteca Remota", the remote library) is a proof of concept on the home network: the panel takes the server address and token and lists its games; each one gets a shortcut that shows "Instalar", the download progress and then "Jogar" in Steam's own game page. The server layout, index format and backend RPCs are specified in [docs/remote-library.md](docs/remote-library.md).
 
 ## Known limitations
 
