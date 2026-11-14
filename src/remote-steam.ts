@@ -30,7 +30,7 @@ declare const SteamClient: any;
 
 /** What the game page should show for a library shortcut. */
 export interface RemoteDisplay {
-  /** `installed=false` + `display_status`; `null` = Steam's own state ("Jogar"). */
+  /** `installed=false` + `display_status`; `null` = Steam's own state ("Jogar", "Retomar" while it runs). */
   status: 9 | 7 | 22 | 23 | null;
   percent: number;
   /** bytes/s, for the downloads overview. */
@@ -47,6 +47,8 @@ export interface RemoteSteamHandlers {
 }
 
 const READY_TO_LAUNCH = 11;
+/** The `display_status` values this module writes for a game that is not installed. */
+const INJECTED = new Set<number>([9, 7, 22, 23]);
 const REAPPLY_MS = 1000;
 const OVERVIEWS = ["CurrentViewingDownloadOverview", "LocalDownloadOverview"] as const;
 
@@ -79,6 +81,9 @@ function clientData(appid: number): any {
 function applyOne(appid: number, want: RemoteDisplay | null): boolean {
   const data = clientData(appid);
   if (!data) return false;
+  // Installed: undo only what we injected. Steam's own states stay, e.g. 4 while the game runs
+  // ("Retomar" + "X"; measured on the Deck, 2026-11-14, #57): forcing 11 showed "Jogar".
+  if (want?.status == null && data.installed !== false && !INJECTED.has(data.display_status)) return false;
   const installed = want?.status == null;
   const status = want?.status ?? READY_TO_LAUNCH;
   const percent = want?.status == null ? 100 : want.percent;
