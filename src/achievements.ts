@@ -21,6 +21,7 @@
 
 import { Patch, afterPatch, callOriginal, findModuleExport, replacePatch } from "@decky/ui";
 import { RaGame, SteamAchievement } from "./backend";
+import { currentSteamId } from "./steam";
 
 declare const appDetailsStore: any;
 
@@ -159,9 +160,9 @@ function build(appid: number, game: RaGame): Shown {
 function queryData(appid: number, s: Shown, kind: string, steamid: string): object | undefined {
   if (kind === "schema") return s.schema;
   if (kind === "globalpercentages") return s.percentages;
-  // another user (friend comparison): Steam's answer for a shortcut, which is empty
-  const me = (window as any).App?.m_CurrentUser?.strSteamID;
-  if (me && steamid !== me) return undefined;
+  // another user (friend comparison), or the account is not known yet: Steam's answer
+  // for a shortcut, which is empty
+  if (steamid !== currentSteamId()) return undefined;
   let user = s.userBySteamid.get(steamid);
   if (!user) {
     user = { appid, steamid, schema_hash: s.gameId, ...s.user };
@@ -170,20 +171,32 @@ function queryData(appid: number, s: Shown, kind: string, steamid: string): obje
   return user;
 }
 
-/** Steam's query of `appid` refetches (from our `queryFn` or, for a forgotten card, from
- *  Steam's). Never call it from something Steam calls while rendering. */
-function refetchLater(appid: number, all = false): void {
+/** Runs `action` on Steam's QueryClient after the current task. Never call the client from
+ *  something Steam calls while rendering. */
+function onQueriesLater(action: (client: any) => unknown): void {
   const client = queries;
   if (!client) return;
   setTimeout(() => {
     try {
-      void Promise.resolve(
-        client.invalidateQueries({ queryKey: ["achievements", appid], refetchType: all ? "all" : "active" }),
-      ).catch(() => undefined);
+      void Promise.resolve(action(client)).catch(() => undefined);
     } catch {
       // the client changed shape: the page keeps what it shows
     }
   }, 0);
+}
+
+/** New progress: the open screens refetch (through our `queryFn`), the others on view. */
+function refetchLater(appid: number): void {
+  onQueriesLater((client) => client.invalidateQueries({ queryKey: ["achievements", appid] }));
+}
+
+/** Nothing of ours may stay: inactive queries are dropped (they also hold our `queryFn`)
+ *  and open ones start over from whatever `queryFn` the options give now. */
+function dropLater(appid: number): void {
+  onQueriesLater((client) => {
+    client.removeQueries({ queryKey: ["achievements", appid], type: "inactive" });
+    return client.resetQueries({ queryKey: ["achievements", appid], type: "active" });
+  });
 }
 
 let onView: ((appid: number, gameId: number) => Promise<void>) | null = null;
@@ -206,21 +219,22 @@ export function onAchievementsViewed(handler: (appid: number, gameId: number) =>
   onView = handler;
 }
 
-/** Our `queryFn`s, one per query hash, so the options Steam builds on every render keep
- *  the same function. */
+/** Our `queryFn`s, one per query, so the options Steam builds on every render keep the
+ *  same function; and the latest `queryFn` Steam built for it, used while there is no data. */
 const queryFns = new Map<string, () => Promise<object>>();
+const steamQueryFns = new Map<string, unknown>();
 
-function queryFnFor(appid: number, kind: string, steamid: string, original: unknown): (() => Promise<object>) | null {
-  if (typeof original !== "function") return null;
-  const id = `${appid}|${kind}|${steamid}`;
+function queryFnFor(id: string, appid: number, kind: string, steamid: string): () => Promise<object> {
   let fn = queryFns.get(id);
   if (!fn) {
     fn = async function (this: unknown, ...args: unknown[]) {
       // runs inside Query.fetch, outside the render
-      viewed(appid);
       const s = shown.get(appid);
       const data = s && !stopped ? queryData(appid, s, kind, steamid) : undefined;
-      return data ?? (original as (...a: unknown[]) => Promise<object>).apply(this, args);
+      if (data) return data;
+      const original = steamQueryFns.get(id);
+      if (typeof original !== "function") throw new Error(`no queryFn for ${id}`);
+      return original.apply(this, args);
     };
     queryFns.set(id, fn);
   }
@@ -290,9 +304,16 @@ const PARTS: Record<string, () => Patch[]> = {
         if (!Array.isArray(key) || key[0] !== "achievements" || !QUERY_KINDS.has(key[2])) return ret;
         const appid = Number(key[1]);
         if (!known.has(appid)) return ret;
-        if (queryFns.get(`${appid}|${key[2]}|${String(key[3] ?? "")}`) === ret.queryFn) return ret;
-        const fn = queryFnFor(appid, key[2], String(key[3] ?? ""), ret.queryFn);
-        return fn ? { ...ret, queryFn: fn } : ret;
+        // a card's achievements page or section is on screen: at most one fetch a minute
+        viewed(appid);
+        const kind: string = key[2];
+        const steamid = String(key[3] ?? "");
+        const id = `${appid}|${kind}|${steamid}`;
+        const fn = queryFnFor(id, appid, kind, steamid);
+        if (ret.queryFn === fn) return ret;
+        if (typeof ret.queryFn !== "function") return ret;
+        steamQueryFns.set(id, ret.queryFn);
+        return { ...ret, queryFn: fn };
       }),
     ];
   },
@@ -336,7 +357,7 @@ export function publishAchievements(appid: number, game: RaGame, fromSession: nu
 function unpublish(appid: number): void {
   lastView.delete(appid);
   if (!shown.delete(appid)) return;
-  refetchLater(appid);
+  dropLater(appid);
 }
 
 /** The card of `appid` no longer declares a GameID: nothing to show or fetch. */
@@ -356,15 +377,11 @@ export function shownAppids(): number[] {
   return [...shown.keys()];
 }
 
-/** Plugin unload: undoes every patch, and Steam refetches the cards' queries from its own
- *  service (also the inactive ones, so its cache keeps nothing of ours). */
+/** Plugin unload: undoes every patch, then Steam's cache drops the cards' queries, so it
+ *  keeps neither our data nor our `queryFn`. */
 export function stopAchievements(): void {
-  const appids = [...new Set([...known.keys(), ...shown.keys()])];
-  stopped = true;
-  shown.clear();
-  known.clear();
-  session += 1;
-  onView = null;
+  const appids = [...known.keys()];
+  newAchievementsSession();
   for (const patch of [...patches.values()].flat()) {
     try {
       patch.unpatch();
@@ -373,7 +390,13 @@ export function stopAchievements(): void {
     }
   }
   patches.clear();
-  for (const appid of appids) refetchLater(appid, true);
-  queryFns.clear();
+  // after the unpatch: the open screens start over with Steam's own queryFn
+  for (const appid of appids) dropLater(appid);
+  stopped = true;
+  known.clear();
+  lastView.clear();
+  onView = null;
+  // `steamQueryFns` stays: an open screen may still fetch through our queryFn until it
+  // renders again, and that falls back to Steam's
   queries = null;
 }
