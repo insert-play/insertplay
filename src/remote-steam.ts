@@ -202,7 +202,9 @@ export function installRemoteSteam(h: RemoteSteamHandlers): string[] {
     wrap(SteamClient?.Downloads, "EnableAllDownloads", (orig) => (enable: any, ...rest: any[]) => {
       // "Pausar" has no appid: it is ours only while the overview shows our download (and
       // then Steam has none of its own to pause)
-      if (enable !== false || !shadowShown) return orig(enable, ...rest);
+      // `shadowShown` is only refreshed when something reads the overview: check that the
+      // game is still downloading, or a later pause of Steam's own would be swallowed
+      if (enable !== false || !shadowShown || downloading()?.[0] !== shadowShown) return orig(enable, ...rest);
       handlers?.pause(shadowShown);
       return undefined;
     }),
