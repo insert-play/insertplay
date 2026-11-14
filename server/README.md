@@ -81,13 +81,14 @@ It prints one line per game indexed (files, empty directories, symlinks, size, a
 - It writes `index.json`, `lists/<id>.json` and a hash cache (`hash-cache.json`) in `$INSERTPLAY_CONFIG/index`, each to a temporary file renamed at the end, so Caddy never serves a half-written index. Caddy doesn't need a restart.
 - The cache skips rehashing files whose size and modification time didn't change. `--no-cache` forces a full rehash: `docker compose run --rm indexer python3 -I /opt/indexer/remote_library_index.py /srv/library /srv/index --no-cache`.
 - The library is read-only and the container has no network.
-- To re-index by itself when the library changes, use [`reindex-if-changed.sh`](reindex-if-changed.sh) from a cron line (`crontab -e` as the user that owns the config folder):
+- A file replaced in place with the same size and an older modification time (a copy over Samba keeps the original date) keeps its old hash in the cache: after replacing files that way, run the indexer once with `--no-cache`.
+- To re-index by itself when the library changes, use [`reindex-if-changed.sh`](reindex-if-changed.sh) from a cron line (`crontab -e` as the user that owns the config folder, a member of the `docker` group; run `mkdir -p ~/.cache` first, for the log):
 
   ```
   */10 * * * * /path/to/server/reindex-if-changed.sh >>$HOME/.cache/insertplay-reindex.log 2>&1
   ```
 
-  Every run scans the library for anything changed since the last `index.json` (modification and change times, so files copied with their old dates count too, and a removed game counts through its parent folder). With no change it stops there; with a change it waits until nothing changed for `QUIET_MIN` minutes (default 2), so a game still being copied is not indexed half-way, then runs the indexer. On a BeaglePlay with 2 games (27 354 files) on an NTFS disk over USB 2.0, the scan takes ~6 s and a re-index ~50 s. `INSERTPLAY_REINDEX` replaces the indexer command, e.g. without Compose v2 (next section): `INSERTPLAY_REINDEX=$HOME/insertplay-library/indexer-run.sh`.
+  Every run scans the library for anything changed since the last `index.json` (modification and change times, so files copied with their old dates count too, and a removed game counts through its parent folder). With no change it stops there; with a change it waits until nothing changed for `QUIET_MIN` minutes (default 5), so a game still being copied is not indexed half-way, then runs the indexer. A change made while the indexer runs is picked up by the next run. A copy that stalls longer than `QUIET_MIN` (e.g. on a "replace or skip" dialog) gets indexed half-way and fixed on a later run. On a BeaglePlay with 2 games (27 354 files) on an NTFS disk over USB 2.0, the scan takes ~6 s and a re-index ~50 s. `INSERTPLAY_REINDEX` replaces the indexer command, e.g. without Compose v2 (next section): `INSERTPLAY_REINDEX=$HOME/insertplay-library/indexer-run.sh`.
 
 ## 5. Test with curl
 
