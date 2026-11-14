@@ -1,2 +1,4 @@
 # Scripts que rodam no Deck (enviados direto da cópia local pelo deck.mjs): bash quebra com CRLF.
 *.sh text eol=lf
+# Server files are edited on Windows and copied to a Linux box: keep them LF.
+server/** text eol=lf
