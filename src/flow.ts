@@ -67,6 +67,7 @@ import {
   onAchievementsViewed,
   publishAchievements,
   trackAchievements,
+  trackedAchievements,
 } from "./achievements";
 
 const TITLE = "InsertPlay";
@@ -184,7 +185,7 @@ async function ensureCard(card: Card, launch: boolean): Promise<number | null> {
   setHidden(appid, false);
   cardApps.set(card.mount, appid);
   // outside the queue: the API can take seconds and the game may already be starting
-  if (raGameId) void showAchievements(appid, [raGameId, ...raSubsetIds], "auto");
+  if (raGameId) void showAchievements(appid, raIdsOf(raGameId, raSubsetIds), "auto");
   else forgetAchievements(appid);
 
   if (launch) await onInsert(appid, card.appName, runGame);
@@ -253,10 +254,15 @@ function raIdsOf(gameId: number | null | undefined, subsets: number[] | null | u
 }
 
 /** Progress of each GameID, the backend's cache first (it goes to the API when there is
- *  none). A GameID with nothing is left out: the others are still shown. */
+ *  none). One request at a time: a card may list up to 10 subsets. A GameID with nothing is
+ *  left out: the others are still shown. */
 async function raGames(ids: number[], refresh: boolean): Promise<RaGame[]> {
-  const games = await Promise.all(ids.map((id) => raGame(id, refresh)));
-  return games.filter((g): g is RaGame => !!g);
+  const games: RaGame[] = [];
+  for (const id of ids) {
+    const game = await raGame(id, refresh);
+    if (game) games.push(game);
+  }
+  return games;
 }
 
 /** RetroAchievements progress of a shortcut (issue #24): the cache first, so the page has
@@ -269,14 +275,14 @@ async function showAchievements(appid: number, ids: number[], mode: Achievements
   try {
     // without a cache, the backend already goes to the API here
     const games = await raGames(ids, false);
-    if (games[0]?.gameId === ids[0]) publishAchievements(appid, games, session);
+    if (games[0]?.gameId === ids[0]) publishAchievements(appid, ids, games, session);
     // "force" skips only a fetch the line above has just made (game without a cache)
     const now = Date.now() / 1000;
     const ages = games.map((g) => now - g.fetchedAt);
     const fetchAgain =
       mode === "force"
         ? games.length < ids.length || ages.some((age) => age > JUST_FETCHED_SECONDS)
-        : mode === "auto" && ages.some((age) => age > ACHIEVEMENTS_FRESH_SECONDS);
+        : mode === "auto" && (games.length < ids.length || ages.some((age) => age > ACHIEVEMENTS_FRESH_SECONDS));
     if (fetchAgain) await refreshAchievements(appid, ids, mode);
   } catch (err) {
     const detail = `achievements ${ids.join("+")}: ${err instanceof Error ? err.message : err}`;
@@ -345,10 +351,9 @@ async function refreshAchievements(appid: number, ids: number[], why: string): P
   try {
     const games = await raGames(ids, true);
     // without the main game there is no base set to show the subsets under
-    if (games[0]?.gameId === ids[0] && publishAchievements(appid, games, session)) {
-      for (const game of games) {
-        await logAdd("achievements", `${game.title || game.gameId}: ${game.unlocked}/${game.total} (${why})`);
-      }
+    if (games[0]?.gameId !== ids[0]) return;
+    for (const game of publishAchievements(appid, ids, games, session)) {
+      await logAdd("achievements", `${game.title || game.gameId}: ${game.unlocked}/${game.total} (${why})`);
     }
   } catch (err) {
     await logAdd("error", `achievements ${ids.join("+")}: ${err instanceof Error ? err.message : err}`).catch(
@@ -861,9 +866,6 @@ const libraryApplied = new Map<string, string>();
 let libraryCardGuids = new Set<string>();
 /** Last state per guid, to toast "instalado" / errors once, on the transition. */
 const lastStates = new Map<string, RemoteGame["state"]>();
-/** appid → GameIDs (game + subsets) already shown for a library shortcut: shown again only
- *  when the library's manifest changes them. */
-const libraryAchievements = new Map<number, string>();
 const libraryListeners = new Set<() => void>();
 
 export const remoteLibraryGames = (): RemoteGame[] | null => libraryGames;
@@ -958,9 +960,9 @@ async function syncLibraryShortcuts(games: RemoteGame[]): Promise<void> {
     if (created || fresh) setHidden(appid, false);
     if (created) await logAdd("remote", `${sc.appName}: library shortcut ${appid}`);
     libraryApps.set(game.id, appid);
+    // shown again only when the library's manifest changes the GameIDs (game + subsets)
     const raIds = raIdsOf(raGameId, raSubsetIds);
-    if (raIds.length && libraryAchievements.get(appid) !== raIds.join()) {
-      libraryAchievements.set(appid, raIds.join());
+    if (raIds.length && trackedAchievements(appid) !== raIds.join()) {
       void showAchievements(appid, raIds, "cache");
     }
   }
