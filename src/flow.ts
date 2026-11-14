@@ -7,6 +7,7 @@ import {
   PortableStatus,
   RegistryRecord,
   RemoteGame,
+  SaveRecord,
   artworkBase64,
   currentCards,
   getSettings,
@@ -28,6 +29,8 @@ import {
   remoteRefresh,
   remoteResume,
   remoteUninstall,
+  savesPush,
+  savesStatus,
   shortcutIcon,
 } from "./backend";
 import { RemoteDisplay, setRemoteDisplay } from "./remote-steam";
@@ -330,6 +333,7 @@ onAchievementsViewed((appid, gameId) => refreshAchievements(appid, gameId, "page
 
 /** A card game closed: fetch again to show what was unlocked in the session. */
 export async function onGameClosed(appid: number): Promise<void> {
+  void savesAfterGame(appid).catch((err) => logAdd("error", `saves after game: ${err}`));
   const registry = await registryAll();
   const record = Object.values(registry ?? {}).find((r) => r.appid === appid && r.raGameId);
   if (!record?.raGameId) return;
@@ -984,6 +988,104 @@ export function refreshLibrary(shortcuts = false): Promise<void> {
   libraryRead = run;
   return run;
 }
+// ---------------------------------------------------------------- save sync (#63)
+
+/** How long to wait for the launch wrapper's download before giving up on the toast. The
+ *  wrapper gives the server ~10 s, plus the download itself. */
+const SAVES_START_WAIT_MS = 45_000;
+/** After the game closes, the wrapper's own upload (or the detached one after "Sair do
+ *  jogo") usually lands within a few seconds. */
+const SAVES_AFTER_GAME_MS = 4_000;
+/** While the wrapper still holds the lock after the game (uploading a large save). */
+const SAVES_BUSY_WAIT_MS = 180_000;
+/** guid → `at` of the last record toasted, so the start and the close never toast twice. */
+const savesToasted = new Map<string, number>();
+
+/** pt-BR toast text for a sync result; null = nothing worth a toast. */
+function saveToastText(name: string, r: SaveRecord): { body: string; long?: boolean } | null {
+  switch (r.result) {
+    case "downloaded":
+      return { body: `${name}: save baixado do servidor${r.fromDevice ? ` (feito em ${r.fromDevice})` : ""}` };
+    case "conflict_downloaded":
+      return { body: `${name}: o save do servidor era mais recente e foi baixado. O deste aparelho ficou no backup.`, long: true };
+    case "conflict_uploaded":
+      return { body: `${name}: o save deste aparelho era mais recente e foi enviado. O do servidor ficou no backup.`, long: true };
+    case "uploaded":
+      return { body: `${name}: save enviado ao servidor` };
+    case "offline":
+      return r.op === "pull"
+        ? { body: `${name}: servidor de saves fora do ar. Jogando com o save deste aparelho.`, long: true }
+        : { body: `${name}: servidor de saves fora do ar. O save será enviado depois.`, long: true };
+    case "no_strategy":
+      return { body: `Não foi possível identificar os saves de ${name}: jogo sem sincronização.`, long: true };
+    case "error":
+      return { body: `${name}: erro ao sincronizar o save (${r.message})`, long: true };
+    default:
+      return null;
+  }
+}
+
+function toastSave(appid: number, guid: string, record: SaveRecord): void {
+  if ((savesToasted.get(guid) ?? 0) >= record.at) return;
+  const text = saveToastText(appName(appid), record);
+  if (!text) return;
+  savesToasted.set(guid, record.at);
+  toaster.toast({ title: TITLE, body: text.body, logo: gameLogo(appid), duration: text.long ? 10000 : undefined });
+}
+
+/** A library game started: the wrapper downloads the save before the game itself; this only
+ *  reports what it did, as soon as its record shows up. */
+export async function onGameStarted(appid: number): Promise<void> {
+  const guid = guidOf(appid);
+  if (!guid || !(await getSettings()).savesSync) return;
+  // a shortcut still without the wrapper writes no record: nothing to wait for
+  if (!(await launchOptions(appid))?.includes("insertplay-run")) return;
+  const started = Date.now() / 1000 - 5;
+  const deadline = Date.now() + SAVES_START_WAIT_MS;
+  while (Date.now() < deadline) {
+    const status = await savesStatus(guid);
+    const last = status?.last;
+    if (last && last.op === "pull" && last.at >= started) {
+      toastSave(appid, guid, last);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+/** A library game closed: the safety net upload (idempotent; the wrapper usually did it
+ *  already), then a toast for whichever upload happened. */
+async function savesAfterGame(appid: number): Promise<void> {
+  const guid = guidOf(appid);
+  if (!guid || !(await getSettings()).savesSync) return;
+  const closed = Date.now() / 1000 - 5;
+  await new Promise((r) => setTimeout(r, SAVES_AFTER_GAME_MS));
+  let pushed = await savesPush(guid);
+  if (pushed && pushed.result !== "unchanged" && pushed.result !== "busy") {
+    toastSave(appid, guid, pushed);
+    return;
+  }
+  // the wrapper (or its detached unit) is uploading, or already did: report its record. A
+  // large save over Wi-Fi can take a while, so keep asking for up to SAVES_BUSY_WAIT_MS.
+  const deadline = Date.now() + SAVES_BUSY_WAIT_MS;
+  for (let i = 1; ; i++) {
+    const last = (await savesStatus(guid))?.last;
+    if (last && last.op === "push" && last.at >= closed) {
+      toastSave(appid, guid, last);
+      return;
+    }
+    if (pushed?.result !== "busy" || Date.now() > deadline) return;
+    await new Promise((r) => setTimeout(r, 2000));
+    if (i % 8 === 0) {
+      pushed = await savesPush(guid);
+      if (pushed && pushed.result !== "unchanged" && pushed.result !== "busy") {
+        toastSave(appid, guid, pushed);
+        return;
+      }
+    }
+  }
+}
+
 /** Plugin load: the cached list first (works without the server), then the server's. */
 export async function startLibrary(): Promise<void> {
   await refreshLibrary(true);

@@ -346,10 +346,13 @@ class Sync:
         if snap.empty:
             return self._record("push", "empty")
         if snap.hash == self.state.get("lastSyncedHash"):
-            if self.state.get("pending"):
+            cleared = bool(self.state.get("pending"))
+            if cleared:
                 self.state["pending"] = False
                 self._save()
-            return self._record("push", "unchanged", hash=snap.hash, rev=self.state.get("lastRev"))
+            # written to last/<key>.json only when it cleared a pending upload: otherwise the
+            # panel keeps showing the upload that matters
+            return self._record("push", "unchanged", hash=snap.hash, rev=self.state.get("lastRev"), persist=cleared)
         if offline:
             return self._offline("push", snap, "server unreachable")
         rev = self.state.get("lastRev") if self.state.get("lastSyncedHash") else None

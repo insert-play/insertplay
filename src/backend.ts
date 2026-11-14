@@ -42,6 +42,10 @@ export interface Settings {
   onInsert: OnInsert;
   /** Hides the shortcut when the card leaves. Off, the shortcut stays visible without a badge. */
   hideRemoved: boolean;
+  /** Save sync through the remote library (#63): "Sincronizar saves". */
+  savesSync: boolean;
+  /** Keep the replaced save as a backup on the server: "Guardar backup dos saves". */
+  savesBackup: boolean;
 }
 
 export interface LogEntry {
@@ -238,3 +242,50 @@ export const remoteResume = callable<[id: string], RemoteResult<{ game: RemoteGa
 export const remoteCancel = callable<[id: string], RemoteResult<{ game: RemoteGame }> | null>("remote_cancel");
 export const remoteUninstall = callable<[id: string], RemoteResult<{ game: RemoteGame }> | null>("remote_uninstall");
 export const remoteArtworkBase64 = callable<[id: string, kind: string], string>("remote_artwork_base64");
+
+/** Save sync (#63): docs/remote-library.md, "Saves". */
+export type SaveResult =
+  | "uploaded"
+  | "downloaded"
+  | "unchanged"
+  | "empty"
+  | "conflict_uploaded"
+  | "conflict_downloaded"
+  | "offline"
+  | "disabled"
+  | "wrong_card"
+  | "no_strategy"
+  | "busy"
+  | "error"
+  | "not_library"
+  | "not_here";
+
+export interface SaveRecord {
+  key: string;
+  op: "pull" | "push";
+  result: SaveResult;
+  message: string;
+  /** Unix seconds. */
+  at: number;
+  device: string;
+  strategy: string | null;
+  source: "manifest" | "server" | "inferred" | null;
+  pending: boolean;
+  hash?: string | null;
+  rev?: string | null;
+  /** Device that made the downloaded save. */
+  fromDevice?: string;
+  size?: number;
+  backup?: { stored: boolean; reason?: string } | null;
+}
+
+export interface SaveStatus {
+  last: SaveRecord | null;
+  pending: boolean;
+  rev: string | null;
+}
+
+/** `null` = backend failure. */
+export const savesStatus = callable<[guid: string], (SaveStatus & { guid: string }) | null>("saves_status");
+export const savesOverview = callable<[], Record<string, SaveStatus> | null>("saves_overview");
+export const savesPush = callable<[guid: string], SaveRecord | null>("saves_push");

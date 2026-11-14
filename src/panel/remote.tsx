@@ -1,6 +1,15 @@
-import { ButtonItem, ConfirmModal, PanelSection, PanelSectionRow, TextField, showModal } from "@decky/ui";
+import { ButtonItem, ConfirmModal, PanelSection, PanelSectionRow, TextField, ToggleField, showModal } from "@decky/ui";
 import { useEffect, useState } from "react";
-import { RemoteGame, remoteGetConfig, remoteSetConfig } from "../backend";
+import {
+  RemoteGame,
+  SaveStatus,
+  Settings,
+  getSettings,
+  remoteGetConfig,
+  remoteSetConfig,
+  savesOverview,
+  setSetting,
+} from "../backend";
 import {
   RemoteAction,
   onRemoteLibraryChange,
@@ -11,8 +20,44 @@ import {
 } from "../flow";
 import { SecretField, failed, gb, remoteDetail } from "./common";
 
+function ago(at: number): string {
+  const s = Math.max(0, Date.now() / 1000 - at);
+  if (s < 60) return "agora";
+  if (s < 3600) return `há ${Math.floor(s / 60)} min`;
+  if (s < 86400) return `há ${Math.floor(s / 3600)} h`;
+  return `em ${new Date(at * 1000).toLocaleDateString("pt-BR")}`;
+}
+
+/** Save sync line of one game (#63); null = nothing to say. */
+function saveLine(save: SaveStatus | undefined): { text: string; error?: boolean } | null {
+  if (!save) return null;
+  if (save.pending) return { text: "Save: envio pendente (servidor fora do ar)" };
+  const r = save.last;
+  if (!r) return null;
+  switch (r.result) {
+    case "uploaded":
+    case "conflict_uploaded":
+      return { text: `Save enviado ${ago(r.at)}` };
+    case "downloaded":
+    case "conflict_downloaded":
+      return { text: `Save baixado ${ago(r.at)}${r.fromDevice ? ` (feito em ${r.fromDevice})` : ""}` };
+    case "unchanged":
+      return { text: `Save em dia ${ago(r.at)}` };
+    case "empty":
+      return { text: "Ainda sem save" };
+    case "offline":
+      return { text: `Servidor de saves fora do ar ${ago(r.at)}` };
+    case "no_strategy":
+      return { text: "Saves não identificados: jogo sem sincronização", error: true };
+    case "error":
+      return { text: `Erro no save: ${r.message}`, error: true };
+    default:
+      return null;
+  }
+}
+
 /** One library game: state and the actions that apply to it. */
-function RemoteGameRow({ game }: { game: RemoteGame }) {
+function RemoteGameRow({ game, save, syncOn }: { game: RemoteGame; save?: SaveStatus; syncOn: boolean }) {
   const [busy, setBusy] = useState(false);
   const run = (action: RemoteAction) => {
     setBusy(true);
@@ -26,7 +71,9 @@ function RemoteGameRow({ game }: { game: RemoteGame }) {
         strTitle={action === "uninstall" ? `Desinstalar ${game.name}` : `Cancelar ${game.name}`}
         strDescription={
           action === "uninstall"
-            ? `Apaga ${game.name} deste aparelho (${gb(game.bytesTotal)}), inclusive saves gravados dentro da pasta do jogo (memory cards, saves do Wine). O atalho volta a "Instalar".`
+            ? `Apaga ${game.name} deste aparelho (${gb(game.bytesTotal)}), inclusive saves gravados dentro da pasta do jogo (memory cards, saves do Wine). O atalho volta a "Instalar".${
+                syncOn ? " Com a sincronização de saves ligada, o último save enviado continua no servidor." : ""
+              }`
             : `Para o download de ${game.name} e apaga o que já foi baixado.`
         }
         strOKButtonText={action === "uninstall" ? "Desinstalar" : "Cancelar download"}
@@ -35,12 +82,16 @@ function RemoteGameRow({ game }: { game: RemoteGame }) {
       />,
     );
   const s = game.state;
+  const line = syncOn ? saveLine(save) : null;
   return (
     <PanelSectionRow>
       <div style={{ fontWeight: "bold" }}>{game.name}</div>
       <div style={{ fontSize: "0.8em", opacity: 0.7, color: s === "error" ? "#e57373" : undefined }}>
         {remoteDetail(game)}
       </div>
+      {line && (
+        <div style={{ fontSize: "0.8em", opacity: 0.7, color: line.error ? "#e57373" : undefined }}>{line.text}</div>
+      )}
       {(s === "not_installed" || s === "error") && game.inIndex && (
         <ButtonItem layout="below" disabled={busy} onClick={() => run(s === "error" ? "resume" : "install")}>
           {s === "error" ? "Tentar de novo" : "Instalar"}
@@ -80,17 +131,32 @@ export function RemotePage() {
   const [message, setMessage] = useState<string | null>(null);
   const [games, setGames] = useState<RemoteGame[] | null>(remoteLibraryGames());
   const [editing, setEditing] = useState(false);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [saves, setSaves] = useState<Record<string, SaveStatus>>({});
 
   useEffect(() => {
     void remoteGetConfig().then((c) => {
       setConfig(c);
       setUrl(c?.url ?? "");
     });
+    void getSettings().then((s) => typeof s?.savesSync === "boolean" && setSettings(s));
     const stop = onRemoteLibraryChange(() => setGames(remoteLibraryGames()));
     // the event while downloading; the list itself is read by flow.ts
     void refreshLibrary();
     return stop;
   }, []);
+  const syncOn = Boolean(settings?.savesSync);
+  useEffect(() => {
+    if (!syncOn) return;
+    const readSaves = () => void savesOverview().then((o) => o && setSaves(o));
+    readSaves();
+    // the save lines change when a game opens or closes, which raises no library event
+    const timer = setInterval(readSaves, 10_000);
+    return () => clearInterval(timer);
+  }, [syncOn]);
+  // the backend answers {} when the change failed: keep what is shown
+  const toggle = (key: "savesSync" | "savesBackup", value: boolean) =>
+    void setSetting(key, value).then((next) => typeof next?.[key] === "boolean" && setSettings(next));
 
   const save = async () => {
     setBusy(true);
@@ -164,7 +230,32 @@ export function RemotePage() {
           <div style={{ fontSize: "0.75em", opacity: 0.7, wordBreak: "break-all" }}>{config?.url}</div>
         </PanelSectionRow>
       )}
-      {configured && (games ?? []).map((game) => <RemoteGameRow key={game.id} game={game} />)}
+      {configured && (
+        <>
+          <PanelSectionRow>
+            <ToggleField
+              label="Sincronizar saves"
+              description="Guarda no servidor o save mais recente de cada jogo da biblioteca, para continuar em outro aparelho. Vale também para um cartão do mesmo jogo."
+              checked={settings?.savesSync ?? false}
+              disabled={!settings}
+              onChange={(value) => toggle("savesSync", value)}
+            />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ToggleField
+              label="Guardar backup dos saves"
+              description="Ao trocar o save, o anterior fica guardado no servidor (até 50 MB por jogo; um save maior fica sem backup)."
+              checked={settings?.savesBackup ?? true}
+              disabled={!settings || !settings.savesSync}
+              onChange={(value) => toggle("savesBackup", value)}
+            />
+          </PanelSectionRow>
+        </>
+      )}
+      {configured &&
+        (games ?? []).map((game) => (
+          <RemoteGameRow key={game.id} game={game} save={saves[game.id]} syncOn={syncOn} />
+        ))}
       {configured && games?.length === 0 && <PanelSectionRow>Nenhum jogo na biblioteca.</PanelSectionRow>}
       {configured && !editing && (
         <>
