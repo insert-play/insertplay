@@ -321,3 +321,24 @@ Card `Bully`: old 8 GB SDHC (`SA08G`), ext4, ~0.4 MB/s write with the ext4 journ
   - on inserting the card, the plugin replaced the Machine's empty `steamuser` (from 19/09) with a link (`linked`) and kept the original as a backup;
   - the game opened fast and loaded the saves made on the Deck;
   - the resolution stayed each device's own (800p on the Deck, 4K on the Machine): Bully stores its settings outside `steamuser`.
+
+## Save sync launch hook (issue #63 stage 0, measured 2026-11-14, SteamOS 3.9.5, Decky v3.3.1)
+
+Two test shortcuts (`IP Teste Hook`: a mini card whose game is `sleep`, in a folder with a space in its name; `IP Teste Hook Proton`: the Captain Claw install), both removed afterwards. Launch options: `"<wrapper>" <key> -- "<root>/insertplay-start.sh" --guid <guid>`, exe `/bin/bash`. The wrapper ran the game without `exec`, trapped INT/TERM and logged with timestamps.
+
+- **Quoting:** Steam passed the arguments intact, including the path with a space: the wrapper got 3 arguments after `--`.
+- **Process tree:** the wrapper's parent is `steamrt64/reaper SteamLaunch AppId=<appid> -- /bin/bash <wrapper> …`. Everything runs in the systemd scope `app.slice/app-steam-app<appid>-<pid>.scope`.
+- **Normal exit:** the code after the game runs in full (`post+3` logged). Steam counts the game as running until the wrapper exits (`RunningApps` empties after it).
+- **"Sair do jogo" (`SteamClient.Apps.TerminateApp`):**
+  - the wrapper gets SIGINT, then SIGTERM ~40 ms later;
+  - the whole group is killed **~1.7–1.8 s after the TERM**, with the `sleep` game and with Proton (Claw exited with rc 130 in 0.2 s, but the wrapper's `post+3` never ran). Code after the game is not reliable;
+  - a unit started from the trap with `systemd-run --user --collect` is outside the scope and survives: it ran 5 s later, in both tests;
+  - an `flock` taken by the wrapper (inherited by the game) is free right after the kill.
+  - So the post-game push runs inline on a normal exit and, after a TERM, in a detached `systemd-run --user` unit that waits for the lock. The backend push on the frontend's "game closed" event stays as the safety net.
+- **`python3` in Steam's environment:** `/usr/bin/python3` 3.14.6 runs, with `ssl`, `tarfile`, `urllib`, `fcntl`. `PATH` starts with `steamrt64/pv-runtime/steam-runtime-steamrt/bin` and `LD_PRELOAD` holds both `gameoverlayrenderer.so`. Every process prints a harmless `ld.so` warning about the 32-bit one (`wrong ELF class`).
+- **guid guard:** still works with the wrapper in front: with a wrong identity, `insertplay-start.sh` logged "wrong card" and exited **0**. The wrapper cannot tell a refusal from a game that ran, so it must check the card's guid itself before any pull or push.
+- **Proton on a missing prefix** (the Alan Wake 2 case on the Machine):
+  - setup: Claw's `prefix/` moved away, only `prefix/pfx/drive_c/users/steamuser/Documents/IP-Teste/marker.txt` left;
+  - Proton built the whole prefix around it (`version` 10.1000-105, `system.reg`, `user.reg`) and the game opened. The marker survived, after the game ran and after the kill;
+  - a new prefix's `steamuser` has 3 symlinks: `My Documents → ./Documents`, `Application Data → ./AppData/Roaming`, `Local Settings/Application Data → ../AppData/Local`. A save snapshot must not follow symlinks, or every file would be counted twice.
+  - So restoring a `proton-default` save before the first launch works.
