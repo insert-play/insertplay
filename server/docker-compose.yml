@@ -20,7 +20,9 @@ x-library: &library
 services:
   caddy:
     image: caddy:2
-    restart: unless-stopped
+    # "always", not "unless-stopped": docker.io 20.10.5 (Debian 11) marks the container as
+    # manually stopped at shutdown and does not bring an unless-stopped one back after a reboot.
+    restart: always
     ports:
       - "${INSERTPLAY_PORT:-8080}:8080"
     env_file:
