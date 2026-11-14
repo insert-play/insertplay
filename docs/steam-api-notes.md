@@ -166,7 +166,7 @@ The staging needed 88 GB and the card had 26 GB free, so Steam most likely picke
 
 ## "Install" button and download progress on a shortcut (measured 2026-11-13, SteamOS 3.9.5, Decky v3.3.1)
 
-Groundwork for the network library (games installed from a home server). Test shortcut `IP Teste Instalar` (`/bin/bash -c 'sleep 5'`), removed afterwards; Steam restarted at the end to drop the injected state. Nothing here is used by the plugin yet.
+Groundwork for the network library (games installed from a home server). Test shortcut `IP Teste Instalar` (`/bin/bash -c 'sleep 5'`), removed afterwards; Steam restarted at the end to drop the injected state. What the plugin uses is in the next section.
 
 | Call / situation | Result |
 |---|---|
@@ -177,6 +177,28 @@ Groundwork for the network library (games installed from a home server). Test sh
 | `downloadsStore.OnDownloadItems(true, [{remote_client_id:"0", item_data:[item, …real]}])` + `downloadsStore.OnDownloadOverview({…overview, update_appid:id, update_state:"Downloading", …})` | The top bar shows the download indicator (icon with a blue bar). `/library/downloads` (the route of the gamepad UI; `/downloads` renders nothing) opens, but the "downloading now" header stayed empty with a minimal item copied from a finished one; the "A seguir" (Up next) queue lists only `queue_index > 0`. Not investigated further. |
 | `OnDownloadOverview` without `history` | It does `m_DownloadHistory.set(id, overview.history)`; with `undefined`, the speed graph of `/library/downloads` throws `reading 'length'` and Decky's error screen **stays** even after the store is fixed, until Steam restarts. Always pass `history: downloadsStore.DownloadHistory`. |
 | How long the injected state lasts | Memory only: a Steam restart brings back `display_status:11`. During the download injection Steam rewrote `per_client_data` once (back to 11 within 29 s); idle, with a 250 ms poll, it stayed for 90 s. A real implementation has to re-apply on `RegisterForAppOverviewChanges` and on its own timer, like the achievements store. |
+
+## Remote library in Steam's game page (issue #45, measured 2026-11-13, SteamOS 3.9.5, Decky v3.3.1)
+
+What `src/remote-steam.ts` relies on. Measured on the Deck with an `IP Teste Instalar` shortcut (removed afterwards) and then with the two library games of #46 (Test Drive 6, Captain Claw).
+
+| Call / situation | Result |
+|---|---|
+| `per_client_data[0]` after `AddShortcut` | Steam rewrote it (back to `display_status:11`) within the first second of a new shortcut. |
+| What replaces it | Every overview change of the app gives a **new** `per_client_data` object with Steam's values: `SetShortcutName` (same or new name) is enough. So `updateShortcut` on every sync would undo "Instalar"; the plugin calls it only when the spec changed. |
+| `SteamClient.Apps.RegisterForAppOverviewChanges(cb)` | Returns `undefined` (nothing to unregister). `cb` gets one buffer per batch (178 KB on registration, 89 bytes for a rename) and runs after Steam's own handler; re-applying in `setTimeout(0)` from it worked. Steam's `appStore` kept updating with our callback registered. The plugin registers it once per Steam JS context (`globalThis.__insertplayOverviewHook`) and swaps its handler to a no-op on unload. |
+| `display_status` with `installed=false` | 9 "Instalar"; 7 "Pausar" + "BAIXANDO" (no percent by itself); 22 "Retomar" + "DOWNLOAD PAUSADO / Progresso: N%"; 23 "Baixar" + "DOWNLOAD NA FILA / Progresso: N%"; 21 "Atualizar" + "atualizações desativadas… modo off-line"; 18 "Retomar" + "ATUALIZAÇÃO PAUSADA"; 3 "Instalar" + "INSTALANDO". `status_percentage` drives the bar and the percent of 22/23. |
+| "Progresso: N%" under "BAIXANDO" (status 7) | Comes from `downloadsStore.CurrentViewingDownloadOverview` / `LocalDownloadOverview` with `update_appid` = the app and `overall_percent_complete`. A synthetic `GetDownloadItem` did nothing. The plugin shadows those two getters **on the store instance** (no store write) while one of its games downloads and Steam's own overview is idle (`update_appid` 0). With 0 % Steam shows "BAIXANDO" without the percent. |
+| Re-rendering the page | Writing `per_client_data` re-renders nothing. The page reads the overview getters in every state, so the shadowed getters read a mobx box of ours (`observable.box`, found with `findModuleExport`): `box.set` from a timer re-rendered the page at once (10 % → 55 %, "Pausar" → "Retomar", "Instalar" → "Jogar" → "Instalar"), without leaving it. |
+| Buttons | "Instalar" → `SteamClient.Installs.OpenInstallWizard([appid], "0")`; "Retomar" (22) and "Baixar" (23) → `SteamClient.Downloads.ResumeAppUpdate(appid, "0")`; "Pausar" (7) → `SteamClient.Downloads.EnableAllDownloads(false, "0")`, **without an appid** (measured by wrapping every `Downloads`/`Installs`/`Apps` function without forwarding, then clicking). The plugin treats `EnableAllDownloads(false)` as its own only while its overview is the one shown, i.e. Steam had no download. |
+| Uninstall entry | A non-Steam shortcut has none, installed or not: the gear menu has "Gerenciar → Ocultar jogo / Marcar como privado (indisponível) / Remover jogo não Steam / Alterar arte do jogo". "Remover jogo não Steam" deletes the shortcut, so it is not intercepted; uninstalling is the panel's "Desinstalar". `SteamClient.Installs.OpenUninstallWizard` exists but no shortcut menu calls it. |
+| `/library/downloads` while a library game downloads (getters shadowed) | Renders normally ("A seguir (0)", "Não há downloads na fila", Steam's scheduled items); our game is not listed. The top bar shows the download indicator with the game's icon. |
+| Library grid ("Não Steam" tab) | The not-installed Test Drive 6 tile looks like any other (full-color capsule, no dimming). |
+| Steam restart with both shortcuts in "Instalar" | After `StartRestart`, `plugin_loader` active, both back to `installed:false, display_status:9`, same appids, no duplicate, not hidden; "Instalar" on the page (screenshot). |
+
+End to end on the Deck (both games, `out/screens/`): "Instalar" → button pressed → "BAIXANDO / Progresso: N%" (Steam's "Pausar" and "Retomar" paused and resumed the engine) → "Jogar" → the game ran (gamescope screenshot: Test Drive 6 intro, Captain Claw main menu) → closed → panel "Desinstalar" (confirm modal) → folder gone, "Instalar" again. Test Drive 6 (580 MB, 15 files) installed in 57 s and 46 s; Captain Claw (2.3 GB, 27 339 files) in 1064 s, ~135 KB/s while on the small files.
+
+Screenshots of the running game: the plain `screenshot` captures Steam's CEF window, not the game. `XDG_RUNTIME_DIR=/run/user/1000 gamescopectl screenshot /tmp/x.png` (over SSH) captures what is on screen.
 
 ## Plugin installation through Decky (measured 2026-10-24, Decky v3.3.0)
 

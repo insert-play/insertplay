@@ -174,6 +174,11 @@ def _remove_dir(parent: str, name: str) -> bool:
     return True
 
 
+def _url_name(url: str) -> str:
+    """File name of a download URL, for the log (the URL never carries the token)."""
+    return urllib.parse.unquote(url.rsplit("/", 1)[-1])
+
+
 def _remove_file(path: str) -> None:
     try:
         st = os.lstat(path)
@@ -1136,6 +1141,7 @@ class RemoteLibrary:
             except _Net as exc:
                 if attempt >= len(self.backoff):
                     raise RemoteError("unreachable", str(exc)) from None
+                self.log(f"{gid}: {exc}, retry {attempt + 1} in {self.backoff[attempt]} s")
                 self._sleep(self.backoff[attempt], gid, entry)
                 attempt += 1
 
@@ -1348,6 +1354,11 @@ class RemoteLibrary:
                     if attempt >= len(self.backoff):
                         code = "server_changed" if exc.short else "unreachable"
                         raise RemoteError(code, str(exc)) from None
+                    # interruptions are rare: the log shows where the next request resumes
+                    self.log(
+                        f"{gid}: {exc} on {_url_name(url)} at byte {cur['have']}, "
+                        f"retry {attempt + 1} in {self.backoff[attempt]} s"
+                    )
                     self._sleep(self.backoff[attempt], gid, entry)
                     attempt += 1
             fh.flush()
@@ -1365,6 +1376,7 @@ class RemoteLibrary:
             if not have or (resp.getheader("Content-Range") or "").strip() != expected:
                 client.discard(resp)
                 raise RemoteError("server_changed", "unexpected Content-Range")
+            self.log(f"{gid}: resuming {_url_name(url)} at byte {have} of {size} (206)")
         elif have:
             # 200 to a Range request: the server sends the whole file, start over
             fh.seek(0)

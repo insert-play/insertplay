@@ -204,17 +204,32 @@ class Plugin:
         if removed:
             self.log.add("icon", f"removed unused: {', '.join(removed)}")
 
+    def _library_icon(self, source: str, guid: str):
+        """Real path of `source` if it is a regular file in the artwork cache of `guid`
+        (`<runtime>/library/artwork/<guid>/`), else None. Another game's cache, a symlink
+        or anything outside the cache is not accepted here."""
+        folder = os.path.realpath(os.path.join(self.remote.artwork_dir, guid))
+        real = os.path.realpath(source)
+        if os.path.dirname(real) != folder or os.path.islink(source) or not os.path.isfile(real):
+            return None
+        return real
+
     # None = "don't know": the frontend leaves the icon alone
     @guarded(lambda: None)
     async def shortcut_icon(self, steamid: str, appid: int, guid: str, source: str) -> dict:
         """Copies the card's icon to the SSD and tells whether the frontend should apply it with
-        `SetShortcutIcon` (issue #17). Never applied over an icon the user chose."""
-        real = _on_mounted_card(self.mounted, source)
-        if real in self.mounted or not os.path.isfile(real):
-            raise PermissionError(f"{source} is not a file on a card")
+        `SetShortcutIcon` (issue #17). Never applied over an icon the user chose.
+
+        `source` is a file on a mounted card, or the remote library's cached icon of the same
+        guid (#45: the "Instalar" shortcut has its icon before the game is downloaded)."""
         if not GUID_RE.match(guid or ""):
             raise ValueError(f"invalid guid {guid!r}")
         guid = guid.lower()
+        real = self._library_icon(source, guid)
+        if real is None:
+            real = _on_mounted_card(self.mounted, source)
+            if real in self.mounted or not os.path.isfile(real):
+                raise PermissionError(f"{source} is not a file on a card")
         icons_dir = os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "icons")
         # without shortcuts.vdf there's no telling whose the current icon is: raise, don't apply
         current = (await asyncio.to_thread(icons.shortcut_icons, icons.shortcuts_vdf(_steam_root(), steamid))).get(

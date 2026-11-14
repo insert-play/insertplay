@@ -29,6 +29,9 @@ export interface RegistryRecord {
   /** RetroAchievements GameID of the card, kept so the shortcut page still shows the
    *  achievements with the card out (and after a Steam restart). `null` = none. */
   raGameId?: number | null;
+  /** "library": the shortcut of a remote library game (#45). It is never hidden for a missing
+   *  card while the game is in the library; a card with the same guid uses the same shortcut. */
+  source?: "library";
   updatedAt?: number;
 }
 
@@ -179,3 +182,59 @@ export const portableSync = callable<
 >("portable_sync");
 /** A running game keeps its link: the card may come back mid-session. */
 export const portableUnlinkDangling = callable<[running: number[]], number[] | null>("portable_unlink_dangling");
+
+/** Remote library ("Biblioteca Remota", #45): docs/remote-library.md, "Backend RPC contract". */
+export type RemoteState = "not_installed" | "queued" | "downloading" | "paused" | "installed" | "error";
+
+export interface RemoteGame {
+  id: string;
+  name: string;
+  state: RemoteState;
+  percent: number;
+  bytesDone: number;
+  bytesTotal: number;
+  speed: number;
+  filesDone: number;
+  fileCount: number;
+  error: { code: string; message: string } | null;
+  version: string | null;
+  installedVersion: string | null;
+  updateAvailable: boolean;
+  inIndex: boolean;
+  installPath: string;
+  /** Same shape as a card in `current_cards`, `{SD_ROOT}` = `installPath`, artwork from the cache. */
+  shortcut: {
+    guid: string;
+    appName: string;
+    exe: string;
+    startDir: string;
+    launchOptions: string;
+    artwork: Record<string, string>;
+    icon: string | null;
+    game: CardGame | null;
+  };
+}
+
+export type RemoteFailure = { ok: false; code: string; message: string; needed?: number; free?: number };
+export type RemoteResult<T> = ({ ok: true } & T) | RemoteFailure;
+
+/** `null` everywhere = backend failure ("don't know", never "no games"). */
+export const remoteGetConfig = callable<[], { url: string | null; tokenSet: boolean } | null>("remote_get_config");
+/** `token`: `null` keeps the saved one, `""` clears it. */
+export const remoteSetConfig = callable<
+  [url: string, token: string | null],
+  RemoteResult<{ url: string | null; tokenSet: boolean }> | null
+>("remote_set_config");
+export const remoteRefresh = callable<[], RemoteResult<{ games: RemoteGame[]; generatedAt: string | null }> | null>(
+  "remote_refresh",
+);
+export const remoteGames = callable<
+  [],
+  RemoteResult<{ games: RemoteGame[]; stale: boolean; fetchedAt: number | null }> | null
+>("remote_games");
+export const remoteInstall = callable<[id: string], RemoteResult<{ game: RemoteGame }> | null>("remote_install");
+export const remotePause = callable<[id: string], RemoteResult<{ game: RemoteGame }> | null>("remote_pause");
+export const remoteResume = callable<[id: string], RemoteResult<{ game: RemoteGame }> | null>("remote_resume");
+export const remoteCancel = callable<[id: string], RemoteResult<{ game: RemoteGame }> | null>("remote_cancel");
+export const remoteUninstall = callable<[id: string], RemoteResult<{ game: RemoteGame }> | null>("remote_uninstall");
+export const remoteArtworkBase64 = callable<[id: string, kind: string], string>("remote_artwork_base64");
