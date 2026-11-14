@@ -24,7 +24,7 @@
 import { findInReactTree } from "@decky/ui";
 import { cloneElement, createElement, memo } from "react";
 import { logAdd } from "./backend";
-import { isHidden } from "./steam";
+import { isHidden, shortcutExists } from "./steam";
 
 declare const collectionStore: any;
 
@@ -136,7 +136,9 @@ function syncUnsafe(): void {
   }
   // hidden apps are dropped by `visibleApps` anyway; leaving them out keeps the count right
   // too. isHidden throws while the collections load: caught by syncTabs, which retries.
-  const shown = (ids: number[]) => ids.filter((appid) => !isHidden(appid));
+  // A shortcut deleted in Steam drops out here, on the sync Steam's own recompute triggers,
+  // without waiting for the next plugin event.
+  const shown = (ids: number[]) => ids.filter((appid) => shortcutExists(appid) && !isHidden(appid));
   const installed = shown(members.installed);
   const ids = merged(all, [...shown(members.all), ...installed]);
   const localIds = merged(local, installed);
@@ -240,7 +242,21 @@ function wrapRoute(route: any): any {
 function LibraryRoute({ __insertplayInner, ...props }: any) {
   const out = __insertplayInner(props);
   try {
-    if (active && typeof out?.type === "function" && !ours.has(out.type)) out.type = wrapRoute(out.type);
+    const type = out?.type;
+    // Only Steam's library route component (a plain function, measured by this marker): another
+    // plugin's patch or a Steam update may put something else here, e.g. a class component that
+    // cannot be called as a function.
+    if (
+      active &&
+      typeof type === "function" &&
+      !ours.has(type) &&
+      !type.prototype?.isReactComponent &&
+      String(type).includes("GetLastLibraryTab")
+    ) {
+      out.type = wrapRoute(type);
+    } else if (active && typeof type === "function" && !ours.has(type)) {
+      reportOnce("library route", new Error("unexpected library route component"));
+    }
   } catch (err) {
     reportOnce("library route", err);
   }
