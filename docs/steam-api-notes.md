@@ -200,6 +200,32 @@ End to end on the Deck (both games, `out/screens/`): "Instalar" → button press
 
 Screenshots of the running game: the plain `screenshot` captures Steam's CEF window, not the game. `XDG_RUNTIME_DIR=/run/user/1000 gamescopectl screenshot /tmp/x.png` (over SSH) captures what is on screen.
 
+## Library tabs "Todos os jogos" / "Instalados" (issue #52, measured 2026-11-14, SteamOS 3.9.5, Decky v3.3.1)
+
+What `src/library-tabs.tsx` relies on. Measured on the Deck with a temporary build and `IP Teste Abas` / `IP Teste Coleção`, removed afterwards.
+
+**Why shortcuts are missing.** `collectionStore.allGamesCollection` (id `my-games`, "Todos") is a mobx `computed` (keepAlive): `GetCollectionForAppType(game).allApps`, plus `.filter(a => !a.BIsShortcut())` when the gamepad UI is active. `localGamesCollection` (`local-install`) is the same with `local_per_client_data?.installed`. Both, and `collectionStore.GetCollection`, are own instance properties, non-configurable and non-writable, so the store cannot be patched. The Filter menu (X) only narrows a collection (features, status Installed/ReadyToPlay/PlayedPreviously/Unplayed/ValidPlatform/Private, app type, store tags): no option brings shortcuts back.
+
+**Where the tabs come from.** Route `/library`: Decky wrapper → Steam's library route component (source has `GetLastLibraryTab`) → a `React.memo` whose inner function (source has `rgTabs`) renders the tabs element (`props.tabs`, an array). Tab shape: `{id: "AllGames" | "Installed" | …, title, renderTabAddon: () => <Count collection/>, content: <Provider>{<Grid collection eSortBy …/>}</Provider>, footer}`. The grid reads `collection.visibleApps` and passes `collection.id` to the sort/filter UI.
+
+| Call / situation | Result |
+|---|---|
+| Swap `collection` in the AllGames/Installed `content` and `renderTabAddon` for an object of Steam's own class (`new (Object.getPrototypeOf(collectionStore.allGamesCollection).constructor)(id, name)`) filled with `SetApps(steam ids + ours)` | Todos 309 → 312, Instalados 3 → 4 (screenshots: Captain Claw in the Todos grid, an `IP Teste` shortcut in Instalados). The not-installed remote games appear only in Todos. |
+| `SetApps` on our object from a timer | The grid and the tab count update at once, without leaving the page, with no render of the tab component (`m_rgApps` is observable). |
+| Steam recomputes its collection (`AddShortcut` / `RemoveShortcut` of another app) | New collection identity, noticed in the next tab render; a `setTimeout(sync, 0)` rebuilt ours. |
+| Library open and idle for 60 s | 0 renders, 0 syncs. |
+| `routerHook.removePatch` | Back to 309/3 on the next router render (leave and re-enter the library). |
+| Deploy and 2 × `StartRestart` | Re-applied at plugin load; 312/4 with the right contents. |
+| Decky's element passed to the patch | Its `type` is a new arrow function on every router pass: the wrapper we put in its place must be a module-level component, or the library remounts. |
+| `collectionStore.BIsHidden` at plugin load | Threw `reading 'get'` right after a deploy and after one of two restarts (collections not loaded yet). Unguarded, it aborted `definePlugin`. |
+| `per_client_data.installed` of Remote Library shortcuts at plugin load | Still Steam's `true` until remote-steam re-applies "Instalar": "installed" must come from the plugin's state. |
+
+How the plugin uses it: one collection object per tab, keeping Steam's id (sort and filter keep working), rebuilt by `syncTabs` only outside a render (plugin events through `refreshTabs` in `flow.ts`, and a `setTimeout(0)` when a render sees a new Steam collection) and only when the id list changed. A tab is swapped only while its collection id is still the one ours was built from; a shape not found leaves the tab as Steam built it and is logged once. `syncTabs` is retried every second (up to 2 minutes) while the collections are not loaded.
+
+**Collections (measured, not used).** `NewUnsavedCollection(name, undefined, overviews)` + `SaveCollection`; `AddOrRemoveApp(appids, add, id)` saves by itself; `DeleteCollection(id)` leaves `is_deleted: true` in the cloud. `ToStorageFormat()` splits members: Steam apps in `roamingData` (cloud, `config/cloudstorage/cloud-storage-namespace-1.json`, key `user-collections.<id>`), shortcuts in `localData` (`SteamClient.Storage` key `user-collections`, i.e. `localconfig.vdf`, this device only). A shortcut member survived a Steam restart. `SaveCollection` of a new collection first deletes any user collection with the same name.
+
+Not measured: the Steam Machine (other plugins, cloud view of collections), a physical A press on a remote tile, search and home shelves.
+
 ## Plugin installation through Decky (measured 2026-10-24, Decky v3.3.0)
 
 Not a Steam API, but it is the other undocumented global the plugin uses (`src/selfupdate.ts`).
