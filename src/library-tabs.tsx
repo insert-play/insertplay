@@ -91,6 +91,8 @@ export function syncTabs(): void {
       }
     } else {
       reportOnce("sync", err);
+      // the next event or library render starts a new bounded cycle instead of never retrying
+      retries = 0;
     }
   }
 }
@@ -119,14 +121,18 @@ function syncUnsafe(): void {
   const all = store.allGamesCollection;
   const local = store.localGamesCollection;
   if (!Array.isArray(all?.m_rgApps) || !Array.isArray(local?.m_rgApps)) throw new Error("Steam collections not found");
-  if (!mineAll) {
+  // built in locals and published only after both `SetApps` succeeded: a sync that throws
+  // midway (isHidden while the collections load) leaves Steam's own collections in the tabs
+  // instead of an empty one of ours
+  let a = mineAll;
+  let l = mineLocal;
+  const fresh = !a;
+  if (fresh) {
     const Collection = Object.getPrototypeOf(all)?.constructor;
     if (typeof Collection !== "function") throw new Error("collection class not found");
-    const a = new Collection(all.id, all.displayName);
-    const l = new Collection(local.id, local.displayName);
+    a = new Collection(all.id, all.displayName);
+    l = new Collection(local.id, local.displayName);
     if (typeof a.SetApps !== "function") throw new Error("SetApps missing");
-    mineAll = a;
-    mineLocal = l;
   }
   // hidden apps are dropped by `visibleApps` anyway; leaving them out keeps the count right
   // too. isHidden throws while the collections load: caught by syncTabs, which retries.
@@ -136,8 +142,10 @@ function syncUnsafe(): void {
   const localIds = merged(local, installed);
   const keyAll = ids.join(",");
   const keyLocal = localIds.join(",");
-  if (keyAll !== appliedAll) mineAll.SetApps(ids);
-  if (keyLocal !== appliedLocal) mineLocal.SetApps(localIds);
+  if (fresh || keyAll !== appliedAll) a.SetApps(ids);
+  if (fresh || keyLocal !== appliedLocal) l.SetApps(localIds);
+  mineAll = a;
+  mineLocal = l;
   appliedAll = keyAll;
   appliedLocal = keyLocal;
   srcAll = all;
@@ -149,7 +157,8 @@ function patchTabs(out: any): void {
   if (!active) return;
   const store = collections();
   if (!mineAll || store?.allGamesCollection !== srcAll || store?.localGamesCollection !== srcLocal) scheduleSync();
-  if (!mineAll) return;
+  // set together, only by a sync that fully succeeded
+  if (!mineAll || !srcAll) return;
   const el = findInReactTree(out, (x: any) => Array.isArray(x?.props?.tabs));
   if (!el) throw new Error("tabs element not found");
   const swap: Record<string, any> = { AllGames: mineAll, Installed: mineLocal };
