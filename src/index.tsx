@@ -491,8 +491,8 @@ function RemoteLibrarySection() {
     setBusy(true);
     setMessage(null);
     try {
-      // an empty token field keeps the saved token (write-only field)
-      const result = await remoteSetConfig(url.trim(), token ? token.trim() : null);
+      // an empty (or blank) token field keeps the saved token (write-only field)
+      const result = await remoteSetConfig(url.trim(), token.trim() || null);
       if (!result) throw new Error("veja o log de eventos");
       if (!result.ok) {
         setMessage(result.message);
