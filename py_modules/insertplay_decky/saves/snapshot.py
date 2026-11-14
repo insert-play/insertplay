@@ -173,15 +173,15 @@ def _read_manifest(tar: tarfile.TarFile) -> dict:
     return data
 
 
-def _allowed(rel: str, spec: SaveSpec) -> bool:
-    """The archive may only write inside the strategy's save roots, and never an excluded path."""
+def _place(rel: str, spec: SaveSpec):
+    """"write" for a path inside the strategy's save roots, "skip" for one this device excludes
+    (another device, or an older `saves` block, synced it), None for anything else."""
     for pattern in spec.patterns:
         depth = len(pattern.split("/"))
         if matches(pattern, rel):
-            parts = rel.split("/")
-            inner = "/".join(parts[depth:])
-            return not (inner and excluded(inner, spec.exclude))
-    return False
+            inner = "/".join(rel.split("/")[depth:])
+            return "skip" if inner and excluded(inner, spec.exclude) else "write"
+    return None
 
 
 def _remove_tree(path: str) -> None:
@@ -206,13 +206,17 @@ def restore(root: str, spec: SaveSpec, archive: str, expected_hash: str = None) 
             if not isinstance(listing, list):
                 raise SnapshotError("archive manifest without files")
             expected = {}
+            skipped = set()
             for item in listing:
                 if not (isinstance(item, list) and len(item) == 3):
                     raise SnapshotError("bad archive manifest")
                 rel = check_rel(item[0])
-                if not _allowed(rel, spec):
+                place = _place(rel, spec)
+                if place is None:
                     raise SnapshotError(f"{rel} is outside the game's save folders")
-                if _through_link(root, rel):
+                if place == "skip":
+                    skipped.add(rel)
+                elif _through_link(root, rel):
                     raise SnapshotError(f"{rel} goes through a symlink on this device")
                 expected[rel] = (int(item[1]), str(item[2]))
             if list_hash([[p, s, h] for p, (s, h) in expected.items()]) != manifest.get("hash"):
@@ -230,11 +234,20 @@ def restore(root: str, spec: SaveSpec, archive: str, expected_hash: str = None) 
                 rel = member.name[len("files/"):]
                 if rel not in expected or rel in seen:
                     raise SnapshotError(f"unexpected archive file {rel!r}")
-                dest = os.path.join(staging, rel)
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
                 src = tar.extractfile(member)
                 h = hashlib.sha256()
                 size = 0
+                if rel in skipped:
+                    # not written here, still checked: a damaged archive is refused whole
+                    for chunk in iter(lambda: src.read(CHUNK), b""):
+                        h.update(chunk)
+                        size += len(chunk)
+                    if (size, h.hexdigest()) != expected[rel]:
+                        raise SnapshotError(f"{rel} damaged in the archive")
+                    seen[rel] = None
+                    continue
+                dest = os.path.join(staging, rel)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with open(dest, "wb") as out:
                     for chunk in iter(lambda: src.read(CHUNK), b""):
                         h.update(chunk)
@@ -248,13 +261,14 @@ def restore(root: str, spec: SaveSpec, archive: str, expected_hash: str = None) 
                 raise SnapshotError("archive is missing files")
         # check every destination before touching anything: a failure halfway would leave a
         # save mixed from two devices
-        for rel in seen:
+        written = {rel: mtime for rel, mtime in seen.items() if rel not in skipped}
+        for rel in written:
             blocked = _blocked(root, rel)
             if blocked:
                 raise SnapshotError(f"{blocked} is in the way of {rel}")
         old = list_files(root, spec)
         # into place: the archive's files first, then the save files it doesn't have
-        for rel in sorted(seen):
+        for rel in sorted(written):
             dest = os.path.join(root, rel)
             parent = os.path.dirname(dest)
             if os.path.islink(dest) or os.path.isdir(dest):
@@ -262,7 +276,7 @@ def restore(root: str, spec: SaveSpec, archive: str, expected_hash: str = None) 
             os.makedirs(parent, exist_ok=True)
             os.replace(os.path.join(staging, rel), dest)
         for rel in old:
-            if rel not in seen:
+            if rel not in written:
                 try:
                     os.remove(os.path.join(root, rel))
                 except OSError:
@@ -272,4 +286,6 @@ def restore(root: str, spec: SaveSpec, archive: str, expected_hash: str = None) 
     finally:
         _remove_tree(staging)
     roots = manifest.get("roots") if isinstance(manifest.get("roots"), list) else []
-    return Snapshot(roots, sorted((rel, size, digest, seen[rel]) for rel, (size, digest) in expected.items()))
+    return Snapshot(
+        roots, sorted((rel, size, digest, written[rel]) for rel, (size, digest) in expected.items() if rel in written)
+    )
