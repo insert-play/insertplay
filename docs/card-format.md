@@ -82,6 +82,22 @@ Optional block, at the top level next to `shortcut`, that says which game and em
 - An invalid value is ignored without refusing the card: the shortcut still works, only that field is missing (`rpc current_cards` shows the block as the plugin read it).
 - For a game with subsets, use the main game's ID. Subsets are not shown.
 
+#### RetroAchievements checklist for a new card
+
+Every card (SD card or remote library folder) whose emulator supports RetroAchievements should come ready for it:
+
+1. **Log the emulator in** with the user's account, so the token travels with the card. Where each one keeps it:
+   - DuckStation: `duckstation/settings.ini`, section `[Cheevos]`;
+   - PCSX2: `PCSX2/inis/secrets.ini`;
+   - Dolphin: `dolphin/User/Config/RetroAchievements.ini` (`Username`, `ApiToken`). The token is written only when Dolphin closes after a successful login, and the login needs Dolphin's window: start it once without `-b -e`.
+2. **Take the game ID from the emulator's log**, not from the title. The emulator hashes the disc and prints the game it found:
+   - PCSX2 `PCSX2/logs/emulog.txt`: `Achievements: Identified game: 2782 "God of War"`;
+   - Dolphin `User/Logs/dolphin.log` (with `RetroAchievements = True` in `User/Config/Logger.ini`): `Identified game: 95 "New Super Mario Bros. Wii"`.
+
+   A card named "God of War II" turned out to hold God of War 1 this way.
+3. **Put the ID in `game.retroAchievements.gameId`.** Without it, the plugin shows no achievements even when the emulator unlocks them.
+4. The token is a credential: it goes into the card and the library on purpose, so a fresh install is already logged in. Keep the library server private (token, LAN only).
+
 ### `saves`
 
 Optional block, at the top level, that says where the game keeps its save, for save sync through the remote library ([remote-library.md](remote-library.md#saves)). A card without it still syncs when the plugin can infer the strategy.
