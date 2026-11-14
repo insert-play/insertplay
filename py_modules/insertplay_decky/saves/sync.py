@@ -407,7 +407,10 @@ class Sync:
             return self._decide("push", snap, attempts=1)
 
     def _offline(self, op: str, snap, message: str) -> dict:
-        if snap is not None and not snap.empty and snap.hash != self._base("lastLocalHash"):
+        # a launch without history has nothing to upload yet: the files may be the install's
+        # own (an untouched shipped save must never become a pending upload)
+        played_or_known = op == "push" or self._base("lastServerHash")
+        if snap is not None and not snap.empty and snap.hash != self._base("lastLocalHash") and played_or_known:
             self.state["pending"] = True
             self._save()
         return self._record(op, "offline", message, hash=snap.hash if snap is not None else None)
@@ -423,6 +426,12 @@ class Sync:
             if meta.get("hash") == snap.hash:
                 self._synced(snap.hash, snap.hash, meta.get("rev"))
                 return self._record(op, "unchanged", hash=snap.hash, rev=meta.get("rev"))
+            # First sync of this game on this device, at launch: the local save has no history
+            # and its file times can't be trusted (a save shipped with the game, like Captain
+            # Claw's CLAW.USR, has the time of the download). Not on a push, and not with an
+            # upload pending: then the device has played.
+            first_sync = (op == "pull" and not snap.empty and not self._base("lastServerHash")
+                          and not self.state.get("pending"))
             local_changed = not snap.empty and snap.hash != self._base("lastLocalHash")
             server_changed = meta.get("hash") != self._base("lastServerHash")
             if not local_changed and not server_changed and not snap.empty:
@@ -439,12 +448,24 @@ class Sync:
                 result = self._upload(snap, meta.get("rev"), self.config["backup"])
                 return self._record(op, "uploaded", hash=snap.hash, rev=result["meta"]["rev"], size=snap.size,
                                     backup=result.get("backup"))
-            # both changed: the newest wins, the loser always goes to the backups
-            if float(meta.get("newestMtime") or 0) > snap.newest:
+            # both changed: the newest wins, the loser always goes to the backups. On a first
+            # sync the server wins, as long as the local save could be kept in the backups
+            # (else the times decide, as before: nothing is lost without a copy)
+            server_wins = float(meta.get("newestMtime") or 0) > snap.newest
+            backup = None
+            message = ""
+            if first_sync and not server_wins:
                 backup = self._backup_local(snap)
+                if backup.get("stored"):
+                    server_wins = True
+                    message = "first sync on this device: the server's save wins"
+            if server_wins:
+                if backup is None:
+                    backup = self._backup_local(snap)
                 restored = self._download(meta.get("hash"))
-                return self._record(op, "conflict_downloaded", hash=restored.hash, rev=self.state.get("lastRev"),
-                                    fromDevice=meta.get("device"), size=restored.size, backup=backup)
+                return self._record(op, "conflict_downloaded", message, hash=restored.hash,
+                                    rev=self.state.get("lastRev"), fromDevice=meta.get("device"),
+                                    size=restored.size, backup=backup)
             result = self._upload(snap, meta.get("rev"), True)
             return self._record(op, "conflict_uploaded", hash=snap.hash, rev=result["meta"]["rev"], size=snap.size,
                                 backup=result.get("backup"))

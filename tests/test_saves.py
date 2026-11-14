@@ -289,10 +289,80 @@ def test_conflict_local_newer_uploads_and_server_copy_is_kept(server, tmp_path):
     machine = Device(tmp_path, "machine", server.url, CLAW, backup=False)
     write(deck.root, "game/CLAW.USR", "old", mtime=1000)
     deck.pull()
+    machine.pull()  # the Machine has synced once: it has a history
+    write(deck.root, "game/CLAW.USR", "deck", mtime=2000)
+    deck.push()
     write(machine.root, "game/CLAW.USR", "newer", mtime=9000)
     r = machine.pull()
     assert r["result"] == "conflict_uploaded" and r["backup"]["stored"] is True
     assert deck.pull()["result"] == "downloaded" and read(deck.root, "game/CLAW.USR") == b"newer"
+
+
+def test_first_sync_server_wins_over_a_newer_installed_save(server, tmp_path):
+    # Captain Claw (#63): a fresh install brings the library's CLAW.USR with the download's
+    # time, newer than the real save; on the device's first sync the server's save wins
+    deck = Device(tmp_path, "deck", server.url, CLAW, backup=False)
+    machine = Device(tmp_path, "machine", server.url, CLAW, backup=False)
+    write(deck.root, "game/CLAW.USR", "world5", mtime=1000)
+    deck.pull()
+    write(machine.root, "game/CLAW.USR", "worlds1-4 from the install", mtime=9000)
+    r = machine.pull()
+    assert r["result"] == "conflict_downloaded" and "first sync" in r["message"]
+    assert read(machine.root, "game/CLAW.USR") == b"world5"
+    assert r["backup"]["stored"] is True  # the installed one is kept, backups off or not
+    # a push without history (offline launch, then played) still goes by time
+    machine2 = Device(tmp_path, "machine2", server.url, CLAW)
+    write(machine2.root, "game/CLAW.USR", "played offline", mtime=9500)
+    assert machine2.push()["result"] == "conflict_uploaded"
+
+
+def _dead_url():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    url = f"http://127.0.0.1:{s.getsockname()[1]}/"
+    s.close()
+    return url
+
+
+def test_offline_first_launch_never_queues_the_installed_save(server, tmp_path):
+    deck = Device(tmp_path, "deck", server.url, CLAW)
+    write(deck.root, "game/CLAW.USR", "world5", mtime=1000)
+    deck.pull()
+    machine = Device(tmp_path, "machine", _dead_url(), CLAW)
+    write(machine.root, "game/CLAW.USR", "installed", mtime=9000)
+    assert machine.pull()["result"] == "offline"
+    assert sync.pending_keys(machine.paths) == []  # nothing queued from the install's file
+    sync.write_config(machine.paths, server.url, TOKEN, True, True, "machine")
+    r = machine.pull()
+    assert r["result"] == "conflict_downloaded" and read(machine.root, "game/CLAW.USR") == b"world5"
+
+
+def test_progress_played_offline_without_history_is_not_overwritten(server, tmp_path):
+    deck = Device(tmp_path, "deck", server.url, CLAW)
+    write(deck.root, "game/CLAW.USR", "old", mtime=1000)
+    deck.pull()
+    machine = Device(tmp_path, "machine", _dead_url(), CLAW)
+    write(machine.root, "game/CLAW.USR", "installed", mtime=500)
+    machine.pull()
+    write(machine.root, "game/CLAW.USR", "played offline", mtime=9000)
+    assert machine.push()["result"] == "offline" and sync.pending_keys(machine.paths) == [KEY]
+    sync.write_config(machine.paths, server.url, TOKEN, True, True, "machine")
+    r = machine.pull()  # relaunched before the retry: the pending session goes by time and wins
+    assert r["result"] == "conflict_uploaded"
+    assert server.store.meta(KEY)["device"] == "machine"
+
+
+def test_first_sync_keeps_a_save_that_cannot_be_backed_up(server, tmp_path):
+    server.store.backup_limit = 10  # bytes: the local save can't be kept
+    deck = Device(tmp_path, "deck", server.url, CLAW)
+    write(deck.root, "game/CLAW.USR", os.urandom(3000), mtime=1000)
+    deck.pull()
+    machine = Device(tmp_path, "machine", server.url, CLAW)
+    mine = os.urandom(3000)
+    write(machine.root, "game/CLAW.USR", mine, mtime=9000)
+    r = machine.pull()
+    assert r["result"] == "conflict_uploaded"  # by time, since no copy could be kept
+    assert read(machine.root, "game/CLAW.USR") == mine
 
 
 def test_push_after_the_other_device_uploaded(server, tmp_path):

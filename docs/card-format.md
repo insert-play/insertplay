@@ -107,6 +107,7 @@ Optional block, at the top level, that says where the game keeps its save, for s
 
 - Keys are case-insensitive. An unknown strategy, or `custom-path` without `paths`, makes the game sync nothing and the plugin shows an error notification; the game still opens.
 - `paths` and `exclude` may use `*` in one segment (as in the Dolphin default). Absolute paths and `..` are refused.
+- A card going into the remote library should not carry a save in its game files (Captain Claw's `game/CLAW.USR` was removed from the library copy for this): every install would bring it. Save sync copes anyway (on a device's first sync the server's save wins), but a fresh install then starts from that old save until the first sync.
 - Settings and caches that differ per device (resolution, renderer) belong in `exclude`, or they travel with the save: DiRT 2 keeps `hardwaresettings/` next to its saves, Alan Wake 2 keeps `cache/`, `renderer.ini` and `eos.log` next to its slots.
 
 ## `shortcut-identity.json`
