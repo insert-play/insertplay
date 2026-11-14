@@ -441,7 +441,7 @@ Backups are kept within `INSERTPLAY_SAVE_BACKUP_MB` per game (default 50), oldes
 
 In order:
 
-1. the `saves` block of the game's `steam-shortcut.json` ([card-format.md](card-format.md#saves));
+1. the `saves` block of the game's manifest **in the current index** (the plugin hands it to the wrapper in `saves/hints/<key>.json`), so a block fixed in the library reaches games installed before the fix; without an index entry, the block of the installed `steam-shortcut.json` (or the card's) ([card-format.md](card-format.md#saves));
 2. `saves/<key>/strategy.json` on the server, written by an earlier inference;
 3. **inference**: with `game.emulator` declared, that emulator's strategy; with a `prefix/` folder and no `game` block, `proton-default`. It counts only when the strategy's folder exists and has at least one file. The result (strategy and its default `exclude`) is written to the server, never to the manifest: the library stays read-only.
 
@@ -453,7 +453,7 @@ The sha256 of the sorted list of `(path, size, sha256)` of every regular file of
 
 ### Client
 
-State per key on the device: `lastSyncedHash` (the hash both sides had after the last sync), `lastRev` (the server rev then) and a pending upload flag.
+State per key on the device: `lastLocalHash` and `lastServerHash` (each side's hash after the last sync), `lastRev` (the server rev then) and a pending upload flag. The two hashes differ only after a download that left out paths this device excludes (they stay on the server, see below); "local changed" and "server changed" in the table compare against them.
 
 **When the game opens**, before the game itself:
 
@@ -465,7 +465,7 @@ State per key on the device: `lastSyncedHash` (the hash both sides had after the
 | changed | changed too (or no `lastSyncedHash` and different) | the newer `newestMtime` wins; the loser goes to the backups |
 | unreachable (~10 s) | | play with the local save; the upload stays pending |
 
-A download is checked file by file and as a whole (the archive carries its file list and hash), extracted to a staging folder in the game folder (`.insertplay-saves.partial`), then each file is renamed into place and the save files the archive doesn't have are removed. It only writes inside the strategy's save folders, never an excluded path, never through a symlink. Excluded paths and symlinks already on the device stay as they are. A local save that would be overwritten goes to the server's backups first (when backups are on, and always for a conflict loser), unless it is larger than the server's backup limit.
+A download is checked file by file and as a whole (the archive carries its file list and hash), extracted to a staging folder in the game folder (`.insertplay-saves.partial`), then each file is renamed into place and the save files the archive doesn't have are removed. It only writes inside the strategy's save folders and never through a symlink; a path this device excludes (synced by another device or by an older `saves` block) is skipped, not written. A path outside the save folders refuses the whole archive. Excluded paths and symlinks already on the device stay as they are. A local save that would be overwritten goes to the server's backups first (when backups are on, and always for a conflict loser), unless it is larger than the server's backup limit.
 
 **When the game closes**, the save is uploaded if its hash changed. A pending upload is retried on the next close, when the plugin starts and periodically. An upload never runs while the game is open (a lock per key, held by the launch wrapper for the whole game).
 
@@ -494,7 +494,8 @@ The plugin also uploads when Steam reports the game closed, as a safety net. The
 | `~/.local/share/insertplay/bin/insertplay-run` | The wrapper (bash). |
 | `~/.local/share/insertplay/lib/` | `insertplay-saves.py` and a copy of `py_modules/insertplay_decky/saves/` as `insertplay_saves/`, run with the system `python3 -I`. |
 | `~/.local/share/insertplay/saves/config.json` | Server URL and token, `sync`, `backup`, device name (mode `0600`). Written by the plugin from its settings. |
-| `~/.local/share/insertplay/saves/state/<key>.json` | `lastSyncedHash`, `lastRev`, `pending`, the game folder last used and the strategy last read from the server or inferred (used offline). |
+| `~/.local/share/insertplay/saves/state/<key>.json` | `lastLocalHash`, `lastServerHash`, `lastRev`, `pending`, the game folder last used and the strategy last read from the server or inferred (used offline). |
+| `~/.local/share/insertplay/saves/hints/<key>.json` | The index's `saves` block of each library game, rewritten at plugin load and on every index refresh. |
 | `~/.local/share/insertplay/saves/last/<key>.json` | Result of the last operation (`op`, `result`, `message`, `at`, `strategy`, `source`, `hash`, `rev`…). |
 | `~/.local/share/insertplay/saves/sync.log` | One line per operation. |
 

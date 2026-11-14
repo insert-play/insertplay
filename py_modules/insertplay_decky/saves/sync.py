@@ -4,7 +4,9 @@ Files under `home` (`~/.local/share/insertplay`), shared by the launch wrapper's
 the plugin backend:
 
     saves/config.json        url, token, sync, backup, device (mode 0600, written by the plugin)
-    saves/state/<key>.json   lastSyncedHash, lastRev, pending, root, spec
+    saves/state/<key>.json   lastLocalHash, lastServerHash, lastRev, pending, root, spec
+    saves/hints/<key>.json   the library index's `saves` block (written by the plugin): wins over
+                             the installed manifest, which only changes on reinstall
     saves/last/<key>.json    result of the last operation, read by the panel and the toasts
     saves/locks/<key>.lock   flock: held by the wrapper for the whole game
     saves/tmp/               archives being built or downloaded
@@ -78,6 +80,9 @@ class Paths:
     def lock(self, key: str) -> str:
         return os.path.join(self.saves, "locks", f"{key}.lock")
 
+    def hint(self, key: str) -> str:
+        return os.path.join(self.saves, "hints", f"{key}.json")
+
 
 def load_config(paths: Paths) -> dict:
     data = _read_json(paths.config) or {}
@@ -104,6 +109,20 @@ def load_state(paths: Paths, key: str) -> dict:
 
 def save_state(paths: Paths, key: str, state: dict) -> None:
     _write_json(paths.state(key), {**state, "updatedAt": time.time()})
+
+
+def write_hints(paths: Paths, blocks: dict) -> None:
+    """`{key: saves block or None}` from the library index. A game without a block loses its
+    hint (inference or the server decide); keys not given are left as they are."""
+    for key, block in blocks.items():
+        if not KEY_RE.match(key or ""):
+            continue
+        path = paths.hint(key)
+        if isinstance(block, dict):
+            if _read_json(path) != block:
+                _write_json(path, block)
+        elif os.path.exists(path):
+            os.remove(path)
 
 
 def last_result(paths: Paths, key: str):
@@ -207,10 +226,21 @@ class Sync:
                 pass
         return record
 
-    def _synced(self, snap_hash: str, rev) -> None:
-        self.state.update({"lastSyncedHash": snap_hash, "lastRev": str(rev) if rev is not None else None})
-        self.state["pending"] = False
+    def _synced(self, local_hash: str, server_hash: str, rev) -> None:
+        """Both sides after a sync. They differ only after a download that left out paths this
+        device excludes: the server keeps them, this device doesn't have them."""
+        self.state.update({
+            "lastLocalHash": local_hash,
+            "lastServerHash": server_hash,
+            "lastRev": str(rev) if rev is not None else None,
+            "pending": False,
+        })
+        self.state.pop("lastSyncedHash", None)
         self._save()
+
+    def _base(self, side: str):
+        """Hash of this side at the last sync (state written before the split: one hash)."""
+        return self.state.get(side) or self.state.get("lastSyncedHash")
 
     def _save(self) -> None:
         self.state["root"] = self.root
@@ -239,7 +269,8 @@ class Sync:
         """Manifest block, then the server's strategy.json, then the one cached from an
         earlier run, then inference (written to the server). Raises StrategyError."""
         manifest = read_manifest(self.root)
-        spec = manifest_spec(manifest)
+        hint = _read_json(self.paths.hint(self.key))
+        spec = from_block(hint, "manifest") if hint is not None else manifest_spec(manifest)
         if spec is not None:
             return spec, False
         offline = False
@@ -279,7 +310,7 @@ class Sync:
         finally:
             if os.path.exists(path):
                 os.remove(path)
-        self._synced(snap.hash, result["meta"]["rev"])
+        self._synced(snap.hash, snap.hash, result["meta"]["rev"])
         return result
 
     def _backup_local(self, snap: Snapshot) -> dict:
@@ -304,7 +335,7 @@ class Sync:
         finally:
             if os.path.exists(path):
                 os.remove(path)
-        self._synced(restored.hash, got["rev"])
+        self._synced(restored.hash, got["hash"] or expected_hash, got["rev"])
         return restored
 
     # ---- operations
@@ -345,7 +376,7 @@ class Sync:
         snap = self._snap = scan(self.root, self.spec)
         if snap.empty:
             return self._record("push", "empty")
-        if snap.hash == self.state.get("lastSyncedHash"):
+        if snap.hash == self._base("lastLocalHash"):
             cleared = bool(self.state.get("pending"))
             if cleared:
                 self.state["pending"] = False
@@ -355,7 +386,7 @@ class Sync:
             return self._record("push", "unchanged", hash=snap.hash, rev=self.state.get("lastRev"), persist=cleared)
         if offline:
             return self._offline("push", snap, "server unreachable")
-        rev = self.state.get("lastRev") if self.state.get("lastSyncedHash") else None
+        rev = self.state.get("lastRev") if self._base("lastServerHash") else None
         try:
             result = self._upload(snap, rev, self.config["backup"])
             return self._record("push", "uploaded", hash=snap.hash, rev=result["meta"]["rev"],
@@ -365,14 +396,13 @@ class Sync:
             return self._decide("push", snap, attempts=1)
 
     def _offline(self, op: str, snap, message: str) -> dict:
-        if snap is not None and not snap.empty and snap.hash != self.state.get("lastSyncedHash"):
+        if snap is not None and not snap.empty and snap.hash != self._base("lastLocalHash"):
             self.state["pending"] = True
             self._save()
         return self._record(op, "offline", message, hash=snap.hash if snap is not None else None)
 
     def _decide(self, op: str, snap: Snapshot, attempts: int) -> dict:
         meta = self.client.meta(self.key)
-        base = self.state.get("lastSyncedHash")
         try:
             if meta is None:
                 if snap.empty:
@@ -380,10 +410,13 @@ class Sync:
                 result = self._upload(snap, None, False)
                 return self._record(op, "uploaded", hash=snap.hash, rev=result["meta"]["rev"], size=snap.size)
             if meta.get("hash") == snap.hash:
-                self._synced(snap.hash, meta.get("rev"))
+                self._synced(snap.hash, snap.hash, meta.get("rev"))
                 return self._record(op, "unchanged", hash=snap.hash, rev=meta.get("rev"))
-            local_changed = not snap.empty and snap.hash != base
-            server_changed = meta.get("hash") != base
+            local_changed = not snap.empty and snap.hash != self._base("lastLocalHash")
+            server_changed = meta.get("hash") != self._base("lastServerHash")
+            if not local_changed and not server_changed:
+                # same as the last sync on both sides (the device excludes part of it)
+                return self._record(op, "unchanged", hash=snap.hash, rev=meta.get("rev"))
             if not local_changed:
                 backup = self._backup_local(snap) if (self.config["backup"] and not snap.empty) else None
                 restored = self._download(meta.get("hash"))

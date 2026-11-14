@@ -223,12 +223,13 @@ def test_restore_refuses_paths_outside_the_save(tmp_path, rel):
     assert not os.path.exists(os.path.join(root, "insertplay-start.sh"))
 
 
-def test_restore_refuses_an_excluded_path(tmp_path):
+def test_restore_never_writes_an_excluded_path(tmp_path):
     root = game(tmp_path / "g")
     archive = str(tmp_path / "evil.tgz")
     _evil_archive(archive, f"{STEAMUSER}/AppData/Local/Temp/x")
-    with pytest.raises(snapshot.SnapshotError):
-        snapshot.restore(root, strategies.from_block({"strategy": "proton-default"}, "m"), archive)
+    restored = snapshot.restore(root, strategies.from_block({"strategy": "proton-default"}, "m"), archive)
+    assert restored.empty
+    assert not os.path.exists(os.path.join(root, STEAMUSER, "AppData/Local/Temp/x"))
 
 
 # ---------------------------------------------------------------- sync
@@ -242,7 +243,7 @@ def test_first_device_uploads_second_downloads(server, tmp_path):
     r = machine.pull()
     assert r["result"] == "downloaded" and r["fromDevice"] == "deck"
     assert read(machine.root, "duckstation/memcards/td6.mcd") == b"kmh"
-    assert machine.state()["lastSyncedHash"] == deck.state()["lastSyncedHash"]
+    assert machine.state()["lastLocalHash"] == deck.state()["lastLocalHash"] == deck.state()["lastServerHash"]
     assert machine.pull()["result"] == "unchanged"
     # Machine plays and saves; on close it uploads; the Deck gets it next launch
     write(machine.root, "duckstation/memcards/td6.mcd", "kmh+race", mtime=3000)
@@ -612,3 +613,49 @@ def test_unchanged_push_that_clears_pending_is_recorded(server, tmp_path):
     assert deck.push()["result"] == "unchanged"
     last = sync.last_result(deck.paths, KEY)
     assert (last["result"], last["pending"]) == ("unchanged", False)
+
+
+DIRT2_OLD = {"saves": {"strategy": "proton-default"}}
+DIRT2_FIXED = {"strategy": "proton-default", "exclude": ["Documents/My Games/DiRT2/hardwaresettings"]}
+
+
+def test_library_hint_wins_over_the_installed_manifest(server, tmp_path):
+    # the Deck installed DiRT 2 before the exclude was added on the server (#63 validation)
+    deck = Device(tmp_path, "deck", server.url, DIRT2_OLD)
+    write(deck.root, f"{STEAMUSER}/Documents/My Games/DiRT2/savegame/p", "save")
+    write(deck.root, f"{STEAMUSER}/Documents/My Games/DiRT2/hardwaresettings/hw.xml", "deck-hw")
+    sync.write_hints(deck.paths, {KEY: DIRT2_FIXED})
+    r = deck.pull()
+    assert r["result"] == "uploaded"
+    archive_files = [f[0] for f in snapshot.scan(deck.root, strategies.from_block(DIRT2_FIXED, "m")).files]
+    assert all("hardwaresettings" not in f for f in archive_files)
+    sync.write_hints(deck.paths, {KEY: None})
+    assert not os.path.exists(deck.paths.hint(KEY))
+
+
+def test_excluded_entries_already_on_the_server_are_skipped(server, tmp_path):
+    deck = Device(tmp_path, "deck", server.url, DIRT2_OLD)  # syncs hardwaresettings (old block)
+    machine = Device(tmp_path, "machine", server.url, DIRT2_OLD)
+    sync.write_hints(machine.paths, {KEY: DIRT2_FIXED})  # the Machine knows the fixed block
+    write(deck.root, f"{STEAMUSER}/Documents/My Games/DiRT2/savegame/p", "save", mtime=1000)
+    write(deck.root, f"{STEAMUSER}/Documents/My Games/DiRT2/hardwaresettings/hw.xml", "deck-hw", mtime=1000)
+    write(machine.root, f"{STEAMUSER}/Documents/My Games/DiRT2/hardwaresettings/hw.xml", "machine-hw")
+    assert deck.pull()["result"] == "uploaded"
+    r = machine.pull()
+    assert r["result"] == "downloaded"
+    assert read(machine.root, f"{STEAMUSER}/Documents/My Games/DiRT2/savegame/p") == b"save"
+    assert read(machine.root, f"{STEAMUSER}/Documents/My Games/DiRT2/hardwaresettings/hw.xml") == b"machine-hw"
+    # no download loop: the server still has the Deck's hw.xml, this device never takes it
+    assert machine.pull()["result"] == "unchanged"
+    assert machine.push()["result"] == "unchanged"
+
+
+def test_old_single_hash_state_still_works(server, tmp_path):
+    deck = Device(tmp_path, "deck", server.url, TD6)
+    write(deck.root, "duckstation/memcards/a", "1")
+    deck.pull()
+    state = deck.state()
+    sync.save_state(deck.paths, KEY, {"lastSyncedHash": state["lastLocalHash"], "lastRev": state["lastRev"]})
+    assert deck.pull()["result"] == "unchanged"
+    write(deck.root, "duckstation/memcards/a", "2")
+    assert deck.push()["result"] == "uploaded"

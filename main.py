@@ -154,6 +154,19 @@ class Plugin:
             decky.logger.exception("InsertPlay: save sync wrapper not installed")
             self.saves_wrapper = None
         self._saves_config()
+        self._saves_hints()
+
+    def _saves_hints(self) -> None:
+        """The index's `saves` block of each library game, for the wrapper: a block fixed on
+        the server reaches games installed before the fix."""
+        try:
+            blocks = {}
+            for game in self.remote.games().get("games", []):
+                if game.get("inIndex"):
+                    blocks[game["id"]] = self.remote.saves_block(game["id"])
+            saves_sync.write_hints(self.saves_paths, blocks)
+        except Exception:
+            decky.logger.exception("InsertPlay: save sync hints not written")
 
     def _saves_config(self) -> None:
         try:
@@ -535,7 +548,9 @@ class Plugin:
 
     @guarded(lambda: None)
     async def remote_refresh(self) -> dict:
-        return await asyncio.to_thread(self.remote.refresh)
+        result = await asyncio.to_thread(self.remote.refresh)
+        await asyncio.to_thread(self._saves_hints)
+        return result
 
     @guarded(lambda: None)
     async def remote_games(self) -> dict:
