@@ -52,10 +52,10 @@ Category **Cartões**:
   - **Nenhum** (none): only the "available" notification.
   - **Abrir página do jogo** (open the game's page): the notification and the game's page in the library.
   - **Abrir jogo** (open the game): starts the game. The default, and what the old "Iniciar ao inserir" toggle did when on; a setting saved with the toggle off becomes "Nenhum".
-- **Ocultar ao remover o cartão** (hide when the card is removed): hides the shortcut while its card is out.
 
 Category **Geral**:
 
+- **Ocultar ao remover o cartão** (hide when the card is removed): hides the shortcut while its card is out.
 - **Eventos** (events): what the plugin did recently. The same log is in `~/homebrew/data/InsertPlay/events.jsonl`.
 
 ## Portable saves (Steam games on a card)
@@ -93,7 +93,7 @@ The **Save portátil** section (category **Cartões**) has one choice per card w
 A card whose manifest declares the game's [RetroAchievements](https://retroachievements.org) ID (`game.retroAchievements.gameId`, see [docs/card-format.md](docs/card-format.md#game)) shows its achievements in Steam's own screens: the **Conquistas** section of the game page and the "Minhas conquistas / Conquistas globais" list.
 
 - **The plugin only shows progress.** Unlocking stays with the emulator (PCSX2, DuckStation and Dolphin have RetroAchievements built in and show their own pop-up during the game). Log in to RetroAchievements in each emulator on your own: the plugin never reads or writes the emulators' credentials.
-- **Login**: section **Conquistas** (category **Cartões**), with your RetroAchievements user and **Web API Key** (retroachievements.org → Settings → Keys). **Abrir página da chave** (open the key page) opens that page in Steam's own browser, also in Game Mode: copy the key there, go back to the panel and paste it. A Web API key, not your password: it can only read the API, and you can regenerate it without touching your password or the emulators' login. The key is used only to read the API and is stored in `~/homebrew/settings/InsertPlay/ra_credentials.json`, readable only by your user. It never goes to a log.
+- **Login**: section **Conquistas** (category **Geral**), with your RetroAchievements user and **Web API Key** (retroachievements.org → Settings → Keys). **Abrir página da chave** (open the key page) opens that page in Steam's own browser, also in Game Mode: copy the key there, go back to the panel and paste it. A Web API key, not your password: it can only read the API, and you can regenerate it without touching your password or the emulators' login. The key is used only to read the API and is stored in `~/homebrew/settings/InsertPlay/ra_credentials.json`, readable only by your user. It never goes to a log.
 - **When it updates**: when you open the game page or its achievement list (at most once a minute per game, also from the Steam menu with the game running), on card insertion, at Steam startup (from the cache), when the card's game closes, and with **Atualizar agora** (update now).
 - **Offline**: the last fetch of each game is cached in `~/homebrew/data/InsertPlay/ra-cache/`. The page of a removed card keeps showing it. Badge images come from `media.retroachievements.org` and need the network. No internet, or RetroAchievements down, raises no warning: the pages keep the cache.
 - **Key refused** (HTTP 401/403, e.g. the key was regenerated on the site): one toast per session, and the **Conquistas** section asks for a new login. Until then the plugin stops calling the API and the pages keep the cache. A new login, or **Sair**, clears it.

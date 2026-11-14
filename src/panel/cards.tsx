@@ -5,7 +5,6 @@ import {
   PanelSection,
   PanelSectionRow,
   Spinner,
-  ToggleField,
   showModal,
 } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
@@ -22,7 +21,6 @@ import {
 } from "../backend";
 import {
   PortableCard,
-  applyHideRemoved,
   launchCard,
   portableChange,
   reinstall,
@@ -30,7 +28,6 @@ import {
   settlePortableChange,
   steamCardsPresent,
 } from "../flow";
-import { AchievementsSection } from "./achievements";
 import { useRefresh } from "./common";
 
 const ON_INSERT_OPTIONS: { data: OnInsert; label: string }[] = [
@@ -115,8 +112,7 @@ function PortableRow({
   );
 }
 
-/** "Cartões": inserted cards, portable saves, what happens on insert and on removal, and
- *  RetroAchievements (the cards' achievements). */
+/** "Cartões": inserted cards, portable saves and what happens on insert. */
 export function CardsPage() {
   const [cards, setCards] = useState<Card[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -176,21 +172,7 @@ export function CardsPage() {
             onChange={(option) => void setSetting("onInsert", option.data as OnInsert).then(setSettings)}
           />
         </PanelSectionRow>
-        <PanelSectionRow>
-          <ToggleField
-            label="Ocultar ao remover o cartão"
-            description="Desligado, o jogo fica na biblioteca sem o badge do cartão."
-            checked={settings?.hideRemoved ?? true}
-            disabled={!settings}
-            onChange={(value) =>
-              void setSetting("hideRemoved", value)
-                .then(setSettings)
-                .then(applyHideRemoved)
-            }
-          />
-        </PanelSectionRow>
       </PanelSection>
-      <AchievementsSection />
     </>
   );
 }
