@@ -183,10 +183,11 @@ class Sync:
         self.state = load_state(paths, key)
         self.client = None
         self.spec = None
+        self._snap = None
 
     # ---- results
 
-    def _record(self, op: str, result: str, message: str = "", **extra) -> dict:
+    def _record(self, op: str, result: str, message: str = "", persist: bool = True, **extra) -> dict:
         record = {
             "key": self.key,
             "op": op,
@@ -199,10 +200,11 @@ class Sync:
             "pending": bool(self.state.get("pending")),
             **extra,
         }
-        try:
-            _write_json(self.paths.last(self.key), record)
-        except OSError:
-            pass
+        if persist:
+            try:
+                _write_json(self.paths.last(self.key), record)
+            except OSError:
+                pass
         return record
 
     def _synced(self, snap_hash: str, rev) -> None:
@@ -309,33 +311,38 @@ class Sync:
 
     def pull(self) -> dict:
         """Before the game: bring the newest save to this device (table in the contract)."""
-        early = self._ready("pull")
-        if early:
-            return early
-        try:
-            self.spec, offline = self._resolve()
-        except StrategyError as exc:
-            return self._record("pull", "no_strategy", str(exc))
-        snap = scan(self.root, self.spec)
-        if offline:
-            return self._offline("pull", snap, "server unreachable")
-        try:
-            return self._decide("pull", snap, attempts=2)
-        except http.Offline as exc:
-            return self._offline("pull", snap, str(exc))
-        except (http.ServerError, SnapshotError, OSError) as exc:
-            return self._record("pull", "error", str(exc))
+        return self._guarded("pull", self._pull)
 
     def push(self) -> dict:
         """After the game (and on retries): upload the save if it changed."""
-        early = self._ready("push")
+        return self._guarded("push", self._push)
+
+    def _guarded(self, op: str, fn) -> dict:
+        """Every failure ends in a result record: the wrapper, the panel and the toasts need one."""
+        early = self._ready(op)
         if early:
             return early
         try:
-            self.spec, offline = self._resolve()
+            return fn(op)
         except StrategyError as exc:
-            return self._record("push", "no_strategy", str(exc))
-        snap = scan(self.root, self.spec)
+            return self._record(op, "no_strategy", str(exc))
+        except http.Offline as exc:
+            return self._offline(op, self._snap, str(exc))
+        except http.ServerError as exc:
+            return self._record(op, "error", str(exc))
+        except (SnapshotError, OSError, ValueError) as exc:
+            return self._record(op, "error", f"{type(exc).__name__}: {exc}")
+
+    def _pull(self, op: str) -> dict:
+        self.spec, offline = self._resolve()
+        snap = self._snap = scan(self.root, self.spec)
+        if offline:
+            return self._offline(op, snap, "server unreachable")
+        return self._decide(op, snap, attempts=2)
+
+    def _push(self, op: str) -> dict:
+        self.spec, offline = self._resolve()
+        snap = self._snap = scan(self.root, self.spec)
         if snap.empty:
             return self._record("push", "empty")
         if snap.hash == self.state.get("lastSyncedHash"):
@@ -345,25 +352,20 @@ class Sync:
             return self._record("push", "unchanged", hash=snap.hash)
         if offline:
             return self._offline("push", snap, "server unreachable")
+        rev = self.state.get("lastRev") if self.state.get("lastSyncedHash") else None
         try:
-            rev = self.state.get("lastRev") if self.state.get("lastSyncedHash") else None
-            try:
-                result = self._upload(snap, rev, self.config["backup"])
-                return self._record("push", "uploaded", hash=snap.hash, rev=result["meta"]["rev"],
-                                    size=snap.size, backup=result.get("backup"))
-            except http.Conflict:
-                # the other device uploaded since our last sync: decide like at launch
-                return self._decide("push", snap, attempts=1)
-        except http.Offline as exc:
-            return self._offline("push", snap, str(exc))
-        except (http.ServerError, SnapshotError, OSError) as exc:
-            return self._record("push", "error", str(exc))
+            result = self._upload(snap, rev, self.config["backup"])
+            return self._record("push", "uploaded", hash=snap.hash, rev=result["meta"]["rev"],
+                                size=snap.size, backup=result.get("backup"))
+        except http.Conflict:
+            # the other device uploaded since our last sync: decide like at launch
+            return self._decide("push", snap, attempts=1)
 
-    def _offline(self, op: str, snap: Snapshot, message: str) -> dict:
-        if not snap.empty and snap.hash != self.state.get("lastSyncedHash"):
+    def _offline(self, op: str, snap, message: str) -> dict:
+        if snap is not None and not snap.empty and snap.hash != self.state.get("lastSyncedHash"):
             self.state["pending"] = True
             self._save()
-        return self._record(op, "offline", message, hash=snap.hash)
+        return self._record(op, "offline", message, hash=snap.hash if snap is not None else None)
 
     def _decide(self, op: str, snap: Snapshot, attempts: int) -> dict:
         meta = self.client.meta(self.key)
@@ -408,12 +410,13 @@ def pull(paths: Paths, key: str, root: str) -> dict:
 
 
 def push(paths: Paths, key: str, root: str, wait: float = 0) -> dict:
-    """Takes the key's lock (waiting up to `wait` s): never uploads while the game runs."""
+    """Takes the key's lock (waiting up to `wait` s): never uploads while the game runs.
+    State and config are read only once the lock is held: after a wait they may have changed."""
     lock = Lock(paths, key, wait)
-    sync = Sync(paths, key, root)
     if not lock.acquire():
-        return sync._record("push", "busy", "the game is running")
+        # not written to last/<key>.json: the last real result stays visible
+        return Sync(paths, key, root)._record("push", "busy", "the game is running", persist=False)
     try:
-        return sync.push()
+        return Sync(paths, key, root).push()
     finally:
         lock.release()

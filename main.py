@@ -21,6 +21,8 @@ from insertplay_decky.manifest import GUID_RE, CardError, load_card, read_guid  
 from insertplay_decky.store import EventLog, Registry, Settings  # noqa: E402
 
 POLL_SECONDS = 1.0
+SAVES_RETRY_FIRST_SECONDS = 60.0
+SAVES_RETRY_SECONDS = 300.0
 READY_TIMEOUT_SECONDS = 15.0
 
 
@@ -210,14 +212,50 @@ class Plugin:
         await asyncio.to_thread(self._saves_setup)
         self.ready = True
         self.watcher = asyncio.get_event_loop().create_task(self._watch())
+        self.saves_retrier = asyncio.get_event_loop().create_task(self._saves_retry_loop())
         decky.logger.info("InsertPlay: started with %d card(s)", len(self.mounted))
 
     async def _unload(self):
         if self.watcher:
             self.watcher.cancel()
+        if getattr(self, "saves_retrier", None):
+            self.saves_retrier.cancel()
         remote = getattr(self, "remote", None)
         if remote is not None:
             await asyncio.to_thread(remote.stop)
+
+    async def _saves_retry_loop(self):
+        """Pending uploads (server was down) go out a minute after load, then every 5 min."""
+        await asyncio.sleep(SAVES_RETRY_FIRST_SECONDS)
+        while True:
+            try:
+                await asyncio.to_thread(self._saves_retry)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                decky.logger.exception("InsertPlay: save upload retry failed")
+            await asyncio.sleep(SAVES_RETRY_SECONDS)
+
+    def _saves_retry(self) -> list:
+        out = []
+        for key in saves_sync.pending_keys(self.saves_paths):
+            root = self._saves_root(key) if GUID_RE.match(key) else None
+            if root is None:
+                continue
+            record = saves_sync.push(self.saves_paths, key, root, 0)
+            self._saves_log(record)
+            out.append(record)
+        return out
+
+    def _saves_overview(self) -> dict:
+        out = {}
+        for game in self.remote.games().get("games", []):
+            gid = game["id"]
+            state = saves_sync.load_state(self.saves_paths, gid)
+            last = saves_sync.last_result(self.saves_paths, gid)
+            if state or last:
+                out[gid] = {"last": last, "pending": bool(state.get("pending")), "rev": state.get("lastRev")}
+        return out
 
     async def _watch(self):
         while True:
@@ -546,14 +584,7 @@ class Plugin:
     @guarded(lambda: None)
     async def saves_overview(self) -> dict:
         """`saves_status` of every remote library game, for the panel."""
-        out = {}
-        for game in (await asyncio.to_thread(self.remote.games)).get("games", []):
-            gid = game["id"]
-            state = await asyncio.to_thread(saves_sync.load_state, self.saves_paths, gid)
-            last = await asyncio.to_thread(saves_sync.last_result, self.saves_paths, gid)
-            if state or last:
-                out[gid] = {"last": last, "pending": bool(state.get("pending")), "rev": state.get("lastRev")}
-        return out
+        return await asyncio.to_thread(self._saves_overview)
 
     @guarded(lambda: None)
     async def saves_push(self, guid: str) -> dict:
@@ -573,16 +604,8 @@ class Plugin:
 
     @guarded(lambda: None)
     async def saves_retry_pending(self) -> list:
-        """Retries pending uploads (server was down). Returns the results."""
-        out = []
-        for key in await asyncio.to_thread(saves_sync.pending_keys, self.saves_paths):
-            root = self._saves_root(key) if GUID_RE.match(key) else None
-            if root is None:
-                continue
-            record = await asyncio.to_thread(saves_sync.push, self.saves_paths, key, root, 0)
-            self._saves_log(record)
-            out.append(record)
-        return out
+        """Retries pending uploads (server was down) now. Returns the results."""
+        return await asyncio.to_thread(self._saves_retry)
 
     @guarded(lambda: None)
     async def log_add(self, kind: str, message: str) -> None:

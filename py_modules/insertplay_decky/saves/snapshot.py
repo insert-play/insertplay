@@ -86,6 +86,22 @@ def _walk_root(root: str, rel_root: str, exclude: list):
             yield f"{rel_root}/{sub}", full
 
 
+def list_files(root: str, spec: SaveSpec) -> list:
+    """Paths of the save's files, without hashing."""
+    return [rel for rel_root in concrete_roots(root, spec) for rel, _ in _walk_root(root, rel_root, spec.exclude)]
+
+
+def _blocked(root: str, rel: str):
+    """A parent of `rel` on the device that is not a folder (a file, a symlink): the restore
+    could not put the file there. None when the way is clear."""
+    cur = root
+    for part in rel.split("/")[:-1]:
+        cur = os.path.join(cur, part)
+        if os.path.islink(cur) or (os.path.exists(cur) and not os.path.isdir(cur)):
+            return cur
+    return None
+
+
 def scan(root: str, spec: SaveSpec) -> Snapshot:
     roots = concrete_roots(root, spec)
     files = []
@@ -230,8 +246,14 @@ def restore(root: str, spec: SaveSpec, archive: str, expected_hash: str = None) 
                 seen[rel] = member.mtime
             if set(seen) != set(expected):
                 raise SnapshotError("archive is missing files")
+        # check every destination before touching anything: a failure halfway would leave a
+        # save mixed from two devices
+        for rel in seen:
+            blocked = _blocked(root, rel)
+            if blocked:
+                raise SnapshotError(f"{blocked} is in the way of {rel}")
+        old = list_files(root, spec)
         # into place: the archive's files first, then the save files it doesn't have
-        old = scan(root, spec)
         for rel in sorted(seen):
             dest = os.path.join(root, rel)
             parent = os.path.dirname(dest)
@@ -239,7 +261,7 @@ def restore(root: str, spec: SaveSpec, archive: str, expected_hash: str = None) 
                 _remove_tree(dest)
             os.makedirs(parent, exist_ok=True)
             os.replace(os.path.join(staging, rel), dest)
-        for rel, *_ in old.files:
+        for rel in old:
             if rel not in seen:
                 try:
                     os.remove(os.path.join(root, rel))
@@ -249,4 +271,5 @@ def restore(root: str, spec: SaveSpec, archive: str, expected_hash: str = None) 
         raise SnapshotError(str(exc)) from exc
     finally:
         _remove_tree(staging)
-    return scan(root, spec)
+    roots = manifest.get("roots") if isinstance(manifest.get("roots"), list) else []
+    return Snapshot(roots, sorted((rel, size, digest, seen[rel]) for rel, (size, digest) in expected.items()))

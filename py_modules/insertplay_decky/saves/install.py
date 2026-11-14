@@ -49,19 +49,15 @@ detached=0
 after_kill() {
 	[[ $detached -eq 1 ]] && return
 	detached=1
-	systemd-run --user --collect --quiet --unit="insertplay-saves-$key-$$" \
+	systemd-run --user --collect --quiet --unit="insertplay-saves-$key-$$" --setenv=INSERTPLAY_HOME="$D" \
 		env -u LD_PRELOAD -u LD_LIBRARY_PATH "$PY" -I "$ENTRY" push "$key" "$root" --wait 300 >/dev/null 2>&1
 }
 trap after_kill INT TERM HUP
 
-"$@" &
-child=$!
-wait "$child"
+# In the foreground, like the old exec: the game keeps stdin and Steam's SIGINT (a background
+# job would ignore it). bash runs the trap as soon as the game exits.
+"$@"
 status=$?
-while kill -0 "$child" 2>/dev/null; do
-	wait "$child"
-	status=$?
-done
 py push "$key" "$root" --locked
 exit "$status"
 """

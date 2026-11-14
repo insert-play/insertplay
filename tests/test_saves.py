@@ -512,3 +512,70 @@ def test_wrapper_with_sync_off_runs_the_game_directly(tmp_path):
     )
     assert done.returncode == 0
     assert sync.last_result(sync.Paths(home), KEY)["result"] == "disabled"
+
+
+def test_server_errors_while_resolving_become_records(server, tmp_path):
+    deck = Device(tmp_path, "deck", server.url)  # no saves block: asks the server first
+    write(deck.root, f"{STEAMUSER}/Documents/x", "1")
+    sync.write_config(deck.paths, server.url, "x" * 40, True, True, "deck")
+    for op in (deck.pull, deck.push):
+        r = op()
+        assert r["result"] == "error" and "401" in r["message"]
+    assert sync.last_result(deck.paths, KEY)["result"] == "error"
+
+
+@linux
+def test_unreadable_save_file_is_an_error_record(server, tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root reads everything")
+    deck = Device(tmp_path, "deck", server.url, TD6)
+    write(deck.root, "duckstation/memcards/a", "1")
+    os.chmod(os.path.join(deck.root, "duckstation/memcards/a"), 0)
+    try:
+        r = deck.pull()
+    finally:
+        os.chmod(os.path.join(deck.root, "duckstation/memcards/a"), 0o644)
+    assert r["result"] == "error" and "PermissionError" in r["message"]
+
+
+def test_restore_checks_the_way_before_moving_anything(tmp_path):
+    spec = strategies.from_block({"strategy": "custom-path", "paths": ["saves"]}, "m")
+    src = game(tmp_path / "a")
+    write(src, "saves/a.dat", "new-a")
+    write(src, "saves/b/c.dat", "new-c")
+    snap = snapshot.scan(src, spec)
+    archive = str(tmp_path / "s.tgz")
+    snapshot.write_archive(src, snap, archive)
+    dest = game(tmp_path / "b")
+    write(dest, "saves/a.dat", "old-a")
+    write(dest, "saves/b", "a file where the archive needs a folder")
+    with pytest.raises(snapshot.SnapshotError):
+        snapshot.restore(dest, spec, archive, snap.hash)
+    assert read(dest, "saves/a.dat") == b"old-a"  # nothing moved
+
+
+@linux
+def test_busy_push_keeps_the_last_real_result(server, tmp_path):
+    deck = Device(tmp_path, "deck", server.url, TD6)
+    write(deck.root, "duckstation/memcards/a", "1")
+    deck.pull()
+    lock = sync.Lock(deck.paths, KEY)
+    assert lock.acquire()
+    try:
+        assert sync.push(deck.paths, KEY, deck.root)["result"] == "busy"
+    finally:
+        lock.release()
+    assert sync.last_result(deck.paths, KEY)["result"] == "uploaded"
+
+
+def test_restore_returns_the_archive_snapshot(tmp_path):
+    spec = strategies.from_block({"strategy": "duckstation"}, "m")
+    src = game(tmp_path / "a")
+    write(src, "duckstation/memcards/a.mcd", "x", mtime=1234)
+    snap = snapshot.scan(src, spec)
+    archive = str(tmp_path / "s.tgz")
+    snapshot.write_archive(src, snap, archive)
+    dest = game(tmp_path / "b")
+    restored = snapshot.restore(dest, spec, archive, snap.hash)
+    assert (restored.hash, restored.newest, restored.files) == (snap.hash, snap.newest, snap.files)
+    assert snapshot.scan(dest, spec).hash == snap.hash
