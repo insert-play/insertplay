@@ -156,7 +156,7 @@ Cards made for the legacy InsertPlay (the C# CLI) work with the plugin as they a
 A card can carry the plugin itself at `insertplay/decky/InsertPlay.zip`. Decky installs it with "Install Plugin from ZIP File", and the plugin panel offers to update from it (see the [README](../README.md)). To put it there, either:
 
 - copy `InsertPlay.zip` from a [release](https://github.com/insert-play/insertplay/releases) to `insertplay/decky/`; or
-- with the card inserted in a device that has the plugin, use **Gravar plugin vX no cartão** ("write plugin vX to the card") in the panel's **Plugin** section.
+- with the card inserted in a device that has the plugin, use **Gravar plugin vX no cartão** ("write plugin vX to the card") in the **Plugin** section (category **Geral**).
 
 ## Filesystem
 

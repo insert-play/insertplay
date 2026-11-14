@@ -23,13 +23,13 @@ InsertPlay is not on the Decky store. You install it from a release or from a ca
    - **Install Plugin from ZIP File** → **Browse**: pick `InsertPlay.zip`, downloaded from the [releases](https://github.com/insert-play/insertplay/releases) or carried by a card. On a card it is in `insertplay/decky/`. In the file picker, press **↑** until `/`, then go to `run` → `media` → `deck` → `<card label>` → `insertplay` → `decky`.
 3. Accept the third-party plugin warning and confirm.
 
-InsertPlay shows up in the Decky menu (Quick Access).
+InsertPlay shows up in the Decky menu (Quick Access). Its panel shows the inserted cards and the remote library downloads in progress, and one button per category: **Cartões**, **Biblioteca Remota** and **Geral**. Each opens a full-screen page with the category's settings, with the categories in a sidebar; B goes back.
 
 A script on the card that installs Decky and the plugin in one step is tracked in [#20](https://github.com/insert-play/insertplay/issues/20).
 
 ## Update from a card
 
-A card can carry the plugin at `insertplay/decky/InsertPlay.zip`. The panel's **Plugin** section shows the installed version and, for each inserted card, the version it carries:
+A card can carry the plugin at `insertplay/decky/InsertPlay.zip`. The **Plugin** section (category **Geral**) shows the installed version and, for each inserted card, the version it carries:
 
 | The card has | Button | What happens |
 |---|---|---|
@@ -44,12 +44,17 @@ Inserting a card with a newer version shows a notification. The plugin never upd
 
 Cards are prepared by hand for now: a manifest, a guid and a launch script at the card root. See **[docs/card-format.md](docs/card-format.md)** and start from [`card-template/`](card-template/). The plugin never writes the manifest or the guid; a card without `shortcut-identity.json` is refused with a message in the panel.
 
-## Panel settings
+## Settings
+
+Category **Cartões**:
 
 - **Ao inserir** (on insert): what inserting a card does with its game. Applies to InsertPlay cards and to cards with exactly one Steam game; with another game already running it only notifies.
   - **Nenhum** (none): only the "available" notification.
   - **Abrir página do jogo** (open the game's page): the notification and the game's page in the library.
   - **Abrir jogo** (open the game): starts the game. The default, and what the old "Iniciar ao inserir" toggle did when on; a setting saved with the toggle off becomes "Nenhum".
+
+Category **Geral**:
+
 - **Ocultar ao remover o cartão** (hide when the card is removed): hides the shortcut while its card is out.
 - **Eventos** (events): what the plugin did recently. The same log is in `~/homebrew/data/InsertPlay/events.jsonl`.
 
@@ -57,7 +62,7 @@ Cards are prepared by hand for now: a manifest, a guid and a launch script at th
 
 In Game Mode, Steam keeps the Proton prefix (where many games save) on the internal drive, even for a game installed on a card. A game without Steam Cloud, or with Cloud broken on SteamOS, leaves its save on the device. **Portable saves** move that data to the card and, while the card is inserted, link the internal drive to it with a symlink.
 
-The panel's **Save portátil** section has one choice per card with Steam games. It applies to every game on the card and only shows up while such a card is inserted:
+The **Save portátil** section (category **Cartões**) has one choice per card with Steam games. It applies to every game on the card and only shows up while such a card is inserted:
 
 | Mode | Moved to the card | Stays on the device |
 |---|---|---|
@@ -88,7 +93,7 @@ The panel's **Save portátil** section has one choice per card with Steam games.
 A card whose manifest declares the game's [RetroAchievements](https://retroachievements.org) ID (`game.retroAchievements.gameId`, see [docs/card-format.md](docs/card-format.md#game)) shows its achievements in Steam's own screens: the **Conquistas** section of the game page and the "Minhas conquistas / Conquistas globais" list.
 
 - **The plugin only shows progress.** Unlocking stays with the emulator (PCSX2, DuckStation and Dolphin have RetroAchievements built in and show their own pop-up during the game). Log in to RetroAchievements in each emulator on your own: the plugin never reads or writes the emulators' credentials.
-- **Login**: panel section **Conquistas**, with your RetroAchievements user and **Web API Key** (retroachievements.org → Settings → Keys). **Abrir página da chave** (open the key page) opens that page in Steam's own browser, also in Game Mode: copy the key there, go back to the panel and paste it. A Web API key, not your password: it can only read the API, and you can regenerate it without touching your password or the emulators' login. The key is used only to read the API and is stored in `~/homebrew/settings/InsertPlay/ra_credentials.json`, readable only by your user. It never goes to a log.
+- **Login**: section **Conquistas** (category **Geral**), with your RetroAchievements user and **Web API Key** (retroachievements.org → Settings → Keys). **Abrir página da chave** (open the key page) opens that page in Steam's own browser, also in Game Mode: copy the key there, go back to the panel and paste it. A Web API key, not your password: it can only read the API, and you can regenerate it without touching your password or the emulators' login. The key is used only to read the API and is stored in `~/homebrew/settings/InsertPlay/ra_credentials.json`, readable only by your user. It never goes to a log.
 - **When it updates**: when you open the game page or its achievement list (at most once a minute per game, also from the Steam menu with the game running), on card insertion, at Steam startup (from the cache), when the card's game closes, and with **Atualizar agora** (update now).
 - **Offline**: the last fetch of each game is cached in `~/homebrew/data/InsertPlay/ra-cache/`. The page of a removed card keeps showing it. Badge images come from `media.retroachievements.org` and need the network. No internet, or RetroAchievements down, raises no warning: the pages keep the cache.
 - **Key refused** (HTTP 401/403, e.g. the key was regenerated on the site): one toast per session, and the **Conquistas** section asks for a new login. Until then the plugin stops calling the API and the pages keep the cache. A new login, or **Sair**, clears it.
