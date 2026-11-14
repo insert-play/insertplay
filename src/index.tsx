@@ -243,6 +243,31 @@ const LOGIN_ERROR: Record<RaLoginError, string> = {
   failed: "Falha no login (veja o log de eventos).",
 };
 
+/** `bIsPassword` does not mask the field in this Steam (measured 2026-11-13: the input stays
+ *  `type="text"` and shows what is typed), so the characters are hidden with CSS. */
+const SECRET_CLASS = "insertplay-secret";
+function SecretField(props: {
+  label: string;
+  description?: string;
+  value: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className={SECRET_CLASS}>
+      <style>{`.${SECRET_CLASS} input { -webkit-text-security: disc; }`}</style>
+      <TextField
+        label={props.label}
+        description={props.description}
+        value={props.value}
+        bIsPassword
+        disabled={props.disabled}
+        onChange={(e) => props.onChange(e.target.value)}
+      />
+    </div>
+  );
+}
+
 /** Plugin's own RetroAchievements login (issue #24): user + web API key, used only to
  *  read progress. The emulators keep their own login. */
 function AchievementsSection() {
@@ -353,13 +378,7 @@ function AchievementsSection() {
             <TextField label="Usuário" value={name} disabled={busy} onChange={(e) => setName(e.target.value)} />
           </PanelSectionRow>
           <PanelSectionRow>
-            <TextField
-              label="Web API Key"
-              value={key}
-              bIsPassword
-              disabled={busy}
-              onChange={(e) => setKey(e.target.value)}
-            />
+            <SecretField label="Web API Key" value={key} disabled={busy} onChange={setKey} />
           </PanelSectionRow>
           {error && (
             <PanelSectionRow>
@@ -530,13 +549,12 @@ function RemoteLibrarySection() {
             <TextField label="Endereço" value={url} disabled={busy} onChange={(e) => setUrl(e.target.value)} />
           </PanelSectionRow>
           <PanelSectionRow>
-            <TextField
+            <SecretField
               label="Token"
               description={config?.tokenSet ? "Token salvo. Deixe vazio para manter." : undefined}
               value={token}
-              bIsPassword
               disabled={busy}
-              onChange={(e) => setToken(e.target.value)}
+              onChange={setToken}
             />
           </PanelSectionRow>
           <PanelSectionRow>
