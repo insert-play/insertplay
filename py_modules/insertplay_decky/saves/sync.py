@@ -5,8 +5,9 @@ the plugin backend:
 
     saves/config.json        url, token, sync, backup, device (mode 0600, written by the plugin)
     saves/state/<key>.json   lastLocalHash, lastServerHash, lastRev, pending, root, spec
-    saves/hints/<key>.json   the library index's `saves` block (written by the plugin): wins over
-                             the installed manifest, which only changes on reinstall
+    saves/hints/<key>.json   {"saves": <block or null>} from the library index (written by the
+                             plugin): wins over the installed manifest, which only changes on
+                             reinstall; null = the index has no block (server or inference decide)
     saves/last/<key>.json    result of the last operation, read by the panel and the toasts
     saves/locks/<key>.lock   flock: held by the wrapper for the whole game
     saves/tmp/               archives being built or downloaded
@@ -112,17 +113,24 @@ def save_state(paths: Paths, key: str, state: dict) -> None:
 
 
 def write_hints(paths: Paths, blocks: dict) -> None:
-    """`{key: saves block or None}` from the library index. A game without a block loses its
-    hint (inference or the server decide); keys not given are left as they are."""
-    for key, block in blocks.items():
-        if not KEY_RE.match(key or ""):
-            continue
-        path = paths.hint(key)
-        if isinstance(block, dict):
-            if _read_json(path) != block:
-                _write_json(path, block)
-        elif os.path.exists(path):
-            os.remove(path)
+    """Replaces the hints with `{key: saves block or None}`, the library index's games. A game
+    in the index without a block gets `{"saves": null}`, so a block removed from the library
+    never falls back to the installed one; a game out of the index loses its hint."""
+    folder = os.path.join(paths.saves, "hints")
+    wanted = {k: {"saves": b if isinstance(b, dict) else None} for k, b in blocks.items() if KEY_RE.match(k or "")}
+    for key, data in wanted.items():
+        if _read_json(paths.hint(key)) != data:
+            _write_json(paths.hint(key), data)
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return
+    for name in names:
+        if name.endswith(".json") and name[:-5] not in wanted:
+            try:
+                os.remove(os.path.join(folder, name))
+            except OSError:
+                pass
 
 
 def last_result(paths: Paths, key: str):
@@ -244,7 +252,7 @@ class Sync:
 
     def _save(self) -> None:
         self.state["root"] = self.root
-        if self.spec is not None and self.spec.source != "manifest":
+        if self.spec is not None and self.spec.source not in ("manifest", "library"):
             self.state["spec"] = {**self.spec.as_json(), "source": self.spec.source}
         save_state(self.paths, self.key, self.state)
 
@@ -270,7 +278,10 @@ class Sync:
         earlier run, then inference (written to the server). Raises StrategyError."""
         manifest = read_manifest(self.root)
         hint = _read_json(self.paths.hint(self.key))
-        spec = from_block(hint, "manifest") if hint is not None else manifest_spec(manifest)
+        if hint is not None and "saves" in hint:
+            spec = from_block(hint["saves"], "library") if hint["saves"] is not None else None
+        else:
+            spec = manifest_spec(manifest)
         if spec is not None:
             return spec, False
         offline = False

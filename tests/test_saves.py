@@ -200,7 +200,10 @@ def test_restore_into_a_missing_prefix(tmp_path):
 
 
 def _evil_archive(path, rel):
-    raw = json.dumps({"format": 1, "roots": [], "files": [[rel, 1, "0" * 64]], "hash": snapshot.list_hash([[rel, 1, "0" * 64]])}).encode()
+    import hashlib
+
+    digest = hashlib.sha256(b"x").hexdigest()
+    raw = json.dumps({"format": 1, "roots": [], "files": [[rel, 1, digest]], "hash": snapshot.list_hash([[rel, 1, digest]])}).encode()
     import io
 
     with tarfile.open(path, "w:gz") as tar:
@@ -626,10 +629,17 @@ def test_library_hint_wins_over_the_installed_manifest(server, tmp_path):
     write(deck.root, f"{STEAMUSER}/Documents/My Games/DiRT2/hardwaresettings/hw.xml", "deck-hw")
     sync.write_hints(deck.paths, {KEY: DIRT2_FIXED})
     r = deck.pull()
-    assert r["result"] == "uploaded"
-    archive_files = [f[0] for f in snapshot.scan(deck.root, strategies.from_block(DIRT2_FIXED, "m")).files]
-    assert all("hardwaresettings" not in f for f in archive_files)
+    assert (r["result"], r["source"]) == ("uploaded", "library")
+    with tarfile.open(os.path.join(server.store.folder(KEY), "current.tar.gz"), "r:gz") as tar:
+        uploaded = [f[0] for f in json.load(tar.extractfile(tar.next()))["files"]]
+    assert uploaded == [f"{STEAMUSER}/Documents/My Games/DiRT2/savegame/p"]
+    # the library dropped the block: the installed (old) block must not come back
     sync.write_hints(deck.paths, {KEY: None})
+    assert json.load(open(deck.paths.hint(KEY))) == {"saves": None}
+    r = deck.push()
+    assert r["source"] == "inferred"
+    # out of the index: no hint, the installed manifest decides again
+    sync.write_hints(deck.paths, {})
     assert not os.path.exists(deck.paths.hint(KEY))
 
 

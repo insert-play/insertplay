@@ -495,7 +495,7 @@ The plugin also uploads when Steam reports the game closed, as a safety net. The
 | `~/.local/share/insertplay/lib/` | `insertplay-saves.py` and a copy of `py_modules/insertplay_decky/saves/` as `insertplay_saves/`, run with the system `python3 -I`. |
 | `~/.local/share/insertplay/saves/config.json` | Server URL and token, `sync`, `backup`, device name (mode `0600`). Written by the plugin from its settings. |
 | `~/.local/share/insertplay/saves/state/<key>.json` | `lastLocalHash`, `lastServerHash`, `lastRev`, `pending`, the game folder last used and the strategy last read from the server or inferred (used offline). |
-| `~/.local/share/insertplay/saves/hints/<key>.json` | The index's `saves` block of each library game, rewritten at plugin load and on every index refresh. |
+| `~/.local/share/insertplay/saves/hints/<key>.json` | `{"saves": <block or null>}` from the index for each library game, rewritten at plugin load, on every successful index refresh and on a server change. `null`: the index has no block, so the installed one is ignored too (the server's `strategy.json` or inference decide). A game out of the index has no hint. |
 | `~/.local/share/insertplay/saves/last/<key>.json` | Result of the last operation (`op`, `result`, `message`, `at`, `strategy`, `source`, `hash`, `rev`…). |
 | `~/.local/share/insertplay/saves/sync.log` | One line per operation. |
 

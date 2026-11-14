@@ -234,14 +234,20 @@ def restore(root: str, spec: SaveSpec, archive: str, expected_hash: str = None) 
                 rel = member.name[len("files/"):]
                 if rel not in expected or rel in seen:
                     raise SnapshotError(f"unexpected archive file {rel!r}")
+                src = tar.extractfile(member)
+                h = hashlib.sha256()
+                size = 0
                 if rel in skipped:
+                    # not written here, still checked: a damaged archive is refused whole
+                    for chunk in iter(lambda: src.read(CHUNK), b""):
+                        h.update(chunk)
+                        size += len(chunk)
+                    if (size, h.hexdigest()) != expected[rel]:
+                        raise SnapshotError(f"{rel} damaged in the archive")
                     seen[rel] = None
                     continue
                 dest = os.path.join(staging, rel)
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
-                src = tar.extractfile(member)
-                h = hashlib.sha256()
-                size = 0
                 with open(dest, "wb") as out:
                     for chunk in iter(lambda: src.read(CHUNK), b""):
                         h.update(chunk)

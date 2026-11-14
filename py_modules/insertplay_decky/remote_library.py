@@ -718,12 +718,14 @@ class RemoteLibrary:
         with self._lock:
             return self._index_game(gid) is not None or gid in self._games
 
-    def saves_block(self, gid: str):
-        """The `saves` block of the game's manifest in the index (None without one)."""
+    def saves_blocks(self) -> dict:
+        """`{id: saves block or None}` of every game in the index, from its manifest."""
         with self._lock:
-            idx = self._index_game(gid)
-            block = _get((idx or {}).get("manifest") or {}, "saves")
-            return block if isinstance(block, dict) else None
+            out = {}
+            for game in self._index["games"]:
+                block = _get(game.get("manifest") or {}, "saves")
+                out[game["id"]] = block if isinstance(block, dict) else None
+            return out
 
     def installed_root(self, gid: str):
         """The install folder of an installed game, else None."""
