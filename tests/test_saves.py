@@ -669,3 +669,18 @@ def test_old_single_hash_state_still_works(server, tmp_path):
     assert deck.pull()["result"] == "unchanged"
     write(deck.root, "duckstation/memcards/a", "2")
     assert deck.push()["result"] == "uploaded"
+
+
+def test_deleted_local_save_is_downloaded_again(server, tmp_path):
+    # God of War II on the Machine (#63): memory cards deleted after a sync, then the game
+    # opened. The pull must bring the server's save back, not call it "unchanged" (the game
+    # would then create blank cards and upload them over the good save).
+    deck = Device(tmp_path, "deck", server.url, CLAW)
+    machine = Device(tmp_path, "machine", server.url, CLAW)
+    write(deck.root, "game/CLAW.USR", "world5", mtime=1000)
+    deck.pull()
+    assert machine.pull()["result"] == "downloaded"
+    os.remove(os.path.join(machine.root, "game/CLAW.USR"))
+    r = machine.pull()
+    assert r["result"] == "downloaded"
+    assert read(machine.root, "game/CLAW.USR") == b"world5"
