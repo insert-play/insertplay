@@ -462,7 +462,8 @@ State per key on the device: `lastLocalHash` and `lastServerHash` (each side's h
 | no save | any | upload the local one (if any) |
 | same hash as local | | nothing |
 | changed since `lastSyncedHash` | unchanged | download. The local save it replaces is sent to the backups first, when backups are on |
-| changed | changed too (or no `lastSyncedHash` and different) | the newer `newestMtime` wins; the loser goes to the backups |
+| any, and this device never synced the game | different | the server's save wins and the local one goes to the backups: a first sync can't trust file times (a save shipped with the game has the time of the download) |
+| changed | changed too | the newer `newestMtime` wins; the loser goes to the backups. Also at the close of a game launched without history (server unreachable at launch) |
 | unreachable (~10 s) | | play with the local save; the upload stays pending |
 
 A download is checked file by file and as a whole (the archive carries its file list and hash), extracted to a staging folder in the game folder (`.insertplay-saves.partial`), then each file is renamed into place and the save files the archive doesn't have are removed. It only writes inside the strategy's save folders and never through a symlink; a path this device excludes (synced by another device or by an older `saves` block) is skipped, not written. A path outside the save folders refuses the whole archive. Excluded paths and symlinks already on the device stay as they are. A local save that would be overwritten goes to the server's backups first (when backups are on, and always for a conflict loser), unless it is larger than the server's backup limit.

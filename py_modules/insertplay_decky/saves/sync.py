@@ -423,6 +423,16 @@ class Sync:
             if meta.get("hash") == snap.hash:
                 self._synced(snap.hash, snap.hash, meta.get("rev"))
                 return self._record(op, "unchanged", hash=snap.hash, rev=meta.get("rev"))
+            if op == "pull" and not snap.empty and not self._base("lastServerHash"):
+                # First sync of this game on this device: its local save has no history, and its
+                # file times can't be trusted (a save shipped with the game, like Captain Claw's
+                # CLAW.USR, has the time of the download). The server's save wins; the local one
+                # goes to the backups. Not on a push: then the device has just played.
+                backup = self._backup_local(snap)
+                restored = self._download(meta.get("hash"))
+                return self._record(op, "conflict_downloaded", "first sync on this device: the server's save wins",
+                                    hash=restored.hash, rev=self.state.get("lastRev"),
+                                    fromDevice=meta.get("device"), size=restored.size, backup=backup)
             local_changed = not snap.empty and snap.hash != self._base("lastLocalHash")
             server_changed = meta.get("hash") != self._base("lastServerHash")
             if not local_changed and not server_changed and not snap.empty:

@@ -289,10 +289,31 @@ def test_conflict_local_newer_uploads_and_server_copy_is_kept(server, tmp_path):
     machine = Device(tmp_path, "machine", server.url, CLAW, backup=False)
     write(deck.root, "game/CLAW.USR", "old", mtime=1000)
     deck.pull()
+    machine.pull()  # the Machine has synced once: it has a history
+    write(deck.root, "game/CLAW.USR", "deck", mtime=2000)
+    deck.push()
     write(machine.root, "game/CLAW.USR", "newer", mtime=9000)
     r = machine.pull()
     assert r["result"] == "conflict_uploaded" and r["backup"]["stored"] is True
     assert deck.pull()["result"] == "downloaded" and read(deck.root, "game/CLAW.USR") == b"newer"
+
+
+def test_first_sync_server_wins_over_a_newer_installed_save(server, tmp_path):
+    # Captain Claw (#63): a fresh install brings the library's CLAW.USR with the download's
+    # time, newer than the real save; on the device's first sync the server's save wins
+    deck = Device(tmp_path, "deck", server.url, CLAW, backup=False)
+    machine = Device(tmp_path, "machine", server.url, CLAW, backup=False)
+    write(deck.root, "game/CLAW.USR", "world5", mtime=1000)
+    deck.pull()
+    write(machine.root, "game/CLAW.USR", "worlds1-4 from the install", mtime=9000)
+    r = machine.pull()
+    assert r["result"] == "conflict_downloaded" and "first sync" in r["message"]
+    assert read(machine.root, "game/CLAW.USR") == b"world5"
+    assert r["backup"]["stored"] is True  # the installed one is kept, backups off or not
+    # a push without history (offline launch, then played) still goes by time
+    machine2 = Device(tmp_path, "machine2", server.url, CLAW)
+    write(machine2.root, "game/CLAW.USR", "played offline", mtime=9500)
+    assert machine2.push()["result"] == "conflict_uploaded"
 
 
 def test_push_after_the_other_device_uploaded(server, tmp_path):
