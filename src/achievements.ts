@@ -1,23 +1,44 @@
-// RetroAchievements progress shown in Steam's own screens (issue #24): the "Conquistas"
-// section of the game page and the "Minhas conquistas / Conquistas globais" list.
+// RetroAchievements progress shown in Steam's own screens (issues #24 and #30): the
+// "Conquistas" section of the game page, the achievements page (Achievement Sets) and the
+// in-game overlay.
 //
 // Third place that touches Steam internals, kept out of steam.ts because it patches
-// Steam's stores instead of calling methods. Measured on the Deck and the Steam Machine
-// (SteamOS 3.9.5, 2026-11-01; docs/steam-api-notes.md):
+// Steam's objects instead of calling methods. Measured on the Deck and the Steam Machine
+// (docs/steam-api-notes.md, "Achievement Sets page"):
 // - the export names are minified, so every object is found by its SHAPE;
 // - each patch is independent: one that is not found disables only its part;
-// - NEVER write a mobx observable inside a getter Steam calls while rendering
-//   (`GetAchievements`, `GetSections`). Doing so in a first test made a render loop that
-//   froze the steamwebhelper of the Deck until a watchdog killed it. Writes happen here
-//   only in `publish` / `forget` (card flow) and in timers, and only when the value changed;
-// - `details.achievements` is not written at all: the section reads it through
-//   `GetAchievements`, and the patched getter alone was enough (measured after a Steam
-//   restart, with `details.achievements` still at Steam's `0/0`).
+// - since the Steam client of 2026-11-13 the achievements page and the game page section
+//   read three TanStack queries (`["achievements", appid, "schema" | "globalpercentages" |
+//   "user_achievements", steamid]`). For a card shortcut the plugin swaps their `queryFn`
+//   in `QueryClient.defaultQueryOptions`, so Steam fetches from the plugin instead of its
+//   service (which answers "no achievements" for a shortcut);
+// - NEVER write an observable or the query cache inside something Steam calls while
+//   rendering (`defaultQueryOptions`, `GetAchievements`, `GetSections`). A first test that
+//   did it froze the steamwebhelper of the Deck. Writes (query invalidation) happen only on
+//   timers, after a change of progress;
+// - `appDetailsStore.GetAchievements` still feeds the in-game overlay;
+//   `details.achievements` itself is never written.
 
 import { Patch, afterPatch, callOriginal, findModuleExport, replacePatch } from "@decky/ui";
 import { RaGame, SteamAchievement } from "./backend";
 
 declare const appDetailsStore: any;
+
+/** Steam's base-game set: the page names it "Jogo base". */
+const BASE_SET = 0;
+const QUERY_KINDS = new Set(["schema", "globalpercentages", "user_achievements"]);
+
+interface SetAchievement {
+  internal_key: number;
+  api_name: string;
+  name: string;
+  description: string;
+  hidden: boolean;
+  archived: boolean;
+  icon_achieved: string;
+  icon_unachieved: string;
+  groupid: number;
+}
 
 /** What the Steam screens read for one shortcut, built only when the progress changes. The
  *  objects keep their identity until then: comparing by identity is what tells "changed". */
@@ -25,7 +46,7 @@ interface Shown {
   gameId: number;
   /** Which achievements are unlocked and when: what a new fetch is compared with. */
   signature: string;
-  /** What `appDetailsStore.GetAchievements` returns (game page section). */
+  /** What `appDetailsStore.GetAchievements` returns (in-game overlay). */
   details: {
     nAchieved: number;
     nTotal: number;
@@ -33,9 +54,12 @@ interface Shown {
     vecUnachieved: SteamAchievement[];
     vecAchievedHidden: SteamAchievement[];
   };
-  /** Achievements store, list page. */
-  my: { data: { achieved: Record<string, SteamAchievement>; unachieved: Record<string, SteamAchievement>; hidden: {} } };
-  global: { data: Record<string, number> };
+  /** The three queries of the achievements page, in the shape of Steam's fetchers. */
+  schema: object;
+  percentages: { percentages: Record<number, number> };
+  /** The user query without `steamid`, added per steamid in `userData`. */
+  user: { achievements: Record<number, object>; groups: Record<number, object> };
+  userBySteamid: Map<string, object>;
 }
 
 const shown = new Map<number, Shown>();
@@ -45,11 +69,11 @@ const known = new Map<number, number>();
 /** Bumped on logout and login: a fetch started in another session is never shown. */
 let session = 0;
 const patches = new Map<string, Patch[]>();
-/** Store with `m_mapMyAchievements` (list page). `null` = not found: no list page. */
-let store: any = null;
+/** Steam's global QueryClient. `null` = not found: no achievements page nor section. */
+let queries: any = null;
 let stopped = false;
 
-/** Measured on a Steam game (AoE DE): the section shows the 12 most common locked ones. */
+/** Measured on a Steam game (AoE DE): the overlay shows the 12 most common locked ones. */
 const UNACHIEVED_SHOWN = 12;
 
 /** Opening a game page or its list asks for a fresh fetch at most this often per game:
@@ -61,42 +85,105 @@ const VIEW_REFRESH_MS = 60_000;
 const signatureOf = (game: RaGame) =>
   `${game.gameId}|${game.achievements.map((a) => `${a.strID}:${a.rtUnlocked}`).join(",")}`;
 
-function build(game: RaGame): Shown {
+const keyOf = (a: SteamAchievement) => Number(a.strID);
+
+function build(appid: number, game: RaGame): Shown {
   const achieved = game.achievements.filter((a) => a.bAchieved).sort((a, b) => b.rtUnlocked - a.rtUnlocked);
   const locked = game.achievements.filter((a) => !a.bAchieved);
-  const byId = (list: SteamAchievement[]) => Object.fromEntries(list.map((a) => [a.strID, a]));
+  const total = game.achievements.length;
+  const setAchievements: SetAchievement[] = game.achievements.map((a) => ({
+    internal_key: keyOf(a),
+    api_name: a.strID,
+    name: a.strName,
+    description: a.strDescription,
+    hidden: false,
+    archived: false,
+    // RA badge URLs: the backend already picks the locked image for a locked one
+    icon_achieved: a.strImage,
+    icon_unachieved: a.strImage,
+    groupid: BASE_SET,
+  }));
   return {
     gameId: game.gameId,
     signature: signatureOf(game),
     details: {
       nAchieved: achieved.length,
-      nTotal: game.achievements.length,
+      nTotal: total,
       // measured: achieved ones from the most recent, locked ones from the most common
       vecHighlight: achieved,
       vecUnachieved: [...locked].sort((a, b) => b.flAchieved - a.flAchieved).slice(0, UNACHIEVED_SHOWN),
       vecAchievedHidden: [],
     },
-    my: { data: { achieved: byId(achieved), unachieved: byId(locked), hidden: {} } },
-    global: { data: Object.fromEntries(game.achievements.map((a) => [a.strID, a.flAchieved])) },
+    schema: {
+      appid,
+      language: "",
+      schema_hash: game.gameId,
+      schema_version: 1,
+      // Steam leaves out sets without achievements (an RA game with none: no section)
+      groups: total
+        ? [
+            {
+              id: BASE_SET,
+              name: "",
+              archived: false,
+              ispublic: true,
+              developeronly: false,
+              dlcappid: 0,
+              order: 0,
+              achievements: setAchievements,
+            },
+          ]
+        : [],
+    },
+    percentages: { percentages: Object.fromEntries(game.achievements.map((a) => [keyOf(a), a.flAchieved])) },
+    user: {
+      // Steam's user query only lists what is unlocked (or has progress)
+      achievements: Object.fromEntries(
+        achieved.map((a) => [keyOf(a), { internal_key: keyOf(a), unlocked: true, unlock_time: a.rtUnlocked }]),
+      ),
+      groups: {
+        [BASE_SET]: {
+          groupid: BASE_SET,
+          is_achievable: true,
+          completed_achievements: achieved.length,
+          is_completed: total > 0 && achieved.length === total,
+          time_completed: total > 0 && achieved.length === total ? achieved[0].rtUnlocked : undefined,
+        },
+      },
+    },
+    userBySteamid: new Map(),
   };
 }
 
-/** Writes the list page's store for one appid, only what differs. Never call it from a getter. */
-function write(appid: number): void {
-  const s = shown.get(appid);
-  if (!s || stopped || !store) return;
-  try {
-    if (store.m_mapMyAchievements.get(appid) !== s.my) store.m_mapMyAchievements.set(appid, s.my);
-    if (store.m_mapGlobalAchievements.get(appid) !== s.global) store.m_mapGlobalAchievements.set(appid, s.global);
-  } catch {
-    // the store changed shape: only the list page is lost, the section still works
+/** Data of one query of a card shortcut, same identity while the progress is the same. */
+function queryData(appid: number, s: Shown, kind: string, steamid: string): object | undefined {
+  if (kind === "schema") return s.schema;
+  if (kind === "globalpercentages") return s.percentages;
+  // another user (friend comparison): Steam's answer for a shortcut, which is empty
+  const me = (window as any).App?.m_CurrentUser?.strSteamID;
+  if (me && steamid !== me) return undefined;
+  let user = s.userBySteamid.get(steamid);
+  if (!user) {
+    user = { appid, steamid, schema_hash: s.gameId, ...s.user };
+    s.userBySteamid.set(steamid, user);
   }
+  return user;
 }
 
-/** Writes after the current task: whoever triggered it (Steam's own `LoadMyAchievements`)
- *  may be in the middle of a render. */
-function writeLater(appid: number): void {
-  setTimeout(() => write(appid), 0);
+/** Steam's query of `appid` refetches (from our `queryFn` or, for a forgotten card, from
+ *  Steam's). Never call it from something Steam calls while rendering. */
+function refetchLater(appid: number, all = false): void {
+  const client = queries;
+  if (!client) return;
+  setTimeout(() => {
+    try {
+      void Promise.resolve(
+        client.invalidateQueries({ queryKey: ["achievements", appid], refetchType: all ? "all" : "active" }),
+      ).catch(() => undefined);
+    } catch {
+      // the client changed shape: the page keeps what it shows
+    }
+  }, 0);
 }
 
 let onView: ((appid: number, gameId: number) => Promise<void>) | null = null;
@@ -117,6 +204,27 @@ function viewed(appid: number): void {
 /** Who fetches when a screen shows the achievements (flow.ts, which talks to the backend). */
 export function onAchievementsViewed(handler: (appid: number, gameId: number) => Promise<void>): void {
   onView = handler;
+}
+
+/** Our `queryFn`s, one per query hash, so the options Steam builds on every render keep
+ *  the same function. */
+const queryFns = new Map<string, () => Promise<object>>();
+
+function queryFnFor(appid: number, kind: string, steamid: string, original: unknown): (() => Promise<object>) | null {
+  if (typeof original !== "function") return null;
+  const id = `${appid}|${kind}|${steamid}`;
+  let fn = queryFns.get(id);
+  if (!fn) {
+    fn = async function (this: unknown, ...args: unknown[]) {
+      // runs inside Query.fetch, outside the render
+      viewed(appid);
+      const s = shown.get(appid);
+      const data = s && !stopped ? queryData(appid, s, kind, steamid) : undefined;
+      return data ?? (original as (...a: unknown[]) => Promise<object>).apply(this, args);
+    };
+    queryFns.set(id, fn);
+  }
+  return fn;
 }
 
 /** Adds "achievements" to the sections (after "nonsteam"; the page lays them out in its own
@@ -145,7 +253,7 @@ const PARTS: Record<string, () => Patch[]> = {
     return [
       afterPatch(Sections.prototype, "GetSections", (args: any[], ret: any) => {
         const appid = Number(args[0]?.appid);
-        // the game page is open: without data yet there is no section to read the getter,
+        // the game page is open: without data yet there is no section to read the queries,
         // so this is where a card loaded offline gets its retry
         if (!shown.has(appid)) viewed(appid);
         if (!shown.has(appid) || !(ret instanceof Set) || ret.has("achievements")) return ret;
@@ -164,26 +272,27 @@ const PARTS: Record<string, () => Patch[]> = {
       }),
     ];
   },
-  list() {
-    const found = findModuleExport(
-      (e: any) => e && typeof e === "object" && "m_mapMyAchievements" in e && typeof e.LoadMyAchievements === "function",
+  queries() {
+    const client = findModuleExport(
+      (e: any) =>
+        e &&
+        typeof e === "object" &&
+        typeof e.getQueryCache === "function" &&
+        typeof e.defaultQueryOptions === "function" &&
+        typeof e.invalidateQueries === "function",
     );
-    if (!found) throw new Error("store with m_mapMyAchievements not found");
-    store = found;
+    if (!client) throw new Error("QueryClient not found");
+    queries = client;
     return [
-      // Without this, Steam asks for the shortcut's achievements and stores `{error: 8}`.
-      // `GetMyAchievements` calls it during render after storing `{loading: true}`; the
-      // original also writes only after an await, so ours writes on a timer.
-      replacePatch(found, "LoadMyAchievements", (args: any[]) => {
-        const appid = Number(args[0]);
-        if (!shown.has(appid)) return callOriginal;
-        writeLater(appid);
-        return Promise.resolve();
-      }),
-      // The list page reads through here, also during render: only schedules
-      afterPatch(found, "GetMyAchievements", (args: any[], ret: any) => {
-        viewed(Number(args[0]));
-        return ret;
+      // Called for every query, also while rendering: only computes, never writes
+      afterPatch(client, "defaultQueryOptions", (_args: any[], ret: any) => {
+        const key = ret?.queryKey;
+        if (!Array.isArray(key) || key[0] !== "achievements" || !QUERY_KINDS.has(key[2])) return ret;
+        const appid = Number(key[1]);
+        if (!known.has(appid)) return ret;
+        if (queryFns.get(`${appid}|${key[2]}|${String(key[3] ?? "")}`) === ret.queryFn) return ret;
+        const fn = queryFnFor(appid, key[2], String(key[3] ?? ""), ret.queryFn);
+        return fn ? { ...ret, queryFn: fn } : ret;
       }),
     ];
   },
@@ -219,22 +328,15 @@ export const achievementsSession = (): number => session;
 export function publishAchievements(appid: number, game: RaGame, fromSession: number): boolean {
   if (stopped || fromSession !== session) return false;
   if (shown.get(appid)?.signature === signatureOf(game)) return false;
-  shown.set(appid, build(game));
-  writeLater(appid);
+  shown.set(appid, build(appid, game));
+  refetchLater(appid);
   return true;
 }
 
 function unpublish(appid: number): void {
-  const s = shown.get(appid);
   lastView.delete(appid);
-  if (!s) return;
-  shown.delete(appid);
-  try {
-    if (store?.m_mapMyAchievements.get(appid) === s.my) store.m_mapMyAchievements.delete(appid);
-    if (store?.m_mapGlobalAchievements.get(appid) === s.global) store.m_mapGlobalAchievements.delete(appid);
-  } catch {
-    // nothing else to undo
-  }
+  if (!shown.delete(appid)) return;
+  refetchLater(appid);
 }
 
 /** The card of `appid` no longer declares a GameID: nothing to show or fetch. */
@@ -254,11 +356,14 @@ export function shownAppids(): number[] {
   return [...shown.keys()];
 }
 
-/** Plugin unload: undoes every patch and what was written. */
+/** Plugin unload: undoes every patch, and Steam refetches the cards' queries from its own
+ *  service (also the inactive ones, so its cache keeps nothing of ours). */
 export function stopAchievements(): void {
-  newAchievementsSession();
-  known.clear();
+  const appids = [...new Set([...known.keys(), ...shown.keys()])];
   stopped = true;
+  shown.clear();
+  known.clear();
+  session += 1;
   onView = null;
   for (const patch of [...patches.values()].flat()) {
     try {
@@ -268,5 +373,7 @@ export function stopAchievements(): void {
     }
   }
   patches.clear();
-  store = null;
+  for (const appid of appids) refetchLater(appid, true);
+  queryFns.clear();
+  queries = null;
 }
