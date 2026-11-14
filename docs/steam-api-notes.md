@@ -90,7 +90,39 @@ Used by `appIcon` (`src/steam.ts`) and `gameLogo` (`src/flow.ts`) for the insert
 | `appStore.GetIconURLForApp(overview)`, Steam game | CDN URL `https://shared.steamstatic.com/community_assets/images/apps/<appid>/<icon_hash>.jpg` (AoE DE, 1017900). Offline it depends on the CEF cache; `gameLogo` hides the image if it fails to load. |
 | `toaster.toast({ …, logo: <img/> })` | Steam draws `logo` as the square left of the title, the image filling it with `width/height: 100%`. Toasts are drawn in their own CEF window, `notificationtoasts_uid2`: capture it with `deck.mjs toasts`, the plain `screenshot` misses it. Toasts fired together queue up and show one at a time. |
 
+## Achievement Sets page (issue #30, measured 2026-11-14, SteamOS 3.9.5, Steam client of 2026-11-13)
+
+The Steam client of 2026-11-13 (`sSteamBuildDate: Nov 13 2026`, same build on the Deck and the Steam Machine; SteamOS is still 3.9.5) shipped the redesigned achievements page with **Achievement Sets**. Since then no card shows achievements: the list page says "0 conquistas / Este jogo não está na sua biblioteca" and the "Conquistas" section is gone from the game page. The plugin itself did not fail: no `achievements patch:` in the event log, the three parts of [Achievements on a shortcut](#achievements-on-a-shortcut-issue-24-measured-2026-11-01-steamos-395) were found and installed, the RA fetch worked (`God of War: 2/43`) and the old store still held the plugin's data. The screens simply stopped reading it.
+
+**Where the screens read from now.** The list page `/library/app/<appid>/achievements/my/individual` and the game page section ("Suas coisas") read three TanStack Query queries on Steam's global `QueryClient` (a webpack export object with `getQueryCache` and `setQueryData`; the only one):
+
+| Query key | Fetcher (service `Player.*` on a webpack export object with `GetGameAchievements`) | `staleTime` | Data |
+|---|---|---|---|
+| `["achievements", appid, "schema"]` | `GetGameAchievements({appid, language})` | 24 h | `{appid, language, schema_hash, schema_version, groups: [Group]}` |
+| `["achievements", appid, "globalpercentages"]` | `GetGlobalAchievementPercentages({appid})` | 24 h | `{percentages: {[internal_key]: pct}}` |
+| `["achievements", appid, "user_achievements", steamid64]` | `GetUserAchievements({appid, steamid})` | 10 min | `{appid, steamid, schema_hash, achievements: {[internal_key]: {internal_key, unlocked, unlock_time, progress}}, groups: {[groupid]: {groupid, is_achievable, completed_achievements, is_completed, time_completed}}}` |
+
+- `Group` = `{id, name, archived, ispublic, developeronly, dlcappid, order, achievements: [{internal_key, api_name, name, description, hidden, archived, icon_achieved, icon_unachieved, groupid, min_progress, max_progress}]}`. Group `0` is the base game (Steam names it "Jogo base" in the query's `select`). The fetcher builds the icon URLs as `<CDN>/community_assets/images/apps/<appid>/<icon>`, so a fake service answer cannot carry RA's badge URLs; data put straight into the query can (an absolute `icon_achieved` was drawn).
+- For a shortcut the service answers empty: `groups: []`, `percentages: {}`, `achievements: {}`, all with status `success`.
+- Derived queries (`summary`, `by_status`) are keyed by the `dataUpdatedAt` of the three above, so they recompute when any of them changes.
+- A set counts as "achievable" only if the user's `groups[id].is_achievable` is `true` (a DLC the user owns, or a set with `dlcappid: 0`). Rare = global % < 10.
+- `QueryClient.defaultQueryOptions(options)` (public TanStack method) is called for every query's options, including during render; its result carries the `queryFn` that `Query.fetch` runs.
+- Measured on Steam games with sets (pages opened with the user's go-ahead, games not started): Euro Truck Simulator 2 (227300, 16 sets, two with `dlcappid: 0`: "Conjuntos: 0/3", "10/42 … em 3 conjuntos") and Age of Empires II: DE (813780, 12 DLC sets: "Conjuntos: 0/5", "69/241"). The user query only lists unlocked achievements, achievements with progress, and the sets the user can achieve.
+- Hint that the cache is persisted: ETS2's queries had `dataUpdatedAt` of 2026-11-12, before the client update, with no page opened since. To confirm with a Steam restart (it matters: the plugin's data could survive the plugin).
+
+**Proof in memory (Deck, eval only, undone afterwards).** `setQueryData` on the three keys of the God of War shortcut (3041130592), built from the plugin's data, made the list page show "2/43 conquistas alcançadas (5%)" with RA badges and unlock dates, and the "Conquistas 2/43 (5%)" section in "Suas coisas" (the `GetSections` patch still adds it; without the queries the section component renders nothing). With two groups on the New Super Mario Bros. Wii shortcut (base 95 as group 0, RA subset 38093 as group 1 "Multiplayer", both `dlcappid: 0`) the page showed "Conjuntos: 0/2", "168 conquistas (2 raras) … em 2 conjuntos", "Todos os conjuntos (2)".
+
+**What else changed in the old objects.**
+- `appDetailsStore.GetAchievements` is still read by the in-game overlay ("Suas conquistas", module with `AppOverlay_GameOverview_YourAchievements`): the `details` patch stays.
+- The store with `m_mapMyAchievements` gained `m_mapAchievementsByID` / `GetMyAchievementsByID` (timeline markers), but `GetMyAchievements` has **no reader** outside the store itself: the `list` patch no longer shows anything.
+
+**RetroAchievements subsets.** A subset is its own RA game whose `ParentGameID` points to the main game: `New Super Mario Bros. Wii [Subset - Multiplayer]` is **38093** (`ParentGameID: 95`, 82 achievements); `God of War II [Subset - Bonus]` is 28250 (`ParentGameID: 2783`). `API_GetGameInfoAndUserProgress` and `API_GetGameExtended` of the main game list no subsets, and there is no public endpoint from parent to children, so a card has to name its subsets. (38083, the number first given for the NSMB Wii subset, is an unrelated DS game.)
+
+`spike.mjs` on the same day: 14/14 OK. `steamwebhelper` idle at 4–15% CPU.
+
 ## Achievements on a shortcut (issue #24, measured 2026-11-01, SteamOS 3.9.5)
+
+> **Partly obsolete since the Steam client of 2026-11-13:** the list page and the game page section read the queries described in [Achievement Sets page](#achievement-sets-page-issue-30-measured-2026-11-14-steamos-395-steam-client-of-2026-11-13). What still holds: finding objects by shape, `GetSections`, `appDetailsStore.GetAchievements` (in-game overlay) and the render-loop rules below.
 
 Used by `src/achievements.ts` to show RetroAchievements progress in the game page's "Conquistas" section and in the list page `/library/app/<appid>/achievements/my/individual`. Same shapes on the Deck and on the Steam Machine (read-only there).
 
