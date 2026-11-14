@@ -465,17 +465,48 @@ State per key on the device: `lastSyncedHash` (the hash both sides had after the
 | changed | changed too (or no `lastSyncedHash` and different) | the newer `newestMtime` wins; the loser goes to the backups |
 | unreachable (~10 s) | | play with the local save; the upload stays pending |
 
-A download extracts to a `.partial` folder next to each save folder and renames it over the old one; excluded paths already on the device stay as they are.
+A download is checked file by file and as a whole (the archive carries its file list and hash), extracted to a staging folder in the game folder (`.insertplay-saves.partial`), then each file is renamed into place and the save files the archive doesn't have are removed. It only writes inside the strategy's save folders, never an excluded path, never through a symlink. Excluded paths and symlinks already on the device stay as they are. A local save that would be overwritten goes to the server's backups first (when backups are on, and always for a conflict loser), unless it is larger than the server's backup limit.
 
 **When the game closes**, the save is uploaded if its hash changed. A pending upload is retried on the next close, when the plugin starts and periodically. An upload never runs while the game is open (a lock per key, held by the launch wrapper for the whole game).
 
 ### Launch hook
 
-With sync on, the shortcut of a library game (card or install) runs a wrapper before the card's script: `"~/.local/share/insertplay/bin/insertplay-run" <key> -- "<root>/insertplay-start.sh" --guid <guid>`. The card and the manifest are not changed. The wrapper:
+The shortcut of a library game (installed, or a card with the same guid) runs a wrapper in front of the card's script. With `exe` `/bin/bash`, the options become:
+
+```
+"/home/deck/.local/share/insertplay/bin/insertplay-run" <key> "<game folder>" -- "/bin/bash" "<game folder>/insertplay-start.sh" --guid <guid>
+```
+
+The card and the manifest are not changed. A card whose `exe` is not a shell, or a game folder with `"`, `$`, `` ` `` or `\` in its path, keeps its line and has no sync. The wrapper:
 
 - checks that `<root>/shortcut-identity.json` has the same guid as `<key>` (the card's guard refuses a wrong card but exits 0);
 - downloads the save, runs the script without `exec` and uploads at the end;
 - after Steam's "Sair do jogo", which kills the whole game ~1.7 s after SIGTERM (measured: [steam-api-notes.md](steam-api-notes.md#save-sync-launch-hook-issue-63-stage-0-measured-2026-11-14-steamos-395-decky-v331)), starts the upload in a detached `systemd-run --user` unit that waits for the lock;
-- falls back to running the script directly when `python3` or its module is missing, or sync is off.
+- holds a `flock` on `saves/locks/<key>.lock` for the whole game (the game inherits it);
+- falls back to running the command directly when `python3` or its module is missing, sync is off, the card is not the game, or no strategy is found.
 
 The plugin also uploads when Steam reports the game closed, as a safety net. The wrapper lives outside the plugin folder so it keeps working when the plugin is removed.
+
+### Files on the device
+
+| Path | Content |
+|---|---|
+| `~/.local/share/insertplay/bin/insertplay-run` | The wrapper (bash). |
+| `~/.local/share/insertplay/lib/` | `insertplay-saves.py` and a copy of `py_modules/insertplay_decky/saves/` as `insertplay_saves/`, run with the system `python3 -I`. |
+| `~/.local/share/insertplay/saves/config.json` | Server URL and token, `sync`, `backup`, device name (mode `0600`). Written by the plugin from its settings. |
+| `~/.local/share/insertplay/saves/state/<key>.json` | `lastSyncedHash`, `lastRev`, `pending`, the game folder last used and the strategy last read from the server or inferred (used offline). |
+| `~/.local/share/insertplay/saves/last/<key>.json` | Result of the last operation (`op`, `result`, `message`, `at`, `strategy`, `source`, `hash`, `rev`…). |
+| `~/.local/share/insertplay/saves/sync.log` | One line per operation. |
+
+The plugin rewrites the wrapper and the module at load when their content changed.
+
+### RPCs
+
+| Method | Returns |
+|---|---|
+| `saves_status(guid)` | `{guid, last, pending, rev}`: `last` is the last result record, or `null`. |
+| `saves_overview()` | `{<guid>: {last, pending, rev}}` for the library games with any sync history. |
+| `saves_push(guid)` | The result record of an upload attempt (`uploaded`, `unchanged`, `offline`, `busy` while the game runs, `not_library`, `not_here`…). |
+| `saves_retry_pending()` | The result records of the pending uploads it retried. |
+
+Result values: `uploaded`, `downloaded`, `unchanged`, `empty` (no save on either side), `conflict_uploaded`, `conflict_downloaded`, `offline`, `disabled`, `wrong_card`, `no_strategy`, `busy`, `error`. The settings `savesSync` (default off) and `savesBackup` (default on) are the panel's "Sincronizar saves" and "Guardar backup dos saves".

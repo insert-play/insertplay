@@ -484,3 +484,43 @@ def test_shortcut_icon_accepts_the_remote_library_cache_of_the_same_guid(main, t
     assert ok["apply"] is True and os.path.dirname(ok["path"]) == str(tmp_path / "data" / "icons")
     assert other is None and folder is None
     assert cards == []  # the virtual card never raises "card inserted"
+
+
+def test_save_sync_wraps_only_library_games(main, tmp_path, monkeypatch):
+    guid = "b093444f-c500-4c96-9050-9176acd31dbb"
+    card = tmp_path / "media" / "deck" / "Alan Wake 2"
+    card.mkdir(parents=True)
+    (card / "shortcut-identity.json").write_text(json.dumps({"guid": guid}), encoding="utf-8")
+    (card / "steam-shortcut.json").write_text(
+        json.dumps({"shortcut": {"appName": "AW2", "launch": {"exe": "/bin/bash", "args": '"{SD_ROOT}/insertplay-start.sh"'}}}),
+        encoding="utf-8",
+    )
+    info = {"mount": str(card), "label": "Alan Wake 2", "real": str(card)}
+
+    async def scenario():
+        plugin = main.Plugin()
+        await plugin._main()
+        try:
+            wrapper = plugin.saves_wrapper
+            assert wrapper and os.path.isfile(wrapper)
+            assert main._describe(info, plugin._wrap_launch)["launchOptions"].startswith('"')  # untouched card line
+            plain = main._describe(info, plugin._wrap_launch)["launchOptions"]
+            assert wrapper not in plain
+            monkeypatch.setattr(plugin.remote, "knows", lambda g: g == guid)
+            wrapped = main._describe(info, plugin._wrap_launch)["launchOptions"]
+            assert wrapped.startswith(f'"{wrapper}" {guid} "{os.path.realpath(card)}" -- "/bin/bash" ')
+            assert wrapped.endswith(f"insertplay-start.sh\" --guid {guid}")
+            # the config the wrapper reads follows the settings, never with sync on by default
+            cfg = json.loads(open(plugin.saves_paths.config, encoding="utf-8").read())
+            assert cfg["sync"] is False and cfg["backup"] is True
+            await plugin.set_setting("savesSync", True)
+            cfg = json.loads(open(plugin.saves_paths.config, encoding="utf-8").read())
+            assert cfg["sync"] is True
+            status = await plugin.saves_status(guid)
+            assert status == {"guid": guid, "last": None, "pending": False, "rev": None}
+            monkeypatch.setattr(plugin.remote, "knows", lambda g: False)
+            assert (await plugin.saves_push(guid))["result"] == "not_library"
+        finally:
+            await plugin._unload()
+
+    asyncio.run(scenario())
