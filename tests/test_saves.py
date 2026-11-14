@@ -579,3 +579,22 @@ def test_restore_returns_the_archive_snapshot(tmp_path):
     restored = snapshot.restore(dest, spec, archive, snap.hash)
     assert (restored.hash, restored.newest, restored.files) == (snap.hash, snap.newest, snap.files)
     assert snapshot.scan(dest, spec).hash == snap.hash
+
+
+@linux
+@pytest.mark.skipif(not _bash(), reason="needs bash, flock and /usr/bin/python3")
+def test_wrapper_game_keeps_sigint_and_stdin(tmp_path):
+    home = str(tmp_path / "home")
+    install.install(home)
+    sync.write_config(sync.Paths(home), "http://127.0.0.1:9/", TOKEN, True, True, "deck")
+    root = game(tmp_path / "game", TD6)
+    out = tmp_path / "status"
+    cmd = f"grep SigIgn /proc/self/status > '{out}'; read line; echo \"$line\" >> '{out}'"
+    done = subprocess.run(
+        ["/bin/bash", install.wrapper_path(home), KEY, root, "--", "/bin/bash", "-c", cmd],
+        env={**os.environ, "INSERTPLAY_HOME": home}, input=b"from-stdin\n", timeout=60,
+    )
+    assert done.returncode == 0
+    ignored, line = out.read_text().splitlines()
+    assert int(ignored.split()[1], 16) & 0b110 == 0  # SIGINT (2) and SIGQUIT (3) not ignored
+    assert line == "from-stdin"

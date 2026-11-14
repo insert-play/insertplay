@@ -54,10 +54,22 @@ after_kill() {
 }
 trap after_kill INT TERM HUP
 
-# In the foreground, like the old exec: the game keeps stdin and Steam's SIGINT (a background
-# job would ignore it). bash runs the trap as soon as the game exits.
-"$@"
+# In the background, so `wait` returns at Steam's signal and the trap runs at once (in the
+# foreground bash runs it only after the game exits, and the kill comes first: measured with
+# DuckStation). Like the old exec, the game keeps stdin and SIGINT: a background job would get
+# /dev/null and ignore SIGINT/SIGQUIT, which `<&0` and `env --default-signal` undo.
+if env --default-signal=INT true 2>/dev/null; then
+	env --default-signal=INT,QUIT "$@" <&0 &
+else
+	"$@" <&0 &
+fi
+child=$!
+wait "$child"
 status=$?
+while kill -0 "$child" 2>/dev/null; do
+	wait "$child"
+	status=$?
+done
 py push "$key" "$root" --locked
 exit "$status"
 """
