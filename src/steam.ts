@@ -246,6 +246,36 @@ export function openGamePage(appid: number): void {
   );
 }
 
+/** Path of the Big Picture window's current route (`null` = unknown). Measured on the Deck
+ *  (2026-11-14, issue #53): `SteamUIWindows[0].m_history.location.pathname` follows the
+ *  route a plugin opens with `Navigation.Navigate`. */
+export function currentPath(): string | null {
+  const path = windowHistory()?.location?.pathname;
+  return typeof path === "string" ? path : null;
+}
+
+/** The Big Picture window's history (`null` = not found). Measured on the Deck (2026-11-14,
+ *  issue #53): a memory history with `length, action, location, createHref, push, replace, go,
+ *  goBack, goForward, block, listen`; no `entries` or `index`. Every entry has its own
+ *  `location.key`. */
+export interface WindowHistory {
+  action: string;
+  location: { pathname: string; key?: string };
+  replace(path: string): void;
+  go(n: number): void;
+  listen(cb: (location: { pathname: string; key?: string }, action: string) => void): () => void;
+}
+
+export function windowHistory(): WindowHistory | null {
+  try {
+    const store = typeof SteamUIStore === "undefined" ? null : SteamUIStore?.m_WindowStore ?? SteamUIStore?.WindowStore;
+    const history = store?.SteamUIWindows?.[0]?.m_history;
+    return history && typeof history.listen === "function" ? history : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Notifies when a game closes, with its appid (a shortcut's appid, not the gameid).
  *  Measured with spike.mjs: `RegisterForAppLifetimeNotifications` reports `{unAppID, bRunning}`
  *  at start and exit. Returns the unsubscribe function. */

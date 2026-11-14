@@ -226,6 +226,36 @@ How the plugin uses it: one collection object per tab, keeping Steam's id (sort 
 
 Not measured: the Steam Machine (other plugins, cloud view of collections), a physical A press on a remote tile, search and home shelves.
 
+## Panel navigation: full-screen route vs Quick Access subpage (issue #53, measured 2026-11-14, SteamOS 3.9.5, Decky v3.3.1)
+
+Test routes and components (`IP Teste …`) were injected by eval and removed afterwards. Buttons were simulated with `FocusNavController.DispatchVirtualGamepad("vgp_onbuttondown" | "vgp_onbuttonup", {button, source: 1})`, which goes through Steam's focus controller (`GamepadButton`: OK 1, CANCEL 2, DIR_DOWN 10, DIR_RIGHT 12). Focus was read from the window's `activeElement` and checked on screenshots.
+
+**Full-screen route** (`routerHook.addRoute(path, Component)` + `Navigation.Navigate(path)` + `Navigation.CloseSideMenus()`):
+
+| Situation | Result |
+|---|---|
+| A on a panel button that navigates | The Quick Access closes and the page opens in the Big Picture window. |
+| `SidebarNavigation` with `pages[].route` (`/x/cartoes`, `/x/biblioteca`, `/x/geral`) | The focus lands on the sidebar item of the open page; a deep link selects that page. D-pad down switches pages (replacing the history entry); right enters the content. |
+| B | In the content: the focus goes back to the sidebar. In the sidebar: back to the previous Steam screen; the Quick Access does not reopen. |
+| Plain page (no sidebar) | B goes back too, but no button had the focus until a D-pad press. |
+| `showModal(<ConfirmModal/>)` from the route | Over the page in Big Picture, focus on OK. B cancels and the focus returns to the button that opened it; OK keeps the route open. |
+| `removeRoute` while the route is open | The page stays until the next navigation; then the path renders an empty screen. Leave the route before removing it on unload. |
+| History entries (`m_history.length`, measured with the real build) | D-pad down on the sidebar **replaces** the entry (length 3 → 3); a plain `Navigate` to another category **pushes** one (3 → 4). B goes back one entry per press. `m_history` is a memory history (`length, action, location, createHref, push, replace, go, goBack, goForward, block, listen`) without `entries` or `index`; each entry has its own `location.key`. |
+| Leaving every route entry on unload | The plugin follows `m_history.listen` from load (PUSH/REPLACE/POP by `location.key`) and on unload calls `go(-k)`, k = route entries on top. Measured: `/insertplay/geral` + `/insertplay/biblioteca` on top of `/library/home`, `unloadPlugin("InsertPlay")` → `/library/home` rendered, and a virtual B stayed there. The panel's category button with the route open uses `replace` (length 2 → 2). Tracking starts at load, or on the first category opened if the window was not there yet. Not handled: route entries left below another screen (e.g. the key page in Steam's browser) when the plugin unloads. |
+| Current path | `(SteamUIStore.m_WindowStore ?? SteamUIStore.WindowStore).SteamUIWindows[0].m_history.location.pathname` follows the route (`currentPath()` in `src/steam.ts`). |
+
+The route's pages mount when opened and unmount when left, so each page loads its own data on mount.
+
+**Subpage inside the Quick Access panel** (React state):
+
+| Situation | Result |
+|---|---|
+| Page swap | The focus goes to the Quick Access tab column. `navRef` on `Focusable` + `navRef.current.TakeFocus()` after the swap puts it on the first item. |
+| B, no handler | Decky goes back to its plugin list. With `Focusable onCancel` + `stopPropagation()`: back to the main page. |
+| `showModal` from the panel | Opens in Big Picture and closes the Quick Access. On cancel the Quick Access reopens with the panel remounted: the subpage state is lost. |
+
+Decision: full-screen route with `SidebarNavigation` (`/insertplay`, `src/panel/route.tsx`). The panel keeps a summary and one button per category. Route paths must not collide with Steam's or other plugins' (Decky had `/decky/store`, `/decky/settings`, `/steamgriddb/:appid/:assetType?`, `/plugins/PowerTools/settings_store`). Not yet confirmed with a physical controller press, on the Steam Machine, or with a game running.
+
 ## Plugin installation through Decky (measured 2026-10-24, Decky v3.3.0)
 
 Not a Steam API, but it is the other undocumented global the plugin uses (`src/selfupdate.ts`).
