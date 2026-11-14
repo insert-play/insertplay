@@ -14,7 +14,10 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "py_modules"))
 from insertplay_decky import cards, icons, plugin_package, prefixes  # noqa: E402
 from insertplay_decky import retroachievements as ra  # noqa: E402
 from insertplay_decky import remote_library  # noqa: E402
-from insertplay_decky.manifest import GUID_RE, CardError, load_card  # noqa: E402
+from insertplay_decky.saves import install as saves_install  # noqa: E402
+from insertplay_decky.saves import launch as saves_launch  # noqa: E402
+from insertplay_decky.saves import sync as saves_sync  # noqa: E402
+from insertplay_decky.manifest import GUID_RE, CardError, load_card, read_guid  # noqa: E402
 from insertplay_decky.store import EventLog, Registry, Settings  # noqa: E402
 
 POLL_SECONDS = 1.0
@@ -48,14 +51,21 @@ def guarded(fallback):
     return wrap
 
 
-def _describe(card: dict) -> dict:
+def _describe(card: dict, wrap=None) -> dict:
     """Detected card + parsed manifest. A read error goes in the payload instead of
-    breaking detection: the panel has to show *why* the card is unusable."""
+    breaking detection: the panel has to show *why* the card is unusable.
+
+    `wrap(guid, root, exe, options)`: the save sync wrapper for a card whose guid is in the
+    remote library (#63); the card stays as it is, only the shortcut's options change."""
     out = {"mount": card["mount"], "label": card["label"], "error": None}
     try:
         out.update(load_card(card["mount"]))
     except CardError as exc:
         out["error"] = str(exc)
+    if wrap and not out["error"] and out.get("guid") and out.get("exe"):
+        wrapped = wrap(out["guid"], card["mount"], out["exe"], out.get("launchOptions") or "")
+        if wrapped:
+            out["exe"], out["launchOptions"] = wrapped
     return out
 
 
@@ -119,6 +129,57 @@ class Plugin:
             log=self._remote_log,
             on_change=self._remote_emit,
         )
+        self.saves_paths = saves_sync.Paths(os.path.join(_home(), ".local", "share", "insertplay"))
+        self.saves_wrapper = None
+        self.remote.wrap_launch = self._wrap_launch
+
+    # ---- save sync (#63)
+
+    def _wrap_launch(self, guid: str, root: str, exe: str, options: str):
+        """Launch line with the save sync wrapper, for remote library games (installed or
+        on a card with the same guid). Without the wrapper installed: the line as it is."""
+        if not self.saves_wrapper or not self.remote.knows(guid):
+            return None
+        return saves_launch.wrap(exe, options, guid, os.path.realpath(root), self.saves_wrapper)
+
+    def _saves_setup(self) -> None:
+        """Wrapper and module in ~/.local/share/insertplay, and the config the wrapper reads."""
+        try:
+            if saves_install.install(self.saves_paths.home):
+                decky.logger.info("InsertPlay: save sync wrapper installed")
+            self.saves_wrapper = saves_install.wrapper_path(self.saves_paths.home)
+        except Exception:
+            decky.logger.exception("InsertPlay: save sync wrapper not installed")
+            self.saves_wrapper = None
+        self._saves_config()
+
+    def _saves_config(self) -> None:
+        try:
+            cfg = self.remote.config.load()
+            settings = self.settings.all()
+            saves_sync.write_config(
+                self.saves_paths, cfg["url"], cfg["token"], settings["savesSync"], settings["savesBackup"]
+            )
+        except Exception:
+            decky.logger.exception("InsertPlay: save sync config not written")
+
+    def _saves_root(self, guid: str):
+        """Where the game is now: a mounted card with this guid wins over the install."""
+        for card in self.mounted.values():
+            try:
+                if read_guid(card["mount"]) == guid:
+                    return os.path.realpath(card["mount"])
+            except CardError:
+                continue
+        return self.remote.installed_root(guid)
+
+    def _saves_log(self, record: dict) -> None:
+        quiet = ("unchanged", "empty", "disabled", "busy")
+        if record.get("result") not in quiet:
+            message = f"{record.get('key')}: {record.get('op')} {record.get('result')}"
+            if record.get("message"):
+                message += f" ({record['message']})"
+            self.log.add("saves", message)
 
     def _remote_log(self, message: str) -> None:
         """Called from the download thread too. Messages never carry the token."""
@@ -146,6 +207,7 @@ class Plugin:
             await asyncio.to_thread(self.remote.start)
         except Exception:
             decky.logger.exception("InsertPlay: remote library did not start")
+        await asyncio.to_thread(self._saves_setup)
         self.ready = True
         self.watcher = asyncio.get_event_loop().create_task(self._watch())
         decky.logger.info("InsertPlay: started with %d card(s)", len(self.mounted))
@@ -168,7 +230,7 @@ class Plugin:
                     self.log.add("removed", card["mount"])
                     await decky.emit("card_removed", {"mount": card["mount"], "label": card["label"]})
                 for card in inserted:
-                    payload = await asyncio.to_thread(_describe, card)
+                    payload = await asyncio.to_thread(_describe, card, self._wrap_launch)
                     self.log.add("inserted", f"{card['mount']}: {payload.get('appName') or payload['error']}")
                     await decky.emit("card_inserted", payload)
             except asyncio.CancelledError:
@@ -181,7 +243,7 @@ class Plugin:
     # the shortcuts of every card not in the list)
     @guarded(lambda: None)
     async def current_cards(self) -> list:
-        return [await asyncio.to_thread(_describe, c) for c in self.mounted.values()]
+        return [await asyncio.to_thread(_describe, c, self._wrap_launch) for c in self.mounted.values()]
 
     @guarded(str)
     async def artwork_base64(self, path: str) -> str:
@@ -289,7 +351,11 @@ class Plugin:
 
     @guarded(dict)
     async def set_setting(self, key: str, value) -> dict:
-        return self.settings.set(key, value)
+        result = self.settings.set(key, value)
+        if key in ("savesSync", "savesBackup"):
+            await asyncio.to_thread(self._saves_config)
+            self.log.add("saves", f"{key} = {value}")
+        return result
 
     def _log_portable(self, mount: str, results: dict) -> None:
         quiet = ("ok", "none", "running")
@@ -425,7 +491,9 @@ class Plugin:
 
     @guarded(lambda: None)
     async def remote_set_config(self, url: str, token=None) -> dict:
-        return await asyncio.to_thread(self.remote.set_config, url, token)
+        result = await asyncio.to_thread(self.remote.set_config, url, token)
+        await asyncio.to_thread(self._saves_config)
+        return result
 
     @guarded(lambda: None)
     async def remote_refresh(self) -> dict:
@@ -462,6 +530,59 @@ class Plugin:
     @guarded(str)
     async def remote_artwork_base64(self, game_id: str, kind: str) -> str:
         return await asyncio.to_thread(self.remote.artwork_base64, game_id, kind)
+
+    # Save sync (#63, docs/remote-library.md#saves). None = "don't know".
+
+    @guarded(lambda: None)
+    async def saves_status(self, guid: str) -> dict:
+        """Last sync result of one game on this device, and whether an upload is pending."""
+        if not GUID_RE.match(guid or ""):
+            raise ValueError(f"invalid guid {guid!r}")
+        guid = guid.lower()
+        state = await asyncio.to_thread(saves_sync.load_state, self.saves_paths, guid)
+        last = await asyncio.to_thread(saves_sync.last_result, self.saves_paths, guid)
+        return {"guid": guid, "last": last, "pending": bool(state.get("pending")), "rev": state.get("lastRev")}
+
+    @guarded(lambda: None)
+    async def saves_overview(self) -> dict:
+        """`saves_status` of every remote library game, for the panel."""
+        out = {}
+        for game in (await asyncio.to_thread(self.remote.games)).get("games", []):
+            gid = game["id"]
+            state = await asyncio.to_thread(saves_sync.load_state, self.saves_paths, gid)
+            last = await asyncio.to_thread(saves_sync.last_result, self.saves_paths, gid)
+            if state or last:
+                out[gid] = {"last": last, "pending": bool(state.get("pending")), "rev": state.get("lastRev")}
+        return out
+
+    @guarded(lambda: None)
+    async def saves_push(self, guid: str) -> dict:
+        """Uploads the game's save if it changed. Idempotent; never while the game runs (the
+        wrapper holds the lock): the safety net of Steam's "game closed" event."""
+        if not GUID_RE.match(guid or ""):
+            raise ValueError(f"invalid guid {guid!r}")
+        guid = guid.lower()
+        if not self.remote.knows(guid):
+            return {"key": guid, "op": "push", "result": "not_library"}
+        root = self._saves_root(guid)
+        if root is None:
+            return {"key": guid, "op": "push", "result": "not_here"}
+        record = await asyncio.to_thread(saves_sync.push, self.saves_paths, guid, root, 0)
+        self._saves_log(record)
+        return record
+
+    @guarded(lambda: None)
+    async def saves_retry_pending(self) -> list:
+        """Retries pending uploads (server was down). Returns the results."""
+        out = []
+        for key in await asyncio.to_thread(saves_sync.pending_keys, self.saves_paths):
+            root = self._saves_root(key) if GUID_RE.match(key) else None
+            if root is None:
+                continue
+            record = await asyncio.to_thread(saves_sync.push, self.saves_paths, key, root, 0)
+            self._saves_log(record)
+            out.append(record)
+        return out
 
     @guarded(lambda: None)
     async def log_add(self, kind: str, message: str) -> None:

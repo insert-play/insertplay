@@ -55,7 +55,8 @@ class Registry:
             _save(self.path, data)
 
 
-DEFAULT_SETTINGS = {"onInsert": "launch", "hideRemoved": True}
+# savesSync / savesBackup: save sync through the remote library (#63), global for now (#68).
+DEFAULT_SETTINGS = {"onInsert": "launch", "hideRemoved": True, "savesSync": False, "savesBackup": True}
 # Settings that take one value from a list, not any value of the default's type.
 SETTING_CHOICES = {"onInsert": ("none", "page", "launch")}
 

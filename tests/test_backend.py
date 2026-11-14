@@ -212,9 +212,12 @@ def test_registry_round_trip_and_merge(tmp_path):
     assert reg.all() == {}
 
 
+SAVES = {"savesSync": False, "savesBackup": True}
+
+
 def test_settings_reject_unknown_key_and_wrong_type(tmp_path):
     s = Settings(str(tmp_path / "settings.json"))
-    assert s.all() == {"onInsert": "launch", "hideRemoved": True}
+    assert s.all() == {"onInsert": "launch", "hideRemoved": True, **SAVES}
     for choice in ("none", "page", "launch"):
         assert s.set("onInsert", choice)["onInsert"] == choice
     assert s.set("hideRemoved", False)["hideRemoved"] is False
@@ -227,7 +230,10 @@ def test_settings_reject_unknown_key_and_wrong_type(tmp_path):
         s.set("other", True)
     with pytest.raises(ValueError):
         s.set("autoLaunch", True)
-    assert s.all() == {"onInsert": "launch", "hideRemoved": False}
+    assert s.set("savesSync", True)["savesSync"] is True
+    with pytest.raises(ValueError):
+        s.set("savesBackup", "yes")
+    assert s.all() == {"onInsert": "launch", "hideRemoved": False, **SAVES, "savesSync": True}
 
 
 @pytest.mark.parametrize(
@@ -238,9 +244,9 @@ def test_settings_migrate_auto_launch(tmp_path, stored, expected):
     path = tmp_path / "settings.json"
     path.write_text(json.dumps({**stored, "hideRemoved": False}), encoding="utf-8")
     s = Settings(str(path))
-    assert s.all() == {"onInsert": expected, "hideRemoved": False}
+    assert s.all() == {"onInsert": expected, "hideRemoved": False, **SAVES}
     s.set("hideRemoved", True)
-    assert json.loads(path.read_text(encoding="utf-8")) == {"onInsert": expected, "hideRemoved": True}
+    assert json.loads(path.read_text(encoding="utf-8")) == {"onInsert": expected, "hideRemoved": True, **SAVES}
 
 
 def test_settings_new_key_wins_over_old_and_bad_values_fall_back(tmp_path):
@@ -248,7 +254,7 @@ def test_settings_new_key_wins_over_old_and_bad_values_fall_back(tmp_path):
     path.write_text(json.dumps({"autoLaunch": True, "onInsert": "page"}), encoding="utf-8")
     assert Settings(str(path)).all()["onInsert"] == "page"
     path.write_text(json.dumps({"onInsert": "open", "hideRemoved": "no"}), encoding="utf-8")
-    assert Settings(str(path)).all() == {"onInsert": "launch", "hideRemoved": True}
+    assert Settings(str(path)).all() == {"onInsert": "launch", "hideRemoved": True, **SAVES}
 
 
 def test_event_log_tail_is_newest_first_and_trimmed(tmp_path):

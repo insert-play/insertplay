@@ -626,6 +626,9 @@ class RemoteLibrary:
         self._index = {"games": [], "generatedAt": None, "fetchedAt": None, "stale": False, "baseUrl": None}
         self._last_save = 0.0
         self._last_emit = 0.0
+        # save sync (#63): (gid, root, exe, options) -> (exe, options) with the launch
+        # wrapper in front, or None to keep the line as it is
+        self.wrap_launch = None
 
     # ---- lifecycle
 
@@ -710,6 +713,17 @@ class RemoteLibrary:
     def install_path(self, gid: str) -> str:
         return os.path.join(self.games_root, gid)
 
+    def knows(self, gid: str) -> bool:
+        """`gid` is a library game: in the index, or with a state here (installed, queued…)."""
+        with self._lock:
+            return self._index_game(gid) is not None or gid in self._games
+
+    def installed_root(self, gid: str):
+        """The install folder of an installed game, else None."""
+        with self._lock:
+            entry = self._games.get(gid)
+            return self.install_path(gid) if entry and entry.get("state") == "installed" else None
+
     def _cached_artwork(self, gid: str) -> dict:
         folder = os.path.join(self.artwork_dir, gid)
         out = {}
@@ -732,12 +746,17 @@ class RemoteLibrary:
         launch = _get(shortcut, "launch") or {}
         args = resolve_placeholder(str(_get(launch, "args") or ""), root).strip()
         art = self._cached_artwork(gid)
+        exe = resolve_placeholder(str(_get(launch, "exe") or ""), root)
+        options = f"{args} --guid {gid}" if args else f"--guid {gid}"
+        wrapped = self.wrap_launch(gid, root, exe, options) if self.wrap_launch else None
+        if wrapped:
+            exe, options = wrapped
         return {
             "guid": gid,
             "appName": str(_get(shortcut, "appName") or "").strip(),
-            "exe": resolve_placeholder(str(_get(launch, "exe") or ""), root),
+            "exe": exe,
             "startDir": resolve_placeholder(str(_get(launch, "startDir") or root), root),
-            "launchOptions": f"{args} --guid {gid}" if args else f"--guid {gid}",
+            "launchOptions": options,
             "artwork": {k: art[k] for k in ARTWORK_KINDS if k in art},
             "icon": art.get("icon"),
             "game": read_game(manifest),
