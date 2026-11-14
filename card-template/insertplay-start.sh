@@ -14,13 +14,17 @@ insertplay_guard_verify_or_exit "$SD_ROOT" "$@"
 
 # --- game: edit below ------------------------------------------------------------------
 # An emulator AppImage on the card, with its data (settings, BIOS, memory cards, saves)
-# in its own folder on the card, so everything travels with it. DuckStation keeps its data
-# in $XDG_DATA_HOME/duckstation. For a game with several discs, point GAME to a .m3u that
-# lists them, one file name per line.
+# in its own folder on the card, so everything travels with it. DuckStation uses the
+# AppImage's folder (duckstation/) as its data folder when a portable.txt is next to it;
+# without it, current releases ignore XDG_DATA_HOME and write to ~/.local/share/duckstation.
+# For a game with several discs, point GAME to a .m3u that lists them, one file name per line.
 EMULATOR="$SD_ROOT/duckstation/DuckStation-x64.AppImage"
 GAME="$SD_ROOT/game.cue"
 
+# keeps anything else DuckStation writes under XDG_DATA_HOME on the card too
 export XDG_DATA_HOME="$SD_ROOT"
+# an empty file can get lost in a copy: recreate it
+[[ -e "$SD_ROOT/duckstation/portable.txt" ]] || : >"$SD_ROOT/duckstation/portable.txt"
 
 # copying to the card can drop the exec bit
 chmod +x "$EMULATOR" 2>/dev/null || true

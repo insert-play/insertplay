@@ -104,13 +104,25 @@ The plugin starts the shortcut as `exe args --guid <guid>`. The template's [`ins
 
 | Emulator | How | Data folder |
 |---|---|---|
-| DuckStation | `export XDG_DATA_HOME="$SD_ROOT"` | `duckstation/` |
+| DuckStation | an empty `portable.txt` next to the AppImage (the script recreates it if a copy lost it); current releases ignore `XDG_DATA_HOME` | `duckstation/` |
 | PCSX2 | `-portable` argument | `PCSX2/` next to the AppImage (e.g. `pcsx2/PCSX2/`) |
 | Cemu | a `portable/` folder next to the AppImage; game with `-g`, fullscreen with `-f` | `cemu/portable/` |
 
 Keep paths in the emulator's settings relative to its data folder, so the card works under any mount point.
 
 - **PCSX2 and OpenGL:** use PCSX2 2.8 or later. With 2.6.3 under gamescope, the OpenGL renderer kept the window's initial 640×480 size and the picture filled only the bottom-left quarter of the screen until the renderer was switched ([#32](https://github.com/insert-play/insertplay/issues/32)). To update, replace the AppImage and keep the data folder; savestates from an older version may not load, memory cards are unaffected.
+- **DuckStation's first start:** without settings, DuckStation opens its setup wizard instead of the game. Put a minimal `duckstation/settings.ini` on the card (and the BIOS in `duckstation/bios/`):
+
+  ```ini
+  [Main]
+  SetupWizardIncomplete = false
+  NoDesktopFile = true
+  ConfirmPowerOff = false
+  [AutoUpdater]
+  CheckAtStartup = false
+  ```
+
+  `NoDesktopFile` keeps the AppImage from writing a `.desktop` file to the device. Measured with DuckStation v0.1-12442 on the Test Drive 6 card (2026-11-13).
 - **Several discs:** write a `.m3u` with one disc file name per line (e.g. `disc1.cue`, `disc2.cue`) and point `GAME` to it. The emulator then swaps discs by itself. DuckStation names a per-game memory card after the `.m3u` file, so name it like the existing card (e.g. `Heart of Darkness (USA).m3u` for `Heart of Darkness (USA)_1.mcd`).
 - **`.cue` files:** the `FILE` line must name the `.bin` next to it. A `.bin` renamed after the `.cue` was written (e.g. to `game.bin`) needs the line fixed.
 - **A Windows game:** replace the game block with Proton, the Steam Linux Runtime and a Wine prefix on the card:

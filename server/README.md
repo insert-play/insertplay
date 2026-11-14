@@ -2,7 +2,7 @@
 
 The server of the InsertPlay remote library ("Biblioteca Remota" in Steam): a static file server that the plugin downloads games from over the home network. The contract it implements (URLs, index, file lists, authentication) is [docs/remote-library.md](../docs/remote-library.md).
 
-It runs on any Linux box or NAS with Docker and Docker Compose v2: [Caddy](https://caddyserver.com/) serves the library read-only, and a small indexer (Python 3.9+, standard library only) writes the index next to it.
+It runs on any Linux box or NAS with Docker and Docker Compose v2 (see [Without Compose v2](#without-compose-v2) for Debian 11 and other old releases): [Caddy](https://caddyserver.com/) serves the library read-only, and a small indexer (Python 3.9+, standard library only) writes the index next to it.
 
 | File | What |
 |---|---|
@@ -66,7 +66,7 @@ docker compose up -d caddy
 | `INSERTPLAY_PORT` | Host port, default `8080`. The server URL is then `http://<server ip>:8080/`. |
 | `INSERTPLAY_UID` / `INSERTPLAY_GID` | Owner of the files the indexer writes (`id -u`, `id -g`), default `1000`. |
 
-`restart: unless-stopped` brings Caddy back after a reboot, as long as the Docker service is enabled (`sudo systemctl enable docker`). Give the server a fixed IP (a DHCP reservation in the router), since the plugin stores its URL.
+`restart: always` brings Caddy back after a reboot, as long as the Docker service is enabled (`sudo systemctl enable docker`). Not `unless-stopped`: docker.io 20.10.5 (Debian 11) marks the container as manually stopped at shutdown and leaves it down after the reboot (measured on a BeaglePlay, 2026-11-13). Give the server a fixed IP (a DHCP reservation in the router), since the plugin stores its URL.
 
 ## 4. Re-index
 
@@ -81,7 +81,14 @@ It prints one line per game indexed (files, empty directories, symlinks, size, a
 - It writes `index.json`, `lists/<id>.json` and a hash cache (`hash-cache.json`) in `$INSERTPLAY_CONFIG/index`, each to a temporary file renamed at the end, so Caddy never serves a half-written index. Caddy doesn't need a restart.
 - The cache skips rehashing files whose size and modification time didn't change. `--no-cache` forces a full rehash: `docker compose run --rm indexer python3 -I /opt/indexer/remote_library_index.py /srv/library /srv/index --no-cache`.
 - The library is read-only and the container has no network.
-- To re-index on a schedule, a cron line or systemd timer running `docker compose -f /path/to/server/docker-compose.yml run --rm indexer` is enough.
+- A file replaced in place with the same size and an older modification time (a copy over Samba keeps the original date) keeps its old hash in the cache: after replacing files that way, run the indexer once with `--no-cache`.
+- To re-index by itself when the library changes, use [`reindex-if-changed.sh`](reindex-if-changed.sh) from a cron line (`crontab -e` as the user that owns the config folder, a member of the `docker` group; run `mkdir -p ~/.cache` first, for the log):
+
+  ```
+  */10 * * * * /path/to/server/reindex-if-changed.sh >>$HOME/.cache/insertplay-reindex.log 2>&1
+  ```
+
+  Every run scans the library for anything changed since the last `index.json` (modification and change times, so files copied with their old dates count too, and a removed game counts through its parent folder). With no change it stops there; with a change it waits until nothing changed for `QUIET_MIN` minutes (default 5), so a game still being copied is not indexed half-way, then runs the indexer. A change made while the indexer runs is picked up by the next run. A copy that stalls longer than `QUIET_MIN` (e.g. on a "replace or skip" dialog) gets indexed half-way and fixed on a later run. On a BeaglePlay with 2 games (27 354 files) on an NTFS disk over USB 2.0, the scan takes ~6 s and a re-index ~50 s. `INSERTPLAY_REINDEX` replaces the indexer command, e.g. without Compose v2 (next section): `INSERTPLAY_REINDEX=$HOME/insertplay-library/indexer-run.sh`.
 
 ## 5. Test with curl
 
@@ -99,6 +106,65 @@ curl -s -o /dev/null -w '%{http_code}\n' -H "$AUTH" --path-as-is "$URL/library/.
 # Range: the rest of a file from byte 10 answers 206 with Content-Range
 curl -s -D - -o /dev/null -H "$AUTH" -H 'Range: bytes=10-' "$URL/library/<game folder>/steam-shortcut.json"
 ```
+
+## Without Compose v2
+
+Debian 11 (Bullseye) has no Compose v2 package, only `docker-compose` 1.25, which does not read this `docker-compose.yml` (long bind syntax with `create_host_path`, `profiles`). Run the same containers with plain `docker run` instead, with the same settings as the compose file. Two small scripts next to `server/` (with `server/.env` loaded by them) are enough:
+
+```sh
+#!/bin/sh
+# caddy-run.sh: starts Caddy detached; Docker brings it back at boot
+set -eu
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/server/.env"
+docker rm -f insertplay-caddy >/dev/null 2>&1 || true
+exec docker run -d --restart always --name insertplay-caddy   -p "${INSERTPLAY_PORT:-8080}:8080"   --env-file "$INSERTPLAY_CONFIG/token.env"   --mount "type=bind,src=$INSERTPLAY_LIBRARY,dst=/srv/library,readonly"   --mount "type=bind,src=$INSERTPLAY_CONFIG/index,dst=/srv/index,readonly"   --mount "type=bind,src=$HERE/server/Caddyfile,dst=/etc/caddy/Caddyfile,readonly"   --read-only --tmpfs /data --tmpfs /config   --cap-drop ALL --security-opt no-new-privileges:true   --entrypoint /bin/sh caddy:2 -c '
+if [ "${#INSERTPLAY_TOKEN}" -lt 32 ]; then
+  echo "INSERTPLAY_TOKEN missing or shorter than 32 characters in token.env" >&2
+  exit 1
+fi
+exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile'
+```
+
+```sh
+#!/bin/sh
+# indexer-run.sh: one-shot indexer; extra arguments go to it (e.g. --no-cache)
+set -eu
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/server/.env"
+exec docker run --rm --name insertplay-indexer   --user "${INSERTPLAY_UID:-1000}:${INSERTPLAY_GID:-1000}"   --mount "type=bind,src=$INSERTPLAY_LIBRARY,dst=/srv/library,readonly"   --mount "type=bind,src=$INSERTPLAY_CONFIG/index,dst=/srv/index"   --mount "type=bind,src=$HERE/server/indexer,dst=/opt/indexer,readonly"   --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true   python:3.12-alpine python3 -I /opt/indexer/remote_library_index.py /srv/library /srv/index "$@"
+```
+
+`--mount` with a missing `src` fails instead of creating an empty folder, like `create_host_path: false`. Use `--restart always`, not `unless-stopped` (see step 3).
+
+## Editing the library from a Windows PC (Samba)
+
+To copy games into the library from a PC, share **only the library root** over SMB. The disk then has to be mounted read-write (`rw` instead of `ro` in step 1); Caddy and the indexer still see it read-only through their `readonly` binds. On Debian, `sudo apt install samba`, then add to `/etc/samba/smb.conf` (keep a backup of the original):
+
+```ini
+[global]
+   server role = standalone server
+   server min protocol = SMB2
+   restrict anonymous = 2
+   unix extensions = no
+   load printers = no
+   disable spoolss = yes
+
+[InsertPlay]
+   path = /mnt/games/InsertPlay
+   valid users = debian
+   force user = debian
+   force group = debian
+   read only = no
+   create mask = 0644
+   veto files = /Thumbs.db/desktop.ini/.DS_Store/._*/
+   delete veto files = yes
+```
+
+- Set the SMB password of that user with `sudo smbpasswd -a debian`, check the file with `testparm -s` and restart with `sudo systemctl restart smbd`. `nmbd` (NetBIOS names) is not needed: `sudo systemctl disable --now nmbd`.
+- On Windows, map it from PowerShell (the Git Bash mangles UNC paths): `net use L: \\<server ip>\InsertPlay /persistent:yes`, with the password stored in the Credential Manager (`cmdkey /add:<server ip> /user:debian /pass`). Never put that password in a script or in this repository.
+- `wide links` stays at its default (`no`): symlinks inside a game (Proton prefixes have them) keep working, but none reaches outside the share. No guest access: without `map to guest`, an unknown user is refused.
+- After copying a game, re-index (step 4), or let `reindex-if-changed.sh` do it.
 
 ## What the server answers
 
