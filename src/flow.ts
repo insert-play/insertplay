@@ -868,6 +868,9 @@ async function syncLibraryShortcuts(games: RemoteGame[]): Promise<void> {
   }
 }
 
+const MISSING_RETRY_MS = 30_000;
+let lastMissingSync = 0;
+
 /** Reads the games from the backend (no network) and updates the game pages. `shortcuts`:
  *  also create/update the shortcuts (plugin load, list refreshed, card in or out). */
 async function readLibrary(shortcuts: boolean): Promise<void> {
@@ -875,8 +878,13 @@ async function readLibrary(shortcuts: boolean): Promise<void> {
   if (!result || !result.ok) return;
   const first = libraryGames === null;
   libraryGames = result.games;
-  const missing = result.games.some((g) => !libraryApps.has(g.id));
-  if (shortcuts || missing) await enqueue(() => syncLibraryShortcuts(result.games));
+  // a game still without a shortcut (its creation failed) is retried, but not on every
+  // progress event: a failure would log and toast once a second during a download
+  const missing = result.games.some((g) => !libraryApps.has(g.id)) && Date.now() - lastMissingSync > MISSING_RETRY_MS;
+  if (shortcuts || missing) {
+    lastMissingSync = Date.now();
+    await enqueue(() => syncLibraryShortcuts(result.games));
+  }
   announceLibrary(result.games, first);
   publishLibrary();
 }
