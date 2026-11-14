@@ -276,22 +276,14 @@ export function windowHistory(): WindowHistory | null {
   }
 }
 
-/** Notifies when a game closes, with its appid (a shortcut's appid, not the gameid).
- *  Measured with spike.mjs: `RegisterForAppLifetimeNotifications` reports `{unAppID, bRunning}`
- *  at start and exit. Returns the unsubscribe function. */
-export function onAppClosed(callback: (appid: number) => void): () => void {
+/** Notifies when a game starts (`running` true) or closes, with its appid (a shortcut's
+ *  appid, not the gameid). Measured with spike.mjs: `RegisterForAppLifetimeNotifications`
+ *  reports `{unAppID, bRunning}` at start and exit; for a shortcut the start comes as soon as
+ *  Steam runs the launch command (the save sync wrapper downloads after it). Returns the
+ *  unsubscribe function. */
+export function onAppLifetime(callback: (appid: number, running: boolean) => void): () => void {
   const registration = client()?.GameSessions?.RegisterForAppLifetimeNotifications?.((e: any) => {
-    if (e && e.bRunning === false && Number(e.unAppID) > 0) callback(Number(e.unAppID));
-  });
-  return () => registration?.unregister?.();
-}
-
-/** Notifies when a game starts, with its appid. Same notification as `onAppClosed`, with
- *  `bRunning: true`; for a shortcut it comes as soon as Steam starts the launch command (the
- *  save sync wrapper runs its download after it). Returns the unsubscribe function. */
-export function onAppStarted(callback: (appid: number) => void): () => void {
-  const registration = client()?.GameSessions?.RegisterForAppLifetimeNotifications?.((e: any) => {
-    if (e && e.bRunning === true && Number(e.unAppID) > 0) callback(Number(e.unAppID));
+    if (e && typeof e.bRunning === "boolean" && Number(e.unAppID) > 0) callback(Number(e.unAppID), e.bRunning);
   });
   return () => registration?.unregister?.();
 }

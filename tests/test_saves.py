@@ -598,3 +598,17 @@ def test_wrapper_game_keeps_sigint_and_stdin(tmp_path):
     ignored, line = out.read_text().splitlines()
     assert int(ignored.split()[1], 16) & 0b110 == 0  # SIGINT (2) and SIGQUIT (3) not ignored
     assert line == "from-stdin"
+
+
+def test_unchanged_push_that_clears_pending_is_recorded(server, tmp_path):
+    deck = Device(tmp_path, "deck", server.url, TD6)
+    write(deck.root, "duckstation/memcards/a", "v1")
+    deck.pull()
+    sync.write_config(deck.paths, "http://127.0.0.1:9/", TOKEN, True, True, "deck")
+    write(deck.root, "duckstation/memcards/a", "v2")
+    assert deck.push()["result"] == "offline" and deck.state()["pending"] is True
+    write(deck.root, "duckstation/memcards/a", "v1")  # back to what the server has
+    sync.write_config(deck.paths, server.url, TOKEN, True, True, "deck")
+    assert deck.push()["result"] == "unchanged"
+    last = sync.last_result(deck.paths, KEY)
+    assert (last["result"], last["pending"]) == ("unchanged", False)

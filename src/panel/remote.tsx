@@ -139,21 +139,24 @@ export function RemotePage() {
       setConfig(c);
       setUrl(c?.url ?? "");
     });
-    void getSettings().then(setSettings);
-    const readSaves = () => void savesOverview().then((o) => o && setSaves(o));
-    readSaves();
+    void getSettings().then((s) => typeof s?.savesSync === "boolean" && setSettings(s));
     const stop = onRemoteLibraryChange(() => setGames(remoteLibraryGames()));
-    // the save lines change when a game opens or closes, which raises no library event
-    const timer = setInterval(readSaves, 10_000);
     // the event while downloading; the list itself is read by flow.ts
     void refreshLibrary();
-    return () => {
-      stop();
-      clearInterval(timer);
-    };
+    return stop;
   }, []);
+  const syncOn = Boolean(settings?.savesSync);
+  useEffect(() => {
+    if (!syncOn) return;
+    const readSaves = () => void savesOverview().then((o) => o && setSaves(o));
+    readSaves();
+    // the save lines change when a game opens or closes, which raises no library event
+    const timer = setInterval(readSaves, 10_000);
+    return () => clearInterval(timer);
+  }, [syncOn]);
+  // the backend answers {} when the change failed: keep what is shown
   const toggle = (key: "savesSync" | "savesBackup", value: boolean) =>
-    void setSetting(key, value).then((next) => next && setSettings(next));
+    void setSetting(key, value).then((next) => typeof next?.[key] === "boolean" && setSettings(next));
 
   const save = async () => {
     setBusy(true);
@@ -251,7 +254,7 @@ export function RemotePage() {
       )}
       {configured &&
         (games ?? []).map((game) => (
-          <RemoteGameRow key={game.id} game={game} save={saves[game.id]} syncOn={Boolean(settings?.savesSync)} />
+          <RemoteGameRow key={game.id} game={game} save={saves[game.id]} syncOn={syncOn} />
         ))}
       {configured && games?.length === 0 && <PanelSectionRow>Nenhum jogo na biblioteca.</PanelSectionRow>}
       {configured && !editing && (
