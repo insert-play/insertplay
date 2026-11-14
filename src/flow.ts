@@ -55,6 +55,7 @@ import {
   waitForLibrary,
 } from "./steam";
 import { showBadges } from "./steam-badges";
+import { setTabApps } from "./library-tabs";
 import {
   achievementsSession,
   forgetAchievements,
@@ -412,11 +413,61 @@ export async function refreshBadges(): Promise<void> {
   }
 }
 
+let lastTabsError = "";
+let tabsRead: Promise<void> | null = null;
+let tabsAgain = false;
+
+/** Which plugin shortcuts go in the library tabs (issue #52): every registry shortcut that
+ *  exists in "Todos os jogos"; in "Instalados" also, when its card is inserted or its remote
+ *  library game is installed. From the plugin's own state: `per_client_data.installed` is
+ *  Steam's `true` for a remote game in "Instalar" until remote-steam.ts re-applies it.
+ *  Never throws; one read at a time, plus one more when asked meanwhile. */
+export function refreshTabs(): Promise<void> {
+  if (tabsRead) {
+    tabsAgain = true;
+    return tabsRead;
+  }
+  const run = readTabs().finally(() => {
+    tabsRead = null;
+    if (tabsAgain) {
+      tabsAgain = false;
+      void refreshTabs();
+    }
+  });
+  tabsRead = run;
+  return run;
+}
+
+async function readTabs(): Promise<void> {
+  try {
+    await waitForLibrary();
+    const [cards, registry] = await Promise.all([presentCards(), loadRegistry()]);
+    const present = new Set(cards.map((c) => c.guid).filter(Boolean));
+    const installedRemote = new Set((libraryGames ?? []).filter((g) => g.state === "installed").map((g) => g.id));
+    const all = new Set<number>();
+    const installed = new Set<number>();
+    for (const [guid, record] of Object.entries(registry)) {
+      // only shortcuts of this account (the registry is per device, issue #8)
+      if (!record?.appid || !shortcutExists(record.appid)) continue;
+      all.add(record.appid);
+      if (present.has(guid) || installedRemote.has(guid)) installed.add(record.appid);
+    }
+    setTabApps({ all: [...all], installed: [...installed] });
+    lastTabsError = "";
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    if (detail === lastTabsError) return;
+    lastTabsError = detail;
+    await logAdd("error", `library tabs: ${detail}`).catch(() => undefined);
+  }
+}
+
 export const onInserted = (card: Card) =>
   enqueue(() => ensureCard(card, true))
     .catch((err) => report(`Inserção de ${card.label}`, err))
     .finally(() => {
       void refreshBadges();
+      void refreshTabs();
       // a library game with this guid: the card's "Jogar" wins while it is in
       if (card.guid && libraryGames?.some((g) => g.id === card.guid)) void refreshLibrary(true);
     });
@@ -432,6 +483,7 @@ export const onRemoved = (card: { mount: string; label: string }) =>
     .catch((err) => report(`Remoção de ${card.label}`, err))
     .finally(() => {
       void refreshBadges();
+      void refreshTabs();
       // the shortcut of a library game goes back to the install folder (or "Instalar")
       if (libraryGames?.length) void refreshLibrary(true);
     });
@@ -728,6 +780,7 @@ export const reconcile = () =>
     .catch((err) => report("Reconciliação", err))
     .finally(() => {
       void refreshBadges();
+      void refreshTabs();
       // absent cards too: their shortcut pages keep the last state (cache only)
       void loadAllAchievements(false);
       void warnIfRaRefused().catch(() => undefined);
@@ -737,7 +790,10 @@ export const reconcile = () =>
 export const applyHideRemoved = () =>
   enqueue(syncAbsent)
     .catch((err) => report("Ocultar ao remover", err))
-    .finally(refreshBadges);
+    .finally(() => {
+      void refreshBadges();
+      void refreshTabs();
+    });
 
 /** "Reinstalar atalho" button: forces the artwork to be applied again. */
 export const reinstall = (card: Card) =>
@@ -746,7 +802,10 @@ export const reinstall = (card: Card) =>
     await ensureCard(card, false);
   })
     .catch((err) => report(`Reinstalação de ${card.label}`, err))
-    .finally(refreshBadges);
+    .finally(() => {
+      void refreshBadges();
+      void refreshTabs();
+    });
 
 export const launchCard = (card: Card) =>
   enqueue(async () => {
@@ -887,7 +946,18 @@ async function readLibrary(shortcuts: boolean): Promise<void> {
   }
   announceLibrary(result.games, first);
   publishLibrary();
+  // the library tabs (#52) change with a shortcut or an install, not with every progress event
+  const tabsKey = `${[...libraryApps.values()].join(",")}|${result.games
+    .filter((g) => g.state === "installed")
+    .map((g) => g.id)
+    .join(",")}`;
+  if (shortcuts || tabsKey !== lastTabsKey) {
+    lastTabsKey = tabsKey;
+    void refreshTabs();
+  }
 }
+
+let lastTabsKey = "";
 
 let libraryRead: Promise<void> | null = null;
 let libraryAgain = false;

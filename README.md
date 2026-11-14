@@ -8,6 +8,7 @@ A [Decky Loader](https://decky.xyz/) plugin that turns SD cards into game cartri
 - **SD card badge** on the covers of every game on the inserted card: InsertPlay shortcuts and Steam games installed in a library on the card.
 - **Steam games on a card**: a card with a Steam library and no InsertPlay manifest also gets a notification when inserted and removed and, if the card has exactly one game, the same "Ao inserir" action.
 - **Portable saves**: Steam games installed on a card can keep their saves on the card, so they follow it to another device.
+- **Library tabs**: Steam lists non-Steam shortcuts only in the "Não Steam" tab. The plugin's own games (cards and remote library) also show up in "Todos os jogos" and, while the card is inserted or the remote game is installed, in "Instalados" (Game Mode, `src/library-tabs.tsx`). Other shortcuts are left alone.
 - No Steam restart needed for any of this.
 
 > The plugin UI is in Brazilian Portuguese for now. Translation is tracked in [#21](https://github.com/insert-play/insertplay/issues/21). This README gives each UI label in Portuguese with its meaning.
@@ -104,7 +105,8 @@ A card whose manifest declares the game's [RetroAchievements](https://retroachie
   - creates or updates the shortcut with `SteamClient.Apps.*`;
   - applies the artwork and the icon (never replacing an icon picked by the user), hides and shows the shortcut, and starts the game;
   - draws the SD card badge on library covers (`src/steam-badges.tsx`, depends on Steam's DOM);
-  - shows RetroAchievements progress in Steam's achievement screens (`src/achievements.ts`, patches Steam's internal stores).
+  - shows RetroAchievements progress in Steam's achievement screens (`src/achievements.ts`, patches Steam's internal stores);
+  - adds its shortcuts to the "Todos os jogos" and "Instalados" library tabs (`src/library-tabs.tsx`, wraps the `/library` render; Steam's stores are not modified).
 - Registry `guid → appid` in `~/homebrew/settings/InsertPlay/registry.json`.
 
 The plugin relies on undocumented Steam client APIs (`SteamClient.*`); the calls in use and how they were measured are in [docs/steam-api-notes.md](docs/steam-api-notes.md). A Steam update can break them.
