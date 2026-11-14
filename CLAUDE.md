@@ -46,6 +46,7 @@ All commands run from the repository root, on Windows or WSL. Use `node scripts/
 | `restart` / `remove` | Restart Decky / uninstall InsertPlay. |
 | `wake` | Wake-on-LAN magic packet, then waits for SSH. Works on the Machine (`s2idle`) only; **not on the Deck** (S3: ask the user to press the power button). The PC must be on the devices' subnet. |
 | `suspend` | Suspends through Steam, to test `wake`. Refuses with a game running, and on the Deck (S3) unless `--deep-ok`: only with the user at the bench. |
+| `mount [X] [path] [--ro]` / `unmount [X]` | Windows: maps `/run/media/deck` (the mounted cards) as drive `X:` (default `S:`) via SSHFS-Win, for the user to copy saves or files in Explorer. Read-only on `machine`. The drive stays up after the command returns; `unmount` when done. |
 
 Others:
 - `node scripts/spike.mjs`: confirms the Steam API calls (see [docs/steam-api-notes.md](docs/steam-api-notes.md)). Run it after a Steam update or when using a new call.

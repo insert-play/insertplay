@@ -22,12 +22,15 @@
 //                                            mounted card (insertplay/decky/InsertPlay.zip)
 //   node scripts/deck.mjs wake               wake-on-LAN magic packet, then waits for SSH (needs "mac")
 //   node scripts/deck.mjs suspend            suspends the device through Steam (to test `wake`)
-import { spawnSync } from "node:child_process";
+//   node scripts/deck.mjs mount [X] [path] [--ro]   Windows: maps the device's mounted cards
+//                                            (/run/media/deck) as drive X: (default S:) via SSHFS-Win
+//   node scripts/deck.mjs unmount [X]        removes that drive
+import { spawn, spawnSync } from "node:child_process";
 import { createSocket } from "node:dgram";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Socket } from "node:net";
 import { lookup } from "node:dns/promises";
-import { networkInterfaces } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connect } from "./cdp.mjs";
@@ -443,6 +446,76 @@ function setupAccess(cfg) {
 
 /** The main Steam window. The title is localized ("Steam — Modo Big Picture"),
  *  so we look for "Big Picture" or for the window that is not a popup. */
+const SSHFS_BIN = "C:/Program Files/SSHFS-Win/bin";
+
+/** Drive letter from an argument ("S", "s:", "S:/"); default S. */
+function driveLetter(arg) {
+  const letter = (arg ?? "S").replace(/[:\\/]+$/, "").toUpperCase();
+  if (!/^[A-Z]$/.test(letter)) throw new Error(`invalid drive letter "${arg}"`);
+  return letter;
+}
+
+/** sshfs.exe processes serving drive `letter` (their command line has " X: "). */
+function sshfsPids(letter) {
+  const ps = `Get-CimInstance Win32_Process -Filter "Name='sshfs.exe'" | Where-Object { $_.CommandLine -match ' ${letter}: ' } | ForEach-Object { $_.ProcessId }`;
+  const r = run("powershell", ["-NoProfile", "-Command", ps], { capture: true });
+  return r.out.split(/\s+/).filter(Boolean);
+}
+
+/** Maps a device folder (default: /run/media/deck, where SteamOS mounts the cards) as a
+ *  Windows drive, to copy saves and inspect cards from Explorer. Calls sshfs.exe directly:
+ *  `net use \\sshfs.k\...` only tries ~/.ssh/id_rsa, and the dev key is usually ed25519.
+ *  On a prod device the drive is read-only. */
+async function mount(cfg, rest) {
+  if (process.platform !== "win32") throw new Error("mount is Windows-only (on Linux/WSL use sshfs directly)");
+  if (!existsSync(join(SSHFS_BIN, "sshfs.exe"))) {
+    throw new Error("SSHFS-Win not found: winget install WinFsp.WinFsp SSHFS-Win.SSHFS-Win");
+  }
+  const pos = rest.filter((a) => !a.startsWith("--"));
+  const letter = driveLetter(pos[0]);
+  const remote = pos[1] ?? "/run/media/deck";
+  const readOnly = rest.includes("--ro") || cfg.role === "prod";
+  if (existsSync(`${letter}:/`)) throw new Error(`drive ${letter}: is already in use (deck.mjs unmount ${letter})`);
+  const key = ["id_ed25519", "id_ecdsa", "id_rsa"].map((k) => join(homedir(), ".ssh", k)).find(existsSync);
+  if (!key) throw new Error(`no SSH key in ${join(homedir(), ".ssh")}`);
+  const cygKey = key.replace(/^([A-Za-z]):/, (_, d) => `/cygdrive/${d.toLowerCase()}`).replace(/\\/g, "/");
+  const opts = [
+    `IdentityFile=${cygKey}`, "PreferredAuthentications=publickey", "BatchMode=yes",
+    // DHCP changes the IP: don't pin a host key that will soon belong to another address
+    "StrictHostKeyChecking=no", "UserKnownHostsFile=/dev/null",
+    "idmap=user", "uid=-1,gid=-1", "create_umask=000", "reconnect", "ServerAliveInterval=15",
+    "fstypename=SSHFS", `volname=${cfg.name}${readOnly ? "-ro" : ""}`, "rellinks",
+    ...(readOnly ? ["ro"] : []),
+  ];
+  const child = spawn(join(SSHFS_BIN, "sshfs.exe"), [`${cfg.user}@${cfg.host}:${remote}`, `${letter}:`, ...opts.map((o) => `-o${o}`)], {
+    detached: true, stdio: "ignore", windowsHide: true,
+    env: { ...process.env, PATH: `${SSHFS_BIN};${process.env.PATH}` },
+  });
+  child.unref();
+  for (let i = 0; i < 30; i++) {
+    await sleepMs(500);
+    if (existsSync(`${letter}:/`)) {
+      console.log(`${letter}: -> ${cfg.user}@${cfg.host}:${remote}${readOnly ? " (read-only)" : ""}`);
+      return 0;
+    }
+  }
+  for (const pid of sshfsPids(letter)) run("taskkill", ["/PID", pid, "/F"], { capture: true });
+  console.error(`${letter}: did not show up in 15 s. Run "deck.mjs ${deviceFlag(cfg)} check" (SSH) and confirm "${remote}" exists.`);
+  return 1;
+}
+
+function unmount(rest) {
+  const letter = driveLetter(rest.find((a) => !a.startsWith("--")));
+  const pids = sshfsPids(letter);
+  if (!pids.length) {
+    console.error(`no SSHFS drive on ${letter}:`);
+    return 1;
+  }
+  for (const pid of pids) run("taskkill", ["/PID", pid, "/F"], { capture: true });
+  console.log(`${letter}: unmounted`);
+  return 0;
+}
+
 const isMainWindow = (t) =>
   t.type === "page" && (/big picture/i.test(t.title) || (/createflags=/.test(t.url) && !/browserviewpopup/.test(t.url)));
 
@@ -546,6 +619,10 @@ async function main() {
       console.log("suspending");
       return 0;
     }
+    case "mount":
+      return mount(cfg, rest);
+    case "unmount":
+      return unmount(rest);
     case "screenshot":
       return screenshot(cfg, rest[0]);
     case "panel":
@@ -567,7 +644,7 @@ async function main() {
       return 0;
     }
     default:
-      console.error("usage: node scripts/deck.mjs check|eval|ssh|deploy|restart|remove|logs|setup-access|stage-card|screenshot|panel|toasts|rpc|wake|suspend");
+      console.error("usage: node scripts/deck.mjs check|eval|ssh|deploy|restart|remove|logs|setup-access|stage-card|screenshot|panel|toasts|rpc|wake|suspend|mount|unmount");
       return 2;
   }
 }
