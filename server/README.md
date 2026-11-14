@@ -67,6 +67,7 @@ docker compose up -d caddy saves
 | `INSERTPLAY_CONFIG` | Config folder from step 2 (absolute path: Compose doesn't expand `~`). |
 | `INSERTPLAY_SAVES` | Save storage ([step 6](#6-saves)), e.g. `/mnt/games/InsertPlay-saves`. Written by the `saves` service only. |
 | `INSERTPLAY_SAVE_BACKUP_MB` | Backups kept per game, in MB (default `50`). |
+| `INSERTPLAY_SAVE_MAX_MB` | Largest save accepted, in MB (default `1024`). |
 | `INSERTPLAY_PORT` | Host port, default `8080`. The server URL is then `http://<server ip>:8080/`. |
 | `INSERTPLAY_UID` / `INSERTPLAY_GID` | Owner of the files the indexer writes (`id -u`, `id -g`), default `1000`. |
 
@@ -124,7 +125,7 @@ The plugin keeps each game's latest save on the server, so the same game can be 
 ```
 
 - **Outside the library**: the folder must not be inside `INSERTPLAY_LIBRARY`, so the indexer never hashes a save (it would change the game's `version`) and the Samba share doesn't show it. The disk has to be mounted read-write; the library itself stays read-only for Caddy and the indexer.
-- **Owner**: the service runs as `INSERTPLAY_UID:INSERTPLAY_GID`. On ext4, `chown` the folder to that user; on NTFS (`ntfs-3g`), the `uid=`/`gid=` mount options already make everything owned by it.
+- **Owner**: the service runs as `INSERTPLAY_UID:INSERTPLAY_GID` and refuses to start when it can't write to the folder. On ext4, `sudo chown 1000:1000 /mnt/games/InsertPlay-saves` (the uid/gid from `.env`); on NTFS (`ntfs-3g`), the `uid=`/`gid=` mount options already make everything owned by it.
 - **Backups**: when a device replaces the save, the previous one becomes a backup (if the device has "Guardar backup dos saves" on). The oldest are removed to keep each game within `INSERTPLAY_SAVE_BACKUP_MB`. A save larger than that limit gets no backup at all and still syncs normally.
 - **Restore a backup by hand**: `ls <guid>/backups/`, then copy one over `current.tar.gz` and edit `meta.json` so its `hash` no longer matches (for example, set it to 64 zeros): the next device that opens the game sees the server changed and downloads it.
 - The service has no port on the host: only Caddy reaches it, after the token check, and it checks the token again. With the service stopped, `/saves/*` answers `502` and the plugin plays with the local save and uploads later.
@@ -178,7 +179,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/server/.env"
 docker network inspect insertplay >/dev/null 2>&1 || docker network create insertplay >/dev/null
 docker rm -f insertplay-saves >/dev/null 2>&1 || true
-exec docker run -d --restart always --name insertplay-saves --network insertplay --network-alias saves   --user "${INSERTPLAY_UID:-1000}:${INSERTPLAY_GID:-1000}"   --env-file "$INSERTPLAY_CONFIG/token.env"   -e INSERTPLAY_SAVES_DIR=/srv/saves -e "INSERTPLAY_SAVE_BACKUP_MB=${INSERTPLAY_SAVE_BACKUP_MB:-50}"   --mount "type=bind,src=$INSERTPLAY_SAVES,dst=/srv/saves"   --mount "type=bind,src=$HERE/server/saves,dst=/opt/saves,readonly"   --read-only --cap-drop ALL --security-opt no-new-privileges:true   --log-driver journald   python:3.12-alpine python3 -I /opt/saves/saves_server.py
+exec docker run -d --restart always --name insertplay-saves --network insertplay --network-alias saves   --user "${INSERTPLAY_UID:-1000}:${INSERTPLAY_GID:-1000}"   --env-file "$INSERTPLAY_CONFIG/token.env"   -e INSERTPLAY_SAVES_DIR=/srv/saves -e "INSERTPLAY_SAVE_BACKUP_MB=${INSERTPLAY_SAVE_BACKUP_MB:-50}" -e "INSERTPLAY_SAVE_MAX_MB=${INSERTPLAY_SAVE_MAX_MB:-1024}"   --mount "type=bind,src=$INSERTPLAY_SAVES,dst=/srv/saves"   --mount "type=bind,src=$HERE/server/saves,dst=/opt/saves,readonly"   --read-only --cap-drop ALL --security-opt no-new-privileges:true   --log-driver journald   python:3.12-alpine python3 -I /opt/saves/saves_server.py
 ```
 
 Both scripts use the `insertplay` network: Caddy reaches the save server there as `saves:8081`.

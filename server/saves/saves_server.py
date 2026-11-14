@@ -5,7 +5,7 @@ check; this server checks the token again, so it is never open by itself. Contra
 docs/remote-library.md ("Saves").
 
     GET  /saves/<key>/meta               meta.json, or 404 with no save yet
-    GET  /saves/<key>/current.tar.gz     the save
+    GET  /saves/<key>/current.tar.gz     the save, with X-Save-Rev and X-Save-Hash of that very file
     PUT  /saves/<key>/current.tar.gz     replace it (If-Match: <rev>, or If-None-Match: * the first time)
     GET  /saves/<key>/strategy.json      the inferred save strategy, or 404
     PUT  /saves/<key>/strategy.json
@@ -18,21 +18,23 @@ Layout on disk, under INSERTPLAY_SAVES_DIR:
     <key>/current.tar.gz
     <key>/meta.json         {"rev", "hash", "newestMtime", "device", "uploadedAt", "size"}
     <key>/strategy.json     optional
-    <key>/backups/<ts>-<device>.tar.gz
+    <key>/backups/<ts>[-<n>]-<device>.tar.gz
 
 Environment:
     INSERTPLAY_TOKEN            the same token as Caddy (required, >= 32 characters)
-    INSERTPLAY_SAVES_DIR        storage root (default /srv/saves)
+    INSERTPLAY_SAVES_DIR        storage root (default /srv/saves); must be writable
     INSERTPLAY_SAVES_PORT       port (default 8081)
     INSERTPLAY_SAVE_BACKUP_MB   backups kept per game, in MB (default 50). A single save
                                 larger than this gets no backup; syncing it is not affected.
     INSERTPLAY_SAVE_MAX_MB      largest save accepted, in MB (default 1024)
 """
+import functools
 import hmac
 import http.server
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 import time
@@ -41,7 +43,8 @@ KEY_RE = re.compile(r"^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 DEVICE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 REV_RE = re.compile(r"^[0-9]{1,18}$")
-BACKUP_RE = re.compile(r"^[0-9]{8}T[0-9]{6}(?:-[0-9]+)?-[A-Za-z0-9._-]{1,64}\.tar\.gz$")
+LENGTH_RE = re.compile(r"^[0-9]{1,19}$")
+BACKUP_RE = re.compile(r"^([0-9]{8}T[0-9]{6})(?:-([0-9]{1,6}))?-[A-Za-z0-9._-]{1,64}\.tar\.gz$")
 CURRENT = "current.tar.gz"
 META = "meta.json"
 STRATEGY = "strategy.json"
@@ -49,6 +52,21 @@ BACKUPS = "backups"
 STRATEGY_LIMIT = 64 * 1024
 CHUNK = 1024 * 1024
 MB = 1024 * 1024
+SOCKET_TIMEOUT = 60
+
+
+def rev_of(meta) -> str:
+    """The rev of a stored meta: "0" when a meta exists without a valid rev (edited by hand),
+    so the next upload can still match it; None when there is no save."""
+    if not meta:
+        return None
+    rev = str(meta.get("rev", ""))
+    return rev if REV_RE.match(rev) else "0"
+
+
+def _backup_order(name: str):
+    m = BACKUP_RE.match(name)
+    return (m.group(1), int(m.group(2) or 1)) if m else ("", 0)
 
 
 class Store:
@@ -92,8 +110,8 @@ class Store:
             except OSError:
                 continue
             out.append({"name": name, "size": st.st_size, "mtime": st.st_mtime})
-        # names start with a UTC timestamp: newest first by name, then by mtime
-        out.sort(key=lambda b: (b["name"], b["mtime"]), reverse=True)
+        # names start with a UTC timestamp and a counter for the same second: newest first
+        out.sort(key=lambda b: _backup_order(b["name"]), reverse=True)
         return out
 
     def backup_path(self, key: str, name: str) -> str:
@@ -101,16 +119,15 @@ class Store:
 
     def _backup_name(self, key: str, device: str, now: float) -> str:
         stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime(now))
-        base = f"{stamp}-{device}.tar.gz"
-        n = 1
-        while os.path.exists(self.backup_path(key, base)):
-            n += 1
-            base = f"{stamp}-{n}-{device}.tar.gz"
-        return base
+        taken = [_backup_order(b["name"]) for b in self.backups(key)]
+        n = max([c for s, c in taken if s == stamp], default=0) + 1
+        return f"{stamp}-{device}.tar.gz" if n == 1 else f"{stamp}-{n}-{device}.tar.gz"
 
     def add_backup(self, key: str, src: str, device: str, now: float) -> dict:
         """Moves `src` into the backups, then trims the oldest until they fit the limit.
         A file larger than the limit is deleted instead: no backup, never an error."""
+        if not DEVICE_RE.match(device):
+            device = "unknown"
         size = os.path.getsize(src)
         if size > self.backup_limit:
             os.remove(src)
@@ -132,26 +149,36 @@ class Store:
                 except OSError:
                     pass
 
-    def partial(self, key: str) -> str:
+    def partial(self, key: str, kind: str = "upload") -> str:
         folder = self.folder(key)
         os.makedirs(folder, exist_ok=True)
-        return os.path.join(folder, f".upload-{threading.get_ident()}-{time.time_ns()}.partial")
+        return os.path.join(folder, f".{kind}-{threading.get_ident()}-{time.time_ns()}.partial")
 
     def replace_current(self, key: str, upload: str, fields: dict, backup: bool, now: float) -> dict:
-        """Called with the key's lock held and the rev already checked."""
+        """Called with the key's lock held and the rev already checked. The new save is in
+        place before anything else changes; the backup of the old one is best effort."""
         folder = self.folder(key)
         current = os.path.join(folder, CURRENT)
         old = self.meta(key)
-        backup_result = None
-        if os.path.isfile(current):
-            if backup and old:
-                moved = os.path.join(folder, f".old-{time.time_ns()}.partial")
-                os.replace(current, moved)
-                backup_result = self.add_backup(key, moved, str(old.get("device") or "unknown"), now)
-        os.replace(upload, current)
-        rev = str(int(old["rev"]) + 1) if old and REV_RE.match(str(old.get("rev", ""))) else "1"
+        kept = None
+        if backup and old and os.path.isfile(current):
+            kept = self.partial(key, "old")
+            try:
+                os.link(current, kept)
+            except OSError:
+                try:
+                    shutil.copyfile(current, kept)
+                except OSError:
+                    _remove(kept)
+                    kept = None
+        try:
+            os.replace(upload, current)
+        except OSError:
+            if kept:
+                _remove(kept)
+            raise
         meta = {
-            "rev": rev,
+            "rev": str(int(rev_of(old) or "0") + 1),
             "hash": fields["hash"],
             "newestMtime": fields["newestMtime"],
             "device": fields["device"],
@@ -159,7 +186,52 @@ class Store:
             "size": os.path.getsize(current),
         }
         _write_json(os.path.join(folder, META), meta)
+        backup_result = None
+        if kept:
+            try:
+                backup_result = self.add_backup(key, kept, str(old.get("device") or "unknown"), now)
+            except OSError as exc:
+                _remove(kept)
+                backup_result = {"stored": False, "reason": "io_error"}
+                print(f"{key}: backup failed: {exc}", file=sys.stderr)
         return {"meta": meta, "backup": backup_result}
+
+    def open_current(self, key: str):
+        """(meta, open file) of the same save, read under the key's lock: a PUT renames a new
+        file in, so the open file keeps the content this meta describes. (None, None) without one."""
+        with self.lock(key):
+            meta = self.meta(key)
+            try:
+                f = open(os.path.join(self.folder(key), CURRENT), "rb")
+            except OSError:
+                return None, None
+        return meta, f
+
+    def clean_partials(self) -> int:
+        """Leftovers of uploads cut short by a crash or a restart."""
+        removed = 0
+        try:
+            keys = [k for k in os.listdir(self.root) if KEY_RE.match(k)]
+        except OSError:
+            return 0
+        for key in keys:
+            for folder in (self.folder(key), os.path.join(self.folder(key), BACKUPS)):
+                try:
+                    names = os.listdir(folder)
+                except OSError:
+                    continue
+                for name in names:
+                    if name.endswith(".partial"):
+                        _remove(os.path.join(folder, name))
+                        removed += 1
+        return removed
+
+
+def _remove(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def _read_json(path: str):
@@ -180,13 +252,41 @@ def _write_json(path: str, data: dict) -> None:
     os.replace(tmp, path)
 
 
+def _safe(method):
+    """An unexpected error answers 500 in JSON (when nothing was sent yet), never a dropped
+    connection that the client would take for "server down"."""
+
+    @functools.wraps(method)
+    def inner(self):
+        try:
+            method(self)
+        except (ConnectionError, TimeoutError):
+            self.close_connection = True
+        except Exception as exc:
+            print(f"{self.command} {self.path}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            self.close_connection = True
+            if not getattr(self, "_started", False):
+                try:
+                    self._error(500, "server_error")
+                except OSError:
+                    pass
+
+    return inner
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "insertplay-saves"
     sys_version = ""
+    # a device that suspends in the middle of an upload must not hold a thread forever
+    timeout = SOCKET_TIMEOUT
 
     def log_message(self, fmt, *args):  # one line per request, never headers (the token)
         sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))
+
+    def send_response(self, code, message=None):
+        self._started = True
+        super().send_response(code, message)
 
     # ---- helpers
 
@@ -209,17 +309,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.close_connection = True
         self._json(code, {"error": error, **extra})
 
-    def _send_file(self, path: str) -> None:
-        try:
-            f = open(path, "rb")
-        except OSError:
-            return self._error(404, "not_found")
+    def _send_open(self, f, headers: dict = None) -> None:
         with f:
             size = os.fstat(f.fileno()).st_size
             self.send_response(200)
             self.send_header("Content-Type", "application/gzip")
             self.send_header("Content-Length", str(size))
             self.send_header("Cache-Control", "no-store")
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             if self.command == "HEAD":
                 return
@@ -254,40 +352,45 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.headers.get("Transfer-Encoding"):
             self._error(411, "length_required")
             return None
-        raw = self.headers.get("Content-Length")
-        if raw is None or not raw.isdigit():
+        raw = (self.headers.get("Content-Length") or "").strip()
+        if not LENGTH_RE.match(raw):
             self._error(411, "length_required")
             return None
         length = int(raw)
         if length > self.server.store.max_size:
             self._error(413, "too_large", limit=self.server.store.max_size)
-            self.close_connection = True
             return None
         return length
 
     def _receive(self, path: str, length: int) -> bool:
-        """Body to `path`. False (file removed) when the client sent less than it announced."""
+        """Body to `path`. False, with the error answered and the file removed, when the
+        client sent less than it announced (400) or the disk failed (507)."""
         left = length
+        disk_error = None
         try:
             with open(path, "wb") as f:
                 while left > 0:
-                    chunk = self.rfile.read(min(CHUNK, left))
+                    try:
+                        chunk = self.rfile.read(min(CHUNK, left))
+                    except (OSError, TimeoutError):
+                        chunk = b""
                     if not chunk:
                         break
                     f.write(chunk)
                     left -= len(chunk)
                 f.flush()
                 os.fsync(f.fileno())
-        except OSError:
-            left = -1
-        if left != 0:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-            self.close_connection = True
-            return False
-        return True
+        except OSError as exc:
+            disk_error = exc
+        if disk_error is None and left == 0:
+            return True
+        _remove(path)
+        if disk_error is not None:
+            print(f"{self.path}: write failed: {disk_error}", file=sys.stderr)
+            self._error(507, "storage_error")
+        else:
+            self._error(400, "incomplete_body")
+        return False
 
     def _fields(self):
         """The upload's headers, validated, or None after answering the error."""
@@ -306,6 +409,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ---- methods
 
     def _begin(self):
+        self._started = False
         if not self._authorized():
             self._error(401, "unauthorized")
             self.close_connection = True
@@ -316,10 +420,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return None
         return route
 
+    @_safe
     def do_HEAD(self):
-        self.do_GET()
+        self._get()
 
+    @_safe
     def do_GET(self):
+        self._get()
+
+    def _get(self):
         route = self._begin()
         if route is None:
             return
@@ -329,14 +438,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             meta = store.meta(key)
             return self._json(200, meta) if meta else self._error(404, "no_save")
         if rest == CURRENT:
-            return self._send_file(os.path.join(store.folder(key), CURRENT))
+            meta, f = store.open_current(key)
+            if f is None:
+                return self._error(404, "no_save")
+            meta = meta or {}
+            return self._send_open(f, {"X-Save-Rev": rev_of(meta) or "0", "X-Save-Hash": str(meta.get("hash", ""))})
         if rest == STRATEGY:
             data = store.strategy(key)
             return self._json(200, data) if data else self._error(404, "no_strategy")
         if rest == BACKUPS:
             return self._json(200, {"backups": store.backups(key), "limit": store.backup_limit})
-        return self._send_file(store.backup_path(key, rest.split("/", 1)[1]))
+        try:
+            f = open(store.backup_path(key, rest.split("/", 1)[1]), "rb")
+        except OSError:
+            return self._error(404, "not_found")
+        self._send_open(f)
 
+    @_safe
     def do_PUT(self):
         route = self._begin()
         if route is None:
@@ -348,6 +466,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._put_strategy(key)
         self._error(405, "method_not_allowed")
 
+    @_safe
     def do_POST(self):
         route = self._begin()
         if route is None:
@@ -364,10 +483,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         store = self.server.store
         upload = store.partial(key)
         if not self._receive(upload, length):
-            return self._error(400, "incomplete_body")
+            return
         with store.lock(key):
             result = store.add_backup(key, upload, device, time.time())
         self._json(200, result)
+
+    @_safe
+    def _not_allowed(self):
+        if self._begin() is not None:
+            self._error(405, "method_not_allowed")
+
+    do_DELETE = do_PATCH = do_OPTIONS = _not_allowed
 
     def _put_current(self, key: str) -> None:
         fields = self._fields()
@@ -387,14 +513,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # the body goes to disk before the lock: a slow upload never blocks the other device
         upload = store.partial(key)
         if not self._receive(upload, length):
-            return self._error(400, "incomplete_body")
-        with store.lock(key):
-            current = store.meta(key)
-            expected = str(current["rev"]) if current else None
-            if (match and match != expected) or (not match and expected is not None):
-                os.remove(upload)
-                return self._json(409, {"error": "conflict", "meta": current})
-            result = store.replace_current(key, upload, fields, backup, time.time())
+            return
+        try:
+            with store.lock(key):
+                current = store.meta(key)
+                expected = rev_of(current)
+                if (match and match != expected) or (not match and expected is not None):
+                    _remove(upload)
+                    return self._json(409, {"error": "conflict", "meta": current})
+                result = store.replace_current(key, upload, fields, backup, time.time())
+        except OSError as exc:
+            _remove(upload)
+            print(f"{key}: replace failed: {exc}", file=sys.stderr)
+            return self._error(507, "storage_error")
         self._json(201 if expected is None else 200, result)
 
     def _put_strategy(self, key: str) -> None:
@@ -402,7 +533,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if length is None:
             return
         if length > STRATEGY_LIMIT:
-            self.close_connection = True
             return self._error(413, "too_large", limit=STRATEGY_LIMIT)
         try:
             data = json.loads(self.rfile.read(length).decode("utf-8"))
@@ -444,10 +574,18 @@ def main() -> int:
     if not os.path.isdir(root):
         print(f"saves folder {root} does not exist", file=sys.stderr)
         return 1
+    if not os.access(root, os.W_OK | os.X_OK):
+        print(f"saves folder {root} is not writable by uid {getattr(os, 'getuid', lambda: '?')()}", file=sys.stderr)
+        return 1
     port = int(os.environ.get("INSERTPLAY_SAVES_PORT", "8081"))
     store = Store(root, _mb("INSERTPLAY_SAVE_BACKUP_MB", 50), _mb("INSERTPLAY_SAVE_MAX_MB", 1024))
+    removed = store.clean_partials()
     server = Server(("", port), token, store)
-    print(f"insertplay-saves on :{port}, {root}, backups {store.backup_limit // MB} MB per game", file=sys.stderr)
+    print(
+        f"insertplay-saves on :{port}, {root}, backups {store.backup_limit // MB} MB per game,"
+        f" saves up to {store.max_size // MB} MB, {removed} leftover partial file(s) removed",
+        file=sys.stderr,
+    )
     server.serve_forever()
     return 0
 

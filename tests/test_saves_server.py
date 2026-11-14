@@ -254,3 +254,89 @@ def test_main_refuses_short_token(monkeypatch, tmp_path):
     monkeypatch.setenv("INSERTPLAY_TOKEN", TOKEN)
     monkeypatch.setenv("INSERTPLAY_SAVES_DIR", str(tmp_path / "missing"))
     assert ss.main() == 1
+
+
+def test_download_carries_its_rev_and_hash(server):
+    put(server, b"save-1")
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
+    conn.request("GET", f"/saves/{KEY}/current.tar.gz", headers={"Authorization": f"Bearer {TOKEN}"})
+    resp = conn.getresponse()
+    assert resp.read() == b"save-1"
+    assert resp.getheader("X-Save-Rev") == "1" and resp.getheader("X-Save-Hash") == H1
+    conn.close()
+
+
+def test_open_current_keeps_the_content_of_its_meta(server):
+    put(server, b"old")
+    meta, f = server.store.open_current(KEY)
+    put(server, b"new", rev="1", digest=H2)
+    with f:
+        assert (meta["rev"], f.read()) == ("1", b"old")
+
+
+def test_meta_edited_without_rev(server, tmp_path):
+    put(server, b"one")
+    (tmp_path / KEY / "meta.json").write_text(json.dumps({"hash": "0" * 64}))
+    status, body, _ = put(server, b"two", rev="1")
+    assert status == 409 and body["meta"] == {"hash": "0" * 64}
+    status, body, _ = put(server, b"two", rev="0")
+    assert status == 200 and body["meta"]["rev"] == "1"
+
+
+@pytest.mark.parametrize("method", ["DELETE", "PATCH", "OPTIONS"])
+def test_other_methods(server, method):
+    status, body, _ = call(server, method, f"/saves/{KEY}/current.tar.gz")
+    assert status == 405 and body == {"error": "method_not_allowed"}
+    assert call(server, method, f"/saves/{KEY}/current.tar.gz", token=None)[0] == 401
+
+
+def test_backups_in_the_same_second_keep_their_order(server):
+    now = 1_800_000_000.0
+    names = []
+    for _ in range(11):
+        src = server.store.partial(KEY)
+        open(src, "wb").write(b"x")
+        names.append(server.store.add_backup(KEY, src, "deck", now)["name"])
+    assert names[0].count("-") == 1 and "-2-deck" in names[1] and "-11-deck" in names[10]
+    listed = [b["name"] for b in server.store.backups(KEY)]
+    assert listed == list(reversed(names))
+
+
+def test_non_ascii_content_length(server):
+    sock = socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5)
+    sock.sendall(
+        f"POST /saves/{KEY}/backups HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\n"
+        "X-Save-Device: deck\r\nContent-Length: \xb2\r\n\r\n".encode("latin-1")
+    )
+    reply = sock.recv(4096)
+    sock.close()
+    assert b" 411 " in reply.split(b"\r\n", 1)[0]
+
+
+def test_clean_partials(tmp_path):
+    store = ss.Store(str(tmp_path), 1000, 1000)
+    (tmp_path / KEY / "backups").mkdir(parents=True)
+    (tmp_path / KEY / ".upload-1.partial").write_bytes(b"x")
+    (tmp_path / KEY / "backups" / ".x.partial").write_bytes(b"x")
+    (tmp_path / KEY / "current.tar.gz").write_bytes(b"keep")
+    assert store.clean_partials() == 2
+    assert sorted(os.listdir(tmp_path / KEY)) == ["backups", "current.tar.gz"]
+
+
+def test_replace_failure_keeps_the_old_save(server, tmp_path, monkeypatch):
+    put(server, b"old")
+    real = os.replace
+
+    def failing(src, dst):
+        if dst.endswith("current.tar.gz"):
+            raise OSError(28, "No space left on device")
+        return real(src, dst)
+
+    monkeypatch.setattr(ss.os, "replace", failing)
+    status, body, _ = put(server, b"new", rev="1", digest=H2)
+    monkeypatch.setattr(ss.os, "replace", real)
+    assert status == 507 and body == {"error": "storage_error"}
+    assert call(server, "GET", f"/saves/{KEY}/current.tar.gz")[2] == b"old"
+    assert call(server, "GET", f"/saves/{KEY}/meta")[1]["rev"] == "1"
+    assert not [n for n in os.listdir(tmp_path / KEY) if n.endswith(".partial")]
+    assert call(server, "GET", f"/saves/{KEY}/backups")[1]["backups"] == []

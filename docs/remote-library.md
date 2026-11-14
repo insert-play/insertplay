@@ -417,7 +417,7 @@ Served by the save server ([`server/saves/saves_server.py`](../server/saves/save
 | Request | Answer |
 |---|---|
 | `GET saves/<key>/meta` | `200` with `meta.json`, `404` with no save yet. |
-| `GET saves/<key>/current.tar.gz` | `200` with the save, `404` with none. |
+| `GET saves/<key>/current.tar.gz` | `200` with the save and the `X-Save-Rev` and `X-Save-Hash` of that same file (a `meta` read before may already be stale), `404` with none. |
 | `PUT saves/<key>/current.tar.gz` | Replaces the save. `201` (first save) or `200`, with `{"meta": …, "backup": …}`. |
 | `GET saves/<key>/strategy.json` | `200` with the inferred strategy, `404` with none. |
 | `PUT saves/<key>/strategy.json` | Stores it (a JSON object with a non-empty `strategy`, at most 64 KiB). |
@@ -432,6 +432,8 @@ Served by the save server ([`server/saves/saves_server.py`](../server/saves/save
 - `If-Match: <rev>` with the rev the device last saw, or `If-None-Match: *` for the first save of the key. Missing: `428`. A rev that no longer matches (the other device uploaded first), or `*` when a save already exists: `409` with `{"error": "conflict", "meta": <current meta or null>}`. Nothing changes; the device pulls and decides again.
 - `X-Save-Hash` (the [save hash](#save-hash), 64 hex digits), `X-Save-Newest-Mtime` (newest file time of the save), `X-Save-Device` (letters, digits, `.`, `_`, `-`; up to 64). Invalid: `400`.
 - `X-Save-Backup: 1` keeps the save being replaced as a backup named after the device that made it.
+
+Other errors: `411` without a plain `Content-Length`, `400` when the body ends early, `507` when the server's disk fails (the old save stays), `405` for other methods, `500` in JSON for anything unexpected. A meta edited by hand without a valid `rev` counts as rev `0`.
 
 Backups are kept within `INSERTPLAY_SAVE_BACKUP_MB` per game (default 50), oldest removed first. The limit applies only to backups: a save larger than it gets no backup (`"stored": false, "reason": "limit"`) and still syncs normally (Alan Wake 2: 159 MB). Bodies larger than `INSERTPLAY_SAVE_MAX_MB` (default 1024): `413`. Uploads are written to a temporary file and renamed, under a lock per key.
 
