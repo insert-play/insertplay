@@ -89,6 +89,25 @@ def _game_id(value):
     return value
 
 
+# Subsets per card: more than this is surely a mistake, and each one is one RA request.
+MAX_SUBSETS = 10
+
+
+def _subset_ids(value, game_id: int) -> list:
+    """RetroAchievements subsets (issue #30): each one is its own RA game whose
+    `ParentGameID` is the card's game, shown as one more achievement set in Steam. RA has no
+    endpoint from a game to its subsets, so the card lists them. Invalid items, repeats and
+    the main GameID itself are dropped; the order is kept (it is the order of the sets)."""
+    if not isinstance(value, list):
+        return []
+    out = []
+    for item in value:
+        sid = _game_id(item)
+        if sid and sid != game_id and sid not in out:
+            out.append(sid)
+    return out[:MAX_SUBSETS]
+
+
 def read_game(data: dict):
     """Optional `game` block (issue #24): which game and emulator the card holds. An
     invalid value becomes `None` without refusing the card: the shortcut still works."""
@@ -97,10 +116,16 @@ def read_game(data: dict):
         return None
     ra = _get(game, "retroAchievements")
     game_id = _game_id(_get(ra, "gameId")) if isinstance(ra, dict) else None
+    achievements = None
+    if game_id:
+        achievements = {"gameId": game_id}
+        subsets = _subset_ids(_get(ra, "subsetGameIds"), game_id)
+        if subsets:
+            achievements["subsetGameIds"] = subsets
     return {
         "platform": _slug(_get(game, "platform")),
         "emulator": _slug(_get(game, "emulator")),
-        "retroAchievements": {"gameId": game_id} if game_id else None,
+        "retroAchievements": achievements,
     }
 
 

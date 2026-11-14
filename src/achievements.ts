@@ -12,6 +12,8 @@
 //   "user_achievements", steamid]`). For a card shortcut the plugin swaps their `queryFn`
 //   in `QueryClient.defaultQueryOptions`, so Steam fetches from the plugin instead of its
 //   service (which answers "no achievements" for a shortcut);
+// - the card's RA game is Steam's base-game set, and each RA subset it lists is one more set,
+//   named after the subset ("[Subset - Multiplayer]" → "Multiplayer");
 // - NEVER write an observable or the query cache inside something Steam calls while
 //   rendering (`defaultQueryOptions`, `GetAchievements`, `GetSections`). A first test that
 //   did it froze the steamwebhelper of the Deck. Writes (query invalidation) happen only on
@@ -25,7 +27,7 @@ import { currentSteamId } from "./steam";
 
 declare const appDetailsStore: any;
 
-/** Steam's base-game set: the page names it "Jogo base". */
+/** Steam's base-game set: the page names it "Jogo base". The RA subsets follow, 1..n. */
 const BASE_SET = 0;
 const QUERY_KINDS = new Set(["schema", "globalpercentages", "user_achievements"]);
 
@@ -44,9 +46,12 @@ interface SetAchievement {
 /** What the Steam screens read for one shortcut, built only when the progress changes. The
  *  objects keep their identity until then: comparing by identity is what tells "changed". */
 interface Shown {
-  gameId: number;
-  /** Which achievements are unlocked and when: what a new fetch is compared with. */
+  /** Which achievements are unlocked and when, per set: what a new fetch is compared with. */
   signature: string;
+  /** The same, per RA GameID: tells which games changed (for the event log). */
+  gameSignatures: Map<number, string>;
+  /** Steam's `schema_hash`, from the card's GameIDs: a card with other sets has another. */
+  schemaHash: number;
   /** What `appDetailsStore.GetAchievements` returns (in-game overlay). */
   details: {
     nAchieved: number;
@@ -64,9 +69,10 @@ interface Shown {
 }
 
 const shown = new Map<number, Shown>();
-/** appid → GameID of every card shortcut with achievements, with or without fetched data:
- *  a card first loaded offline still retries when its page is opened (PR #28 review). */
-const known = new Map<number, number>();
+/** appid → GameIDs (game, then subsets) of every card shortcut with achievements, with or
+ *  without fetched data: a card first loaded offline still retries when its page is opened
+ *  (PR #28 review). */
+const known = new Map<number, number[]>();
 /** Bumped on logout and login: a fetch started in another session is never shown. */
 let session = 0;
 const patches = new Map<string, Patch[]>();
@@ -83,33 +89,45 @@ const VIEW_REFRESH_MS = 60_000;
 
 /** The global % is left out: it moves as other players unlock, and redrawing the page for
  *  that is not worth it. It is updated together with the user's own progress. */
-const signatureOf = (game: RaGame) =>
-  `${game.gameId}|${game.achievements.map((a) => `${a.strID}:${a.rtUnlocked}`).join(",")}`;
+const gameSignature = (g: RaGame) => `${g.gameId}|${g.achievements.map((a) => `${a.strID}:${a.rtUnlocked}`).join(",")}`;
+const signatureOf = (gameIds: number[], games: RaGame[]) =>
+  `${gameIds.join(",")}#${games.map(gameSignature).join(";")}`;
+
+/** 32-bit FNV-1a of the card's GameIDs. */
+function schemaHashOf(gameIds: number[]): number {
+  let hash = 0x811c9dc5;
+  for (const ch of gameIds.join(",")) hash = Math.imul(hash ^ ch.charCodeAt(0), 0x01000193);
+  return hash >>> 0;
+}
 
 const keyOf = (a: SteamAchievement) => Number(a.strID);
 
-function build(appid: number, game: RaGame): Shown {
-  const achieved = game.achievements.filter((a) => a.bAchieved).sort((a, b) => b.rtUnlocked - a.rtUnlocked);
-  const locked = game.achievements.filter((a) => !a.bAchieved);
-  const total = game.achievements.length;
-  const setAchievements: SetAchievement[] = game.achievements.map((a) => ({
-    internal_key: keyOf(a),
-    api_name: a.strID,
-    name: a.strName,
-    description: a.strDescription,
-    hidden: false,
-    archived: false,
-    // RA badge URLs: the backend already picks the locked image for a locked one
-    icon_achieved: a.strImage,
-    icon_unachieved: a.strImage,
-    groupid: BASE_SET,
-  }));
+/** Name of a subset's set: RA titles a subset "<game> [Subset - <name>]". */
+export function subsetSetName(title: string): string {
+  const match = /\[Subset - (.+)\]\s*$/.exec(title);
+  return (match ? match[1] : title).trim();
+}
+
+/** `gameIds[0]` is the card's RA game, the others its subsets: set `i` is `gameIds[i]`, so
+ *  a set keeps its id when another one could not be read. `games` = the ones that could.
+ *  Like Steam with sets that need no DLC (ETS2: "10/42 … em 3 conjuntos"), the section
+ *  and the overlay count every set. */
+function build(appid: number, gameIds: number[], games: RaGame[]): Shown {
+  const all = games.flatMap((g) => g.achievements);
+  const achieved = all.filter((a) => a.bAchieved).sort((a, b) => b.rtUnlocked - a.rtUnlocked);
+  const locked = all.filter((a) => !a.bAchieved);
+  // Steam leaves out sets without achievements (an RA game with none: no section)
+  const sets = games
+    .map((game) => ({ game, id: gameIds.indexOf(game.gameId) }))
+    .filter(({ game, id }) => id >= 0 && game.achievements.length > 0);
+  const schemaHash = schemaHashOf(gameIds);
   return {
-    gameId: game.gameId,
-    signature: signatureOf(game),
+    signature: signatureOf(gameIds, games),
+    gameSignatures: new Map(games.map((g) => [g.gameId, gameSignature(g)])),
+    schemaHash,
     details: {
       nAchieved: achieved.length,
-      nTotal: total,
+      nTotal: all.length,
       // measured: achieved ones from the most recent, locked ones from the most common
       vecHighlight: achieved,
       vecUnachieved: [...locked].sort((a, b) => b.flAchieved - a.flAchieved).slice(0, UNACHIEVED_SHOWN),
@@ -118,39 +136,56 @@ function build(appid: number, game: RaGame): Shown {
     schema: {
       appid,
       language: "",
-      schema_hash: game.gameId,
+      schema_hash: schemaHash,
       schema_version: 1,
-      // Steam leaves out sets without achievements (an RA game with none: no section)
-      groups: total
-        ? [
-            {
-              id: BASE_SET,
-              name: "",
-              archived: false,
-              ispublic: true,
-              developeronly: false,
-              dlcappid: 0,
-              order: 0,
-              achievements: setAchievements,
-            },
-          ]
-        : [],
+      groups: sets.map(({ game, id }) => ({
+        id,
+        // the base set's name comes from Steam ("Jogo base")
+        name: id === BASE_SET ? "" : subsetSetName(game.title || String(game.gameId)),
+        archived: false,
+        ispublic: true,
+        developeronly: false,
+        dlcappid: 0,
+        order: id,
+        achievements: game.achievements.map(
+          (a): SetAchievement => ({
+            internal_key: keyOf(a),
+            api_name: a.strID,
+            name: a.strName,
+            description: a.strDescription,
+            hidden: false,
+            archived: false,
+            // RA badge URLs: the backend already picks the locked image for a locked one
+            icon_achieved: a.strImage,
+            icon_unachieved: a.strImage,
+            groupid: id,
+          }),
+        ),
+      })),
     },
-    percentages: { percentages: Object.fromEntries(game.achievements.map((a) => [keyOf(a), a.flAchieved])) },
+    percentages: { percentages: Object.fromEntries(all.map((a) => [keyOf(a), a.flAchieved])) },
     user: {
       // Steam's user query only lists what is unlocked (or has progress)
       achievements: Object.fromEntries(
         achieved.map((a) => [keyOf(a), { internal_key: keyOf(a), unlocked: true, unlock_time: a.rtUnlocked }]),
       ),
-      groups: {
-        [BASE_SET]: {
-          groupid: BASE_SET,
-          is_achievable: true,
-          completed_achievements: achieved.length,
-          is_completed: total > 0 && achieved.length === total,
-          time_completed: total > 0 && achieved.length === total ? achieved[0].rtUnlocked : undefined,
-        },
-      },
+      groups: Object.fromEntries(
+        sets.map(({ game, id }) => {
+          const done = game.achievements.filter((a) => a.bAchieved);
+          const complete = done.length === game.achievements.length;
+          return [
+            id,
+            {
+              groupid: id,
+              // a set with dlcappid 0: always achievable, like ETS2's sets without DLC
+              is_achievable: true,
+              completed_achievements: done.length,
+              is_completed: complete,
+              time_completed: complete ? Math.max(...done.map((a) => a.rtUnlocked)) : undefined,
+            },
+          ];
+        }),
+      ),
     },
     userBySteamid: new Map(),
   };
@@ -165,7 +200,7 @@ function queryData(appid: number, s: Shown, kind: string, steamid: string): obje
   if (steamid !== currentSteamId()) return undefined;
   let user = s.userBySteamid.get(steamid);
   if (!user) {
-    user = { appid, steamid, schema_hash: s.gameId, ...s.user };
+    user = { appid, steamid, schema_hash: s.schemaHash, ...s.user };
     s.userBySteamid.set(steamid, user);
   }
   return user;
@@ -199,23 +234,23 @@ function dropLater(appid: number): void {
   });
 }
 
-let onView: ((appid: number, gameId: number) => Promise<void>) | null = null;
+let onView: ((appid: number, gameIds: number[]) => Promise<void>) | null = null;
 const lastView = new Map<number, number>();
 
 /** A Steam screen is reading the achievements of `appid`. Called from getters while Steam
  *  renders: it only schedules, at most once per VIEW_REFRESH_MS per game. The fetch runs
  *  outside the render, and `publishAchievements` writes only if the progress changed. */
 function viewed(appid: number): void {
-  const gameId = known.get(appid);
+  const gameIds = known.get(appid);
   const now = Date.now();
-  if (!gameId || !onView || now - (lastView.get(appid) ?? 0) < VIEW_REFRESH_MS) return;
+  if (!gameIds?.length || !onView || now - (lastView.get(appid) ?? 0) < VIEW_REFRESH_MS) return;
   lastView.set(appid, now);
   const handler = onView;
-  setTimeout(() => void handler(appid, gameId).catch(() => undefined), 0);
+  setTimeout(() => void handler(appid, gameIds).catch(() => undefined), 0);
 }
 
 /** Who fetches when a screen shows the achievements (flow.ts, which talks to the backend). */
-export function onAchievementsViewed(handler: (appid: number, gameId: number) => Promise<void>): void {
+export function onAchievementsViewed(handler: (appid: number, gameIds: number[]) => Promise<void>): void {
   onView = handler;
 }
 
@@ -334,24 +369,32 @@ export function installAchievements(): string[] {
   return failed;
 }
 
-/** The card shortcut `appid` has achievements of RA game `gameId`, fetched or not yet. */
-export function trackAchievements(appid: number, gameId: number): void {
-  if (known.get(appid) !== gameId) lastView.delete(appid);
-  known.set(appid, gameId);
+/** The card shortcut `appid` has achievements of these RA games (the game, then its
+ *  subsets), fetched or not yet. */
+export function trackAchievements(appid: number, gameIds: number[]): void {
+  if (known.get(appid)?.join() !== gameIds.join()) lastView.delete(appid);
+  known.set(appid, gameIds);
 }
+
+/** GameIDs tracked for `appid` (game, then subsets), joined; `undefined` = none. */
+export const trackedAchievements = (appid: number): string | undefined => known.get(appid)?.join();
 
 /** Current session, captured before a fetch and handed back to `publishAchievements`. */
 export const achievementsSession = (): number => session;
 
-/** Shows `game` on the shortcut `appid`. Writes only when the progress changed: a fetch
+/** Shows on the shortcut `appid` the card's RA games `gameIds` (the game, then its subsets)
+ *  from `games`, the ones that could be read. Writes only when the progress changed: a fetch
  *  with nothing new keeps every object, so Steam has nothing to redraw. A fetch started
- *  before a logout or login (`fromSession` ≠ the current one) is dropped. Returns whether it changed. */
-export function publishAchievements(appid: number, game: RaGame, fromSession: number): boolean {
-  if (stopped || fromSession !== session) return false;
-  if (shown.get(appid)?.signature === signatureOf(game)) return false;
-  shown.set(appid, build(appid, game));
+ *  before a logout or login (`fromSession` ≠ the current one) is dropped. Returns the games
+ *  whose progress changed (empty = nothing changed). */
+export function publishAchievements(appid: number, gameIds: number[], games: RaGame[], fromSession: number): RaGame[] {
+  if (stopped || fromSession !== session || !games.length) return [];
+  const before = shown.get(appid);
+  if (before?.signature === signatureOf(gameIds, games)) return [];
+  const now = build(appid, gameIds, games);
+  shown.set(appid, now);
   refetchLater(appid);
-  return true;
+  return games.filter((g) => before?.gameSignatures.get(g.gameId) !== now.gameSignatures.get(g.gameId));
 }
 
 function unpublish(appid: number): void {

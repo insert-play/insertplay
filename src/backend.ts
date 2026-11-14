@@ -19,7 +19,8 @@ export interface Card {
 export interface CardGame {
   platform: string | null;
   emulator: string | null;
-  retroAchievements: { gameId: number } | null;
+  /** `subsetGameIds`: RA subsets shown as more achievement sets (issue #30), only when present. */
+  retroAchievements: { gameId: number; subsetGameIds?: number[] } | null;
 }
 
 export interface RegistryRecord {
@@ -29,6 +30,8 @@ export interface RegistryRecord {
   /** RetroAchievements GameID of the card, kept so the shortcut page still shows the
    *  achievements with the card out (and after a Steam restart). `null` = none. */
   raGameId?: number | null;
+  /** RetroAchievements subsets of the card (issue #30), shown as more achievement sets. */
+  raSubsetIds?: number[] | null;
   /** "library": the shortcut of a remote library game (#45). It is never hidden for a missing
    *  card while the game is in the library; a card with the same guid uses the same shortcut. */
   source?: "library";
