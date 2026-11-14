@@ -77,10 +77,11 @@ Optional block, at the top level next to `shortcut`, that says which game and em
 | `game.platform` | `ps1`, `ps2`, `gc`, `wii`, `wiiu`, … Lowercase letters, digits, `-` and `_`. |
 | `game.emulator` | `duckstation`, `pcsx2`, `dolphin`, `cemu`, … Same format. |
 | `game.retroAchievements.gameId` | The game's ID on retroachievements.org: the number in `retroachievements.org/game/<id>`. A JSON integer greater than 0 (not a string). Only cards with it show achievements. |
+| `game.retroAchievements.subsetGameIds` | Optional list of the game's RA subsets, e.g. `[38093]` for New Super Mario Bros. Wii's "[Subset - Multiplayer]". Each one is shown in Steam as one more achievement set, after the base game, in this order and named after the subset ("Multiplayer"). Same format as `gameId`; up to 10. Ignored without `gameId`. |
 
 - Keys are case-insensitive, as in `shortcut`.
 - An invalid value is ignored without refusing the card: the shortcut still works, only that field is missing (`rpc current_cards` shows the block as the plugin read it).
-- For a game with subsets, use the main game's ID. Subsets are not shown.
+- For a game with subsets, `gameId` is the main game's ID and the subsets go in `subsetGameIds`. A subset is its own RA game whose page shows "Subset" in the title and whose `ParentGameID` is the main game; RA has no list from a game to its subsets, so they have to be named here. Whether the emulator unlocks a subset's achievements depends on the emulator and the subset type, not on the plugin.
 
 #### RetroAchievements checklist for a new card
 
@@ -95,7 +96,7 @@ Every card (SD card or remote library folder) whose emulator supports RetroAchie
    - Dolphin `User/Logs/dolphin.log` (with `RetroAchievements = True` in `User/Config/Logger.ini`): `Identified game: 95 "New Super Mario Bros. Wii"`.
 
    A card named "God of War II" turned out to hold God of War 1 this way.
-3. **Put the ID in `game.retroAchievements.gameId`.** Without it, the plugin shows no achievements even when the emulator unlocks them.
+3. **Put the ID in `game.retroAchievements.gameId`.** Without it, the plugin shows no achievements even when the emulator unlocks them. If the game has subsets on RA (titles `<game> [Subset - …]`), add their IDs to `subsetGameIds`.
 4. The token is a credential: it goes into the card and the library on purpose, so a fresh install is already logged in. Keep the library server private (token, LAN only).
 
 ### `saves`

@@ -172,6 +172,34 @@ def test_load_card_game_block_keys_are_case_insensitive(tmp_path):
     assert game == {"platform": "ps1", "emulator": None, "retroAchievements": {"gameId": 11361}}
 
 
+def test_load_card_reads_ra_subsets_in_order(tmp_path):
+    ra = {"gameId": 95, "subsetGameIds": [38093, 0, "7", 95, 38093, True, 28250]}
+    manifest = {**MANIFEST, "game": {"platform": "wii", "retroAchievements": ra}}
+    game = load_card(str(make_card(tmp_path, manifest=manifest)))["game"]
+    # invalid items, repeats and the main GameID are dropped; the order is the sets' order
+    assert game["retroAchievements"] == {"gameId": 95, "subsetGameIds": [38093, 28250]}
+
+
+@pytest.mark.parametrize("subsets", [None, 38093, "38093", [], [0, "x"]])
+def test_load_card_without_valid_subsets_keeps_only_the_game(tmp_path, subsets):
+    ra = {"gameId": 95, "subsetGameIds": subsets}
+    manifest = {**MANIFEST, "game": {"retroAchievements": ra}}
+    game = load_card(str(make_card(tmp_path, manifest=manifest)))["game"]
+    assert game["retroAchievements"] == {"gameId": 95}
+
+
+def test_load_card_subsets_need_a_game_id(tmp_path):
+    manifest = {**MANIFEST, "game": {"retroAchievements": {"subsetGameIds": [38093]}}}
+    assert load_card(str(make_card(tmp_path, manifest=manifest)))["game"]["retroAchievements"] is None
+
+
+def test_load_card_subsets_are_capped(tmp_path):
+    ra = {"gameId": 1, "subsetGameIds": list(range(2, 30))}
+    manifest = {**MANIFEST, "game": {"retroAchievements": ra}}
+    game = load_card(str(make_card(tmp_path, manifest=manifest)))["game"]
+    assert game["retroAchievements"]["subsetGameIds"] == list(range(2, 12))
+
+
 @pytest.mark.parametrize("game_id", [0, -3, "5613", True, 12.0, None])
 def test_load_card_invalid_game_id_has_no_achievements(tmp_path, game_id):
     manifest = {**MANIFEST, "game": {"platform": "ps2", "retroAchievements": {"gameId": game_id}}}
