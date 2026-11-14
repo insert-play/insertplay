@@ -5,6 +5,7 @@
 #   INSERTPLAY_LIBRARY  library root, one InsertPlay card per folder (mounted read-only)
 #   INSERTPLAY_CONFIG   server config folder, outside the library disk: holds token.env
 #                       (mode 0600) and index/ (written by the indexer)
+#   INSERTPLAY_SAVES    save server storage, outside the library (written by the saves service)
 #   INSERTPLAY_PORT     host port (default 8080)
 #   INSERTPLAY_UID/GID  owner of the files the indexer writes (default 1000)
 
@@ -50,6 +51,32 @@ services:
     tmpfs:
       - /data
       - /config
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  # Save server (issue #63): Caddy forwards /saves/* to it (as "saves:8081", on the
+  # compose network; no port on the host). It writes only to INSERTPLAY_SAVES.
+  saves:
+    image: python:3.12-alpine
+    restart: always
+    user: "${INSERTPLAY_UID:-1000}:${INSERTPLAY_GID:-1000}"
+    command: ["python3", "-I", "/opt/saves/saves_server.py"]
+    env_file:
+      - ${INSERTPLAY_CONFIG}/token.env
+    environment:
+      INSERTPLAY_SAVES_DIR: /srv/saves
+      INSERTPLAY_SAVE_BACKUP_MB: ${INSERTPLAY_SAVE_BACKUP_MB:-50}
+      INSERTPLAY_SAVE_MAX_MB: ${INSERTPLAY_SAVE_MAX_MB:-1024}
+    volumes:
+      - type: bind
+        source: ${INSERTPLAY_SAVES:?set INSERTPLAY_SAVES in server/.env}
+        target: /srv/saves
+        bind:
+          create_host_path: false
+      - ./saves:/opt/saves:ro
+    read_only: true
     cap_drop:
       - ALL
     security_opt:

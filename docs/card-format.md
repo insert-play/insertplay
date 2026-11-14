@@ -82,6 +82,33 @@ Optional block, at the top level next to `shortcut`, that says which game and em
 - An invalid value is ignored without refusing the card: the shortcut still works, only that field is missing (`rpc current_cards` shows the block as the plugin read it).
 - For a game with subsets, use the main game's ID. Subsets are not shown.
 
+### `saves`
+
+Optional block, at the top level, that says where the game keeps its save, for save sync through the remote library ([remote-library.md](remote-library.md#saves)). A card without it still syncs when the plugin can infer the strategy.
+
+```json
+"saves": { "strategy": "proton-default", "exclude": ["Documents/My Games/DiRT2/hardwaresettings"] }
+```
+
+| Field | Meaning |
+|---|---|
+| `saves.strategy` | One of the strategies below. |
+| `saves.paths` | Save files or folders, relative to the card root. Replaces the strategy's default folders. |
+| `saves.exclude` | Files or folders that never sync, relative to the save folders: per-device settings and caches kept next to the save. Added to the strategy's default exclusions. |
+
+| Strategy | Default folders | Default exclusions | Measured on |
+|---|---|---|---|
+| `proton-default` | `prefix/pfx/drive_c/users/steamuser` | `Temp`, `AppData/Local/Temp`, `AppData/Local/Microsoft`, `AppData/LocalLow/Microsoft`, `AppData/Roaming/Microsoft`, `AppData/Local/D3DSCache`, `AppData/Local/NVIDIA`, `AppData/Local/AMD` | DiRT 2, Alan Wake 2 |
+| `custom-path` | none: `paths` is required | none | Captain Claw (`game/CLAW.USR`) |
+| `duckstation` | `duckstation/memcards` | none | Test Drive 6 |
+| `pcsx2` | `pcsx2/PCSX2/memcards` | none | God of War II (`paths: ["PCSX2/memcards"]`) |
+| `cemu` | `cemu/portable/mlc01/usr/save/00050000` | none (`usr/save/system` and `mlc01/sys` stay out by the default folder) | Super Mario 3D World |
+| `dolphin` | `dolphin/User/GC` and `dolphin/User/Wii/title/00010000/*/data` | none (the Wii system titles `00000001` and `content/` stay out) | New Super Mario Bros. Wii |
+
+- Keys are case-insensitive. An unknown strategy, or `custom-path` without `paths`, makes the game sync nothing and the plugin shows an error notification; the game still opens.
+- `paths` and `exclude` may use `*` in one segment (as in the Dolphin default). Absolute paths and `..` are refused.
+- Settings and caches that differ per device (resolution, renderer) belong in `exclude`, or they travel with the save: DiRT 2 keeps `hardwaresettings/` next to its saves, Alan Wake 2 keeps `cache/`, `renderer.ini` and `eos.log` next to its slots.
+
 ## `shortcut-identity.json`
 
 ```json

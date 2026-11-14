@@ -3,6 +3,7 @@
 #   /index.json          -> /srv/index/index.json
 #   /lists/<guid>.json   -> /srv/index/lists/<guid>.json
 #   /library/<path>      -> /srv/library/<path>   (the library root, read-only)
+#   /saves/<key>/...     -> the save server (saves:8081), the only route that takes PUT/POST
 #   anything else        -> 404
 #
 # Every request needs "Authorization: Bearer <token>" (401 otherwise), checked before
@@ -25,15 +26,22 @@
 			close
 		}
 
-		@method not method GET HEAD
-		respond @method 405
-
 		# "." and ".." segments, also percent-encoded, backslashes and NUL: 404, never a
 		# cleaned-up path. {http.request.orig_uri.path} is the path as sent, already
 		# percent-decoded (so %2e%2e and %5c are caught too, and a file literally named
 		# "a%5cb" or "%2e", which the indexer accepts, is still served).
 		@dotted expression `{http.request.orig_uri.path}.matches("(^|/)\\.{1,2}(/|$)|\\\\|\\x00")`
 		respond @dotted 404
+
+		# Saves (issue #63): forwarded as is to the save server, which checks the token
+		# again and owns the method rules of this route. Save server not running: 502.
+		@saves path_regexp ^/saves/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|steam-[0-9]{1,10})/(meta|current\.tar\.gz|strategy\.json|backups|backups/[0-9A-Za-z._-]+)$
+		handle @saves {
+			reverse_proxy saves:8081
+		}
+
+		@method not method GET HEAD
+		respond @method 405
 
 		@index path /index.json
 		handle @index {
