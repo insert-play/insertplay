@@ -43,7 +43,12 @@ if ! flock -n 9; then
 	exit 0
 fi
 
-[ -d "$INSERTPLAY_LIBRARY" ] || { echo "$(date -Is) library not mounted: $INSERTPLAY_LIBRARY"; exit 0; }
+if [ ! -d "$INSERTPLAY_LIBRARY" ]; then
+	echo "$(date -Is) library not mounted: $INSERTPLAY_LIBRARY"
+	# a manual request that cannot run must not look like success
+	[ "$NOW" = 1 ] && exit 1
+	exit 0
+fi
 
 changed() {
 	# $1: reference file. Prints the first path changed after it.

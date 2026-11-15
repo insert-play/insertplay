@@ -330,8 +330,25 @@ def write_atomic(path: str, data: bytes) -> None:
         raise
 
 
+def _previous_result(output: str):
+    """The finished result in status.json (or the one it carried as `previous`), if any."""
+    try:
+        with open(os.path.join(output, STATUS_NAME), encoding="utf-8") as f:
+            old = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(old, dict):
+        return None
+    if old.get("state") == "running":
+        old = old.get("previous")
+        if not isinstance(old, dict):
+            return None
+    keys = ("state", "startedAt", "finishedAt", "seconds", "games", "skipped", "error")
+    return {k: old.get(k) for k in keys}
+
+
 def write_status(output: str, state: str, started_at: str, finished_at=None, games=None, skipped=None,
-                 seconds=None, error=None) -> None:
+                 seconds=None, error=None, previous=None) -> None:
     """Writes status.json next to index.json: what the last (or the running) indexing did.
 
     `state` is "running", "ok" or "error". `skipped` is a list of (folder, reason). A run killed
@@ -348,6 +365,8 @@ def write_status(output: str, state: str, started_at: str, finished_at=None, gam
         "skipped": None if skipped is None else [{"path": n, "reason": r} for n, r in skipped],
         "error": error,
     }
+    if previous is not None:
+        data["previous"] = previous
     write_atomic(os.path.join(output, STATUS_NAME), (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
 
 
@@ -466,14 +485,15 @@ def main(argv=None) -> int:
             log(f"warning: could not write {STATUS_NAME}: {exc}")
 
     if os.path.isdir(args.output):
-        status("running")
+        # keep the last finished result visible while this run is going
+        status("running", previous=_previous_result(args.output))
     try:
         result = build_index(args.library, args.output, use_cache=not args.no_cache)
     except FatalError as exc:
         log(f"error: {exc}")
         status("error", finished_at=_utc_now(), seconds=time.monotonic() - started, error=str(exc))
         return 2
-    except BaseException as exc:
+    except Exception as exc:
         status("error", finished_at=_utc_now(), seconds=time.monotonic() - started, error=f"{type(exc).__name__}: {exc}")
         raise
     for r in result["games"]:

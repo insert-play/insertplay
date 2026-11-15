@@ -383,6 +383,21 @@ def test_main_status_records_a_fatal_error(lib, out):
     assert status["games"] is None
 
 
+def test_running_status_keeps_the_previous_result(lib, out, monkeypatch):
+    make_game(lib, "good", GUID_A)
+    assert idx.main([lib, out]) == 0
+    seen = {}
+
+    def spy(library, output, **kw):
+        seen.update(read_status(output))
+        raise idx.FatalError("stop here")
+
+    monkeypatch.setattr(idx, "build_index", spy)
+    idx.main([lib, out])
+    assert seen["state"] == "running"
+    assert seen["previous"]["state"] == "ok" and seen["previous"]["games"] == 1
+
+
 def test_main_status_survives_an_unexpected_crash(lib, out, monkeypatch):
     assert idx.main([lib, out]) == 0
 

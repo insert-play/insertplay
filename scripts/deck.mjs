@@ -649,9 +649,13 @@ async function main() {
       return 0;
     }
     case "reindex": {
-      // the script keeps the lock, so two requests run one indexer; it waits until the run ends
-      const r = ssh(cfg, `${serverPrelude(cfg)}INSERTPLAY_REINDEX="$D/../indexer-run.sh" "$D/reindex-if-changed.sh" --now`);
-      return r.code !== 0 ? r.code : printIndexStatus(cfg);
+      // the script keeps the lock: a second request while one runs returns at once ("already running")
+      // and the status printed is then the running one. Default to the board's indexer-run.sh (no
+      // Compose v2) unless the env already sets INSERTPLAY_REINDEX.
+      const r = ssh(cfg, `${serverPrelude(cfg)}INSERTPLAY_REINDEX="\${INSERTPLAY_REINDEX:-$D/../indexer-run.sh}" "$D/reindex-if-changed.sh" --now`);
+      // print status.json even when the run failed: it carries the error
+      const code = printIndexStatus(cfg);
+      return r.code !== 0 ? r.code : code;
     }
     case "reindex-status":
       return printIndexStatus(cfg);

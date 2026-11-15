@@ -8,9 +8,19 @@ Commands run from the repository root, on Windows (PowerShell) or WSL. AI agents
 npx -y pnpm@9 install
 npx -y pnpm@9 typecheck
 npx -y pnpm@9 build     # read the output: TypeScript errors show up as warnings and the build still exits 0
-uvx pytest tests -q     # backend; the symlink tests only run on Linux/WSL
+uvx pytest tests -q     # backend; on Windows ~30 tests fail by design, run it on WSL/Linux (see below)
 bash scripts/package.sh # (WSL/Linux) build + out/InsertPlay.zip, fails on TypeScript errors
 ```
+
+**Run the backend tests on WSL/Linux.** The suite assumes POSIX paths and symlinks. On Windows, `uvx pytest` skips the symlink tests and ~30 others fail (paths with `\`, e.g. in `test_remote_library.py` and two in `test_main.py`); that is expected, not a regression. The reference result is **all tests passing on WSL** (376 at the time of writing). WSL may have no pip: unpack pytest's wheels once and point `PYTHONPATH` at them:
+
+```sh
+uvx pip download pytest -d ~/.cache/insertplay-pytest-whl --only-binary=:all: --python-version 3.12 --platform any   # once, from Windows or WSL
+# unzip the wheels into ~/.cache/insertplay-pytest (python3 -m zipfile -e <wheel> <dir>), then:
+wsl -e bash -lc 'cd /mnt/d/projetos/insert-play/insertplay && PYTHONPATH=~/.cache/insertplay-pytest python3 -m pytest tests -q -p no:cacheprovider'
+```
+
+On Windows, set `PYTHONUTF8=1` too, or `test_case_insensitive_manifest_keys_and_bom` fails on the cp1252 locale.
 
 Layout:
 
