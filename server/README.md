@@ -95,6 +95,26 @@ It prints one line per game indexed (files, empty directories, symlinks, size, a
 
   Every run scans the library for anything changed since the last `index.json` (modification and change times, so files copied with their old dates count too, and a removed game counts through its parent folder). With no change it stops there; with a change it waits until nothing changed for `QUIET_MIN` minutes (default 5), so a game still being copied is not indexed half-way, then runs the indexer. A change made while the indexer runs is picked up by the next run. A copy that stalls longer than `QUIET_MIN` (e.g. on a "replace or skip" dialog) gets indexed half-way and fixed on a later run. On a BeaglePlay with 2 games (27 354 files) on an NTFS disk over USB 2.0, the scan takes ~6 s and a re-index ~50 s. `INSERTPLAY_REINDEX` replaces the indexer command, e.g. without Compose v2 (next section): `INSERTPLAY_REINDEX=$HOME/insertplay-library/indexer-run.sh`.
 
+### Indexing now, and what the last run did
+
+`reindex-if-changed.sh --now` indexes right away: it skips the "nothing changed" check and the `QUIET_MIN` wait, but keeps the lock, so a second request while the indexer runs does nothing and says "already running". Run it after the copy of a game has finished; a game still being copied would be indexed half-way.
+
+Every run of the indexer also writes `status.json` next to `index.json` (not served by Caddy):
+
+```json
+{"schemaVersion": 1, "state": "ok", "startedAt": "2026-11-15T13:41:18Z", "finishedAt": "2026-11-15T13:43:55Z",
+ "seconds": 156.5, "games": 8, "skipped": [{"path": "forza", "reason": "no steam-shortcut.json at the folder root"}], "error": null}
+```
+
+`state` is `running`, `ok` or `error` (`error` carries the message). A run killed without a chance to write (`kill -9`, power loss) leaves `running` behind: compare `startedAt` with the clock. From the development PC, with the board as a device in `deck.config.json` (`"role": "server"`, see the template), no manual SSH:
+
+```sh
+node scripts/deck.mjs --device server reindex          # index now, wait, print the result
+node scripts/deck.mjs --device server reindex-status   # last result, skipped folders and why
+```
+
+Measured on the BeaglePlay (2026-11-15, 8 games, 182 GB, 71 000 files): 153.5 s and 156.5 s for two runs back to back; a second request during a run was refused and only one indexer container ran.
+
 ## 5. Test with curl
 
 From another machine on the network (the token is read from the env file into the shell, so it doesn't show up in the command line):

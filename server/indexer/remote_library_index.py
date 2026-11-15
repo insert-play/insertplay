@@ -39,6 +39,7 @@ MAX_PATH_BYTES = 4096
 MAX_LIST_BYTES = 64 * 1024 * 1024  # the client refuses bigger file lists
 MAX_INDEX_BYTES = 16 * 1024 * 1024
 CACHE_NAME = "hash-cache.json"
+STATUS_NAME = "status.json"
 CHUNK = 1024 * 1024
 
 
@@ -48,6 +49,10 @@ class SkipGame(Exception):
 
 class FatalError(Exception):
     """Nothing can be written."""
+
+
+def _utc_now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def log(message: str) -> None:
@@ -325,6 +330,27 @@ def write_atomic(path: str, data: bytes) -> None:
         raise
 
 
+def write_status(output: str, state: str, started_at: str, finished_at=None, games=None, skipped=None,
+                 seconds=None, error=None) -> None:
+    """Writes status.json next to index.json: what the last (or the running) indexing did.
+
+    `state` is "running", "ok" or "error". `skipped` is a list of (folder, reason). A run killed
+    without a chance to write ("kill -9", power loss) leaves "running" behind; readers should
+    compare `startedAt` with the clock before trusting it.
+    """
+    data = {
+        "schemaVersion": 1,
+        "state": state,
+        "startedAt": started_at,
+        "finishedAt": finished_at,
+        "seconds": None if seconds is None else round(seconds, 1),
+        "games": games,
+        "skipped": None if skipped is None else [{"path": n, "reason": r} for n, r in skipped],
+        "error": error,
+    }
+    write_atomic(os.path.join(output, STATUS_NAME), (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+
+
 def _inside(path: str, root: str) -> bool:
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
@@ -430,11 +456,26 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     started = time.monotonic()
+    started_at = _utc_now()
+
+    def status(state, **fields):
+        # status.json is best effort: failing to write it must not fail the indexing
+        try:
+            write_status(args.output, state, started_at, **fields)
+        except OSError as exc:
+            log(f"warning: could not write {STATUS_NAME}: {exc}")
+
+    if os.path.isdir(args.output):
+        status("running")
     try:
         result = build_index(args.library, args.output, use_cache=not args.no_cache)
     except FatalError as exc:
         log(f"error: {exc}")
+        status("error", finished_at=_utc_now(), seconds=time.monotonic() - started, error=str(exc))
         return 2
+    except BaseException as exc:
+        status("error", finished_at=_utc_now(), seconds=time.monotonic() - started, error=f"{type(exc).__name__}: {exc}")
+        raise
     for r in result["games"]:
         e = r["entry"]
         log(f"indexed {e['path']}: {e['name']!r} id={e['id']} version={e['version']} "
@@ -442,8 +483,10 @@ def main(argv=None) -> int:
             f"{e['totalSize']} bytes, artwork={','.join(e['artwork']) or '-'} ({r['seconds']:.1f} s)")
     for name, reason in result["skipped"]:
         log(f"skipped {name}: {reason}")
+    elapsed = time.monotonic() - started
+    status("ok", finished_at=_utc_now(), games=len(result["games"]), skipped=result["skipped"], seconds=elapsed)
     log(f"{len(result['games'])} games indexed, {len(result['skipped'])} skipped, "
-        f"{time.monotonic() - started:.1f} s; wrote {os.path.join(args.output, 'index.json')}")
+        f"{elapsed:.1f} s; wrote {os.path.join(args.output, 'index.json')}")
     return 1 if args.strict and result["skipped"] else 0
 
 

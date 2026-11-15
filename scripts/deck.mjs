@@ -25,6 +25,11 @@
 //   node scripts/deck.mjs mount [X] [path] [--ro]   Windows: maps the device's mounted cards
 //                                            (/run/media/deck) as drive X: (default S:) via SSHFS-Win
 //   node scripts/deck.mjs unmount [X]        removes that drive
+//
+// Library server (the BeaglePlay), a device with "role": "server" (use --device server):
+//   node scripts/deck.mjs reindex            indexes now (no QUIET_MIN wait), then prints status.json
+//   node scripts/deck.mjs reindex-status     prints the last indexing result (status.json), with the
+//                                            skipped folders and why
 import { spawn, spawnSync } from "node:child_process";
 import { createSocket } from "node:dgram";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -553,6 +558,30 @@ async function screenshot(cfg, name, target = isMainWindow) {
   return 0;
 }
 
+/** Shell prelude for the library server: loads server/.env on the device. `serverDir` in the
+ *  device config overrides the default install folder. */
+const serverPrelude = (cfg) =>
+  `D=${cfg.serverDir ?? "$HOME/insertplay-library"}/server; . "$D/.env"; ` +
+  `S="$INSERTPLAY_CONFIG/index/status.json"; `;
+
+/** Prints status.json from the device in a few readable lines. Returns 1 when the last run failed. */
+function printIndexStatus(cfg) {
+  const r = ssh(cfg, `${serverPrelude(cfg)}cat "$S"`, { capture: true });
+  if (r.code !== 0) {
+    console.error(r.err || "status.json not found (indexer from before #83, or never run)");
+    return 1;
+  }
+  const st = JSON.parse(r.out);
+  const ago = Math.round((Date.now() - Date.parse(st.startedAt)) / 1000);
+  console.log(`state:    ${st.state}${st.state === "running" ? ` (started ${ago} s ago)` : ""}`);
+  console.log(`started:  ${st.startedAt}`);
+  if (st.finishedAt) console.log(`finished: ${st.finishedAt} (${st.seconds} s)`);
+  if (st.games !== null) console.log(`games:    ${st.games} indexed, ${st.skipped.length} skipped`);
+  for (const k of st.skipped ?? []) console.log(`  skipped ${k.path}: ${k.reason}`);
+  if (st.error) console.log(`error:    ${st.error}`);
+  return st.state === "error" ? 1 : 0;
+}
+
 async function main() {
   const { args, device, confirmProd } = takeGlobalFlags(process.argv.slice(2));
   const [command, ...rest] = args;
@@ -619,6 +648,13 @@ async function main() {
       console.log("suspending");
       return 0;
     }
+    case "reindex": {
+      // the script keeps the lock, so two requests run one indexer; it waits until the run ends
+      const r = ssh(cfg, `${serverPrelude(cfg)}INSERTPLAY_REINDEX="$D/../indexer-run.sh" "$D/reindex-if-changed.sh" --now`);
+      return r.code !== 0 ? r.code : printIndexStatus(cfg);
+    }
+    case "reindex-status":
+      return printIndexStatus(cfg);
     case "mount":
       return mount(cfg, rest);
     case "unmount":

@@ -7,6 +7,11 @@
 #
 #   */10 * * * * /path/to/server/reindex-if-changed.sh >>"$HOME/.cache/insertplay-reindex.log" 2>&1
 #
+# `--now` (run by hand, e.g. through `deck.mjs reindex`): index right away, ignoring "nothing
+# changed" and the QUIET_MIN wait. It still takes the lock (one run at a time) and says so when
+# another run holds it. Run it after the copy of a game has finished. The result is in
+# index/status.json (written by the indexer).
+#
 # Variables (from server/.env, or the environment):
 #   INSERTPLAY_LIBRARY  library root
 #   INSERTPLAY_CONFIG   config folder (holds index/index.json)
@@ -18,6 +23,8 @@
 # looks at the change time (ctime) and at directory times (a new or removed entry changes
 # its parent folder).
 set -eu
+NOW=0
+[ "${1:-}" = "--now" ] && NOW=1
 HERE=$(cd "$(dirname "$0")" && pwd)
 [ -f "$HERE/.env" ] && . "$HERE/.env"
 : "${INSERTPLAY_LIBRARY:?set INSERTPLAY_LIBRARY}"
@@ -31,7 +38,10 @@ LOCK="$INSERTPLAY_CONFIG/index/.reindex.lock"
 
 # One run at a time: a cold index of a big library takes minutes.
 exec 9>"$LOCK"
-flock -n 9 || exit 0
+if ! flock -n 9; then
+	[ "$NOW" = 1 ] && echo "$(date -Is) already running; status in $INSERTPLAY_CONFIG/index/status.json"
+	exit 0
+fi
 
 [ -d "$INSERTPLAY_LIBRARY" ] || { echo "$(date -Is) library not mounted: $INSERTPLAY_LIBRARY"; exit 0; }
 
@@ -42,7 +52,7 @@ changed() {
 
 REF=$STAMP
 [ -f "$REF" ] || REF=$INDEX
-if [ -f "$REF" ]; then
+if [ "$NOW" = 0 ] && [ -f "$REF" ]; then
 	[ -n "$(changed "$REF")" ] || exit 0
 	QUIET=$(mktemp)
 	trap 'rm -f "$QUIET"' EXIT
@@ -53,7 +63,7 @@ if [ -f "$REF" ]; then
 	fi
 fi
 
-echo "$(date -Is) library changed; re-indexing"
+if [ "$NOW" = 1 ]; then echo "$(date -Is) re-indexing now (requested)"; else echo "$(date -Is) library changed; re-indexing"; fi
 touch "$STAMP.new"
 if [ -n "${INSERTPLAY_REINDEX:-}" ]; then
 	sh -c "$INSERTPLAY_REINDEX"

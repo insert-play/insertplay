@@ -353,3 +353,45 @@ def test_case_insensitive_manifest_keys_and_bom(lib, out):
     assert game["name"] == "Legacy"
     assert game["manifest"] == data
     assert game["artwork"]["capsule"]["path"] == "c.png"
+
+
+def read_status(out):
+    with open(os.path.join(out, "status.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_main_writes_status_with_skipped_reasons(lib, out):
+    make_game(lib, "good", GUID_A)
+    os.makedirs(os.path.join(lib, "no-manifest"))
+    assert idx.main([lib, out]) == 0
+    status = read_status(out)
+    assert status["state"] == "ok"
+    assert status["games"] == 1
+    assert status["startedAt"] <= status["finishedAt"]
+    assert status["error"] is None
+    [skipped] = status["skipped"]
+    assert skipped["path"] == "no-manifest"
+    assert skipped["reason"]
+
+
+def test_main_status_records_a_fatal_error(lib, out):
+    assert idx.main([lib, out]) == 0  # creates the output folder
+    assert idx.main([lib + "-missing", out]) == 2
+    status = read_status(out)
+    assert status["state"] == "error"
+    assert "not a directory" in status["error"]
+    assert status["games"] is None
+
+
+def test_main_status_survives_an_unexpected_crash(lib, out, monkeypatch):
+    assert idx.main([lib, out]) == 0
+
+    def boom(*a, **k):
+        raise RuntimeError("disk fell off")
+
+    monkeypatch.setattr(idx, "build_index", boom)
+    with pytest.raises(RuntimeError):
+        idx.main([lib, out])
+    status = read_status(out)
+    assert status["state"] == "error"
+    assert "disk fell off" in status["error"]
