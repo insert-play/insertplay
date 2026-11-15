@@ -21,6 +21,7 @@ Layout:
 | `src/` | Frontend (React, runs inside Steam). Steam calls are in `src/steam.ts`. |
 | `tests/` | pytest for the backend. |
 | `scripts/` | `package.sh`, `deck.mjs` (device access), `spike.mjs`, `cdp.mjs`, `deck-setup/`. |
+| `tools/` | Helpers for the Windows dev machine, outside the plugin and the release zip. Per-machine settings in `tools/.env` (not versioned; template `tools/.env.example`). See [tools/README.md](../tools/README.md). |
 | `card-template/`, `docs/card-format.md` | Template and spec of an InsertPlay card. |
 
 CI (`.github/workflows/ci.yml`) runs pytest, the typecheck and `package.sh` on every push and pull request, and keeps `InsertPlay.zip` as a build artifact.
@@ -32,6 +33,12 @@ CI (`.github/workflows/ci.yml`) runs pytest, the typecheck and `package.sh` on e
 3. On a `v*` tag, the `release` job of `.github/workflows/ci.yml` checks that the tag matches `package.json`, builds, and publishes a GitHub release with `InsertPlay.zip`. The `releases/latest/download/InsertPlay.zip` URL in the README always points to it.
 
 To put a build on a card without a release: copy `out/InsertPlay.zip` to `insertplay/decky/` on the card, or, with the card mounted on the dev Deck, `node scripts/deck.mjs stage-card <label> [--version X]`. It builds and writes the zip with the plugin's own `write_card_package`; `--version` changes the version inside the zip only, to test "newer card" and "older card".
+
+## Dev machine tools: `tools/`
+
+`scripts/` talks to the Deck and the Steam Machine; `tools/` holds helpers for the PC you develop on. Anything that depends on the machine (a disk serial, a drive letter, a WSL distro name) is read from `tools/.env`, which is in `.gitignore`: copy `tools/.env.example` to `tools/.env` and fill it in. [tools/README.md](../tools/README.md) describes each tool.
+
+Today there is one: `tools/wsl-disk.ps1 mount|unmount|status`, which mounts a Linux-formatted (ext4, btrfs) USB disk through WSL2 under its own drive letter, so a Remote Library data disk can be plugged into the PC and copied to from Explorer. It needs Windows Developer Mode and asks for one UAC prompt per mount.
 
 ## Device access: `scripts/deck.mjs`
 
