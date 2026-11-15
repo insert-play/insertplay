@@ -19,6 +19,7 @@ import os
 import posixpath
 import re
 import shutil
+import socket
 import ssl
 import stat
 import tempfile
@@ -50,7 +51,7 @@ SPEED_WINDOW_SECONDS = 5.0
 # cancel waits this long for the worker to let go of the game (a stalled socket read
 # takes up to TIMEOUT_SECONDS); unloading the plugin waits less, the thread is a daemon
 STOP_WAIT_SECONDS = 45.0
-UNLOAD_WAIT_SECONDS = 5.0
+UNLOAD_WAIT_SECONDS = 1.5  # Decky sends SIGKILL 5 s after the stop request (#59)
 
 STATES = ("queued", "downloading", "paused", "error", "installed")
 
@@ -513,6 +514,17 @@ class _Http:
                 self.conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
         return self.conn
 
+    def abort(self) -> None:
+        """Wakes a thread blocked in a read of this connection. Safe to call from another
+        thread: `shutdown` makes the blocked `recv` return, a plain `close` may not."""
+        conn = self.conn
+        sock = getattr(conn, "sock", None)
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
     def close(self) -> None:
         if self.conn is not None:
             try:
@@ -618,6 +630,7 @@ class RemoteLibrary:
         self._cv = threading.Condition(self._lock)
         self._stop = threading.Event()
         self._thread = None
+        self._client = None  # the active download's connection, so stop() can wake its read
         self._loaded = False  # stop() saves the state only after start() loaded it
         self._games = {}
         self._queue = []
@@ -642,16 +655,27 @@ class RemoteLibrary:
             self._thread.start()
 
     def stop(self) -> None:
+        """Bounded by UNLOAD_WAIT_SECONDS: the state is saved first, so even a worker that
+        does not stop in time (and gets killed) leaves a resumable state behind."""
+        t0 = time.monotonic()
         self._stop.set()
         with self._cv:
             self._cv.notify_all()
+        # an unload before start() (or a failed load) must not overwrite the saved state
+        # with an empty one: installed games would lose their records
+        with self._lock:
+            if self._loaded:
+                self._save(force=True)
+            client = self._client
+        if client is not None:
+            client.abort()  # a read blocked on the network would hold the join for TIMEOUT_SECONDS
         if self._thread:
             self._thread.join(UNLOAD_WAIT_SECONDS)
         with self._lock:
-            # an unload before start() (or a failed load) must not overwrite the saved state
-            # with an empty one: installed games would lose their records
             if self._loaded:
                 self._save(force=True)
+        alive = bool(self._thread and self._thread.is_alive())
+        self.log(f"stop: {time.monotonic() - t0:.2f} s" + (", worker still running" if alive else ""))
 
     def _load(self) -> None:
         cached = _read_json(self.index_path)
@@ -1227,6 +1251,7 @@ class RemoteLibrary:
             raise RemoteError("not_configured")
         started = time.monotonic()
         client = _Http(cfg["url"], cfg["token"], self.timeout)
+        self._client = client
         try:
             listing = self._file_list(client, gid, entry)
             target = self.install_path(gid)
@@ -1310,6 +1335,7 @@ class RemoteLibrary:
                 f"{gid} ({entry.get('name')}): installed, {entry['totalSize'] / 1e6:.0f} MB in {seconds:.0f} s"
             )
         finally:
+            self._client = None
             client.close()
 
     def _make_links(self, folder: str, links: list, known_dirs: set) -> None:

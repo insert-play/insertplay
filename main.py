@@ -225,13 +225,17 @@ class Plugin:
         decky.logger.info("InsertPlay: started with %d card(s)", len(self.mounted))
 
     async def _unload(self):
+        # `remote.stop()` runs right here, not through `asyncio.to_thread`: measured on the
+        # Deck (#59), during Decky's unload the `await` of a `to_thread` never resumes even
+        # with the thread already finished, so the plugin hung until Decky's SIGKILL at 5 s.
+        # `stop()` is bounded (UNLOAD_WAIT_SECONDS) and the loop has nothing else to do now.
         if self.watcher:
             self.watcher.cancel()
         if getattr(self, "saves_retrier", None):
             self.saves_retrier.cancel()
         remote = getattr(self, "remote", None)
         if remote is not None:
-            await asyncio.to_thread(remote.stop)
+            remote.stop()
 
     async def _saves_retry_loop(self):
         """Pending uploads (server was down) go out a minute after load, then every 5 min."""

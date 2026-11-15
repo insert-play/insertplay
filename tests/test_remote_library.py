@@ -71,6 +71,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Range", f"bytes {start}-{len(data) - 1}/{len(data)}")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
+        stall = next((e for suffix, e in srv.stall.items() if path.endswith(suffix)), None)
+        if stall is not None:  # sends a few bytes, then stays silent until released
+            self.wfile.write(body[:16])
+            self.wfile.flush()
+            stall.wait(30)
+            return
         drop = srv.drop_after.pop(path, None)
         if drop is not None:
             self.wfile.write(body[:drop])
@@ -100,6 +106,7 @@ def server(tmp_path):
     srv.requests, srv.connections = [], set()
     srv.status, srv.corrupt, srv.drop_after = {}, {}, {}
     srv.slow = 0
+    srv.stall = {}
     srv.url = f"http://127.0.0.1:{srv.server_address[1]}/"
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
@@ -612,6 +619,42 @@ def test_pause_resume_and_cancel_mid_download(env, server):
         assert lib.progress() == {"active": None, "queue": [], "games": []}
     finally:
         lib.stop()
+
+
+def test_stop_returns_fast_when_the_download_is_blocked_on_the_network(env, server):
+    """#59: Decky sends SIGKILL 5 s after the stop request; a read stuck on a silent server
+    must not hold the unload for the network timeout."""
+    publish(server, game_files())
+    release = threading.Event()
+    server.stall["data/big.bin"] = release
+    lib = ready(env, server)
+    lib.timeout = 30  # a read would wait this long
+    try:
+        lib.install(GID)
+        deadline = time.time() + 10
+        while not any(r[0].endswith("data/big.bin") for r in server.requests) and time.time() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.3)  # the worker is now blocked reading the stalled body
+        started = time.monotonic()
+        lib.stop()
+        took = time.monotonic() - started
+        assert took < 2.5, took
+        assert not lib._thread.is_alive()
+        saved = json.load(open(lib.state_path))
+        assert saved["games"][GID]["state"] == "downloading"  # resumable, not an error
+    finally:
+        release.set()
+        lib.stop()
+
+
+def test_stop_saves_the_state_before_waiting(env, server):
+    publish(server, game_files())
+    lib = ready(env, server)
+    calls = []
+    original = lib._thread.join
+    lib._thread.join = lambda timeout=None: (calls.append(os.path.exists(lib.state_path)), original(timeout))[1]
+    lib.stop()
+    assert calls == [True]
 
 
 def test_path_rules():
