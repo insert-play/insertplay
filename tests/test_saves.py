@@ -316,6 +316,25 @@ def test_first_sync_server_wins_over_a_newer_installed_save(server, tmp_path):
     assert machine2.push()["result"] == "conflict_uploaded"
 
 
+def test_reinstall_with_the_cards_own_save_downloads_the_servers(server, tmp_path):
+    # #88 (God of War): the history outlived an uninstall, so the card's own (non-empty) save
+    # looked like progress since the last sync and was uploaded over the good one
+    deck = Device(tmp_path, "deck", server.url, CLAW)
+    write(deck.root, "game/CLAW.USR", "world5", mtime=1000)
+    assert deck.pull()["result"] == "uploaded"
+    write(deck.root, "game/CLAW.USR", "from the card", mtime=9000)  # reinstalled, history kept
+    assert deck.pull()["result"] == "uploaded"  # what went wrong
+    write(deck.root, "game/CLAW.USR", "world6", mtime=9500)
+    assert deck.push()["result"] == "uploaded"
+    sync.forget_state(deck.paths, KEY)  # what install/uninstall do now
+    assert deck.state() == {} and sync.last_result(deck.paths, KEY) is None
+    write(deck.root, "game/CLAW.USR", "from the card", mtime=20000)
+    r = deck.pull()
+    assert r["result"] == "conflict_downloaded" and "first sync" in r["message"]
+    assert read(deck.root, "game/CLAW.USR") == b"world6" and r["backup"]["stored"] is True
+    sync.forget_state(deck.paths, KEY)  # nothing there: no error
+
+
 def _dead_url():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))

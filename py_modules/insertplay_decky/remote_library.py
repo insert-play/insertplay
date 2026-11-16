@@ -613,7 +613,7 @@ class RemoteLibrary:
     `config_path` is `<settings>/remote_library.json`. `log(msg)` and `on_change(progress)`
     may be called from the worker thread."""
 
-    def __init__(self, games_root: str, data_dir: str, config_path: str, log=None, on_change=None):
+    def __init__(self, games_root: str, data_dir: str, config_path: str, log=None, on_change=None, on_forget=None):
         self.games_root = games_root
         self.incoming_root = os.path.join(games_root, ".incoming")
         self.data_dir = data_dir
@@ -624,6 +624,7 @@ class RemoteLibrary:
         self.config = Config(config_path)
         self.log = log or (lambda msg: None)
         self.on_change = on_change or (lambda progress: None)
+        self.on_forget = on_forget or (lambda gid: None)  # drops the game's save sync history (#88)
         self.backoff = BACKOFF_SECONDS
         self.timeout = TIMEOUT_SECONDS
         self._lock = threading.RLock()
@@ -992,6 +993,8 @@ class RemoteLibrary:
             if state == "not_installed" and os.path.lexists(self.install_path(gid)):
                 raise RemoteError("io_error", f"{self.install_path(gid)} exists and was not installed by the plugin")
             self._space_check(total, verified)
+            if state == "not_installed":
+                self._forget_saves(gid)  # a clean install starts without sync history, even after an old uninstall
             with self._lock:
                 entry = self._games.get(gid)
                 if entry is None:
@@ -1094,6 +1097,12 @@ class RemoteLibrary:
         except RemoteError as exc:
             return exc.result()
 
+    def _forget_saves(self, gid: str) -> None:
+        try:
+            self.on_forget(gid)
+        except Exception as exc:  # never blocks an install or an uninstall
+            self.log(f"{gid}: could not drop the save sync history: {exc}")
+
     def uninstall(self, gid) -> dict:
         try:
             gid = check_id(gid)
@@ -1103,6 +1112,7 @@ class RemoteLibrary:
                     raise RemoteError("unknown_game", "not installed")
             _remove_dir(self.games_root, gid)
             _remove_file(os.path.join(self.lists_dir, f"{gid}.json"))
+            self._forget_saves(gid)
             with self._lock:
                 self._games.pop(gid, None)
                 self._save(force=True)
