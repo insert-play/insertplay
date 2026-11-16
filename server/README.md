@@ -257,7 +257,9 @@ rsync -rt --chown=1000:1000 --chmod=D755,F644 --info=progress2 --no-inc-recursiv
 - `--chown`, because `rsync` runs as root and Samba and the saves container could not write otherwise.
 - `rsync` leaves `.name.XXXXXX` temporary files when interrupted; delete them before indexing.
 
-**USB 2.5" disk write speed.** The 2 TB Seagate Expansion (USB 3) accepted 2-3 GB at full speed and then fell to about 30 MB/s, with I/O retries (Windows event 153) on the PC. Capping `rsync` at `--bwlimit=25000` (KiB/s) kept it under that rate and the copy never stalled. A 1 TB disk of the same family sustained ~80 MB/s unthrottled for the first 15 GiB. These are measurements of two disks, not a rule: if a copy stalls, lower the limit.
+**USB 2.5" disk write speed.** The 2 TB Seagate Expansion (USB 3) accepted 2-3 GB at full speed and then fell to about 30 MB/s, with I/O retries (Windows event 153) on the PC. Capping `rsync` at `--bwlimit=25000` (KiB/s) kept it under that rate and the copy never stalled. A 1 TB disk of the same family took the whole restore (195 GB, 77 860 files) **unthrottled** in 81 minutes (average 40 MB/s: ~80 MB/s on large files, 40-50 MB/s on the many small ones), with no stall and no I/O retry. These are measurements of two disks, not a rule: if a copy stalls, lower the limit.
+
+After a restore, check it against the backup: file, symlink and empty-folder counts per game must equal the indexer's log lines, `rsync -rnc` (checksum, dry run) of the small folders (saves, templates, backups) must list no difference, and no `IntxLNK` file may remain. All matched here.
 
 **On the board.**
 
