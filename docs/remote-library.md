@@ -435,7 +435,7 @@ Served by the save server ([`server/saves/saves_server.py`](../server/saves/save
 
 Other errors: `411` without a plain `Content-Length`, `400` when the body ends early, `507` when the server's disk fails (the old save stays), `405` for other methods, `500` in JSON for anything unexpected. A meta edited by hand without a valid `rev` counts as rev `0`.
 
-Backups are kept within `INSERTPLAY_SAVE_BACKUP_MB` per game (default 50), oldest removed first. The limit applies only to backups: a save larger than it gets no backup (`"stored": false, "reason": "limit"`) and still syncs normally (Alan Wake 2: 159 MB). Bodies larger than `INSERTPLAY_SAVE_MAX_MB` (default 1024): `413`. Uploads are written to a temporary file and renamed, under a lock per key.
+Backups are kept within `INSERTPLAY_SAVE_BACKUP_MB` per game (default 50), oldest removed first. A conflict between two saves larger than that limit therefore loses the loser for good: only the newer `newestMtime` survives. The limit applies only to backups: a save larger than it gets no backup (`"stored": false, "reason": "limit"`) and still syncs normally (Alan Wake 2: 159 MB). Bodies larger than `INSERTPLAY_SAVE_MAX_MB` (default 1024): `413`. Uploads are written to a temporary file and renamed, under a lock per key.
 
 ### Where a game keeps its save
 

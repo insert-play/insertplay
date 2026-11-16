@@ -52,4 +52,9 @@ Why the symlink and `subst`: `net use` only accepts the distro **root** (`\\wsl.
 
 ### Status
 
-`mount`, `status` and `unmount` were exercised end to end on a btrfs SSD in read-only mode. The elevated `wsl --mount` step was run by hand and by the script. Copy speed over this path, and read-write on ext4, have **not been measured yet**.
+Exercised end to end: `mount`, `status` and `unmount` on a btrfs SSD (read-only), and ext4 read-write on 1 TB and 2 TB USB HDDs, including formatting (`mkfs.ext4` run inside WSL on the attached disk) and a ~180 GiB `rsync` from inside WSL. See [server/README.md](../server/README.md#moving-the-library-to-another-disk-ntfs-to-ext4) for the copy and speed notes.
+
+- **Writing through the letter is slow**: `\\wsl.localhost` (9P) costs ~6 ms per file and has no flush. For big copies run `rsync` inside WSL against `/mnt/wsl/<name>`; use the letter to browse.
+- **If a disk shows I/O retries, try a USB port of the CPU's controller** (usually the rear ones) instead of a chipset port.
+- **Several disks**: change the serial in `.env`; the script refuses anything that is not a USB disk or that holds Windows.
+- **Known bug**: `unmount` can print "Safe to unplug" even when detaching failed. Run `status` and check the disk is gone before pulling the cable.
