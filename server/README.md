@@ -235,6 +235,43 @@ To copy games into the library from a PC, share **only the library root** over S
 - `wide links` stays at its default (`no`): symlinks inside a game (Proton prefixes have them) keep working, but none reaches outside the share. No guest access: without `map to guest`, an unknown user is refused.
 - After copying a game, re-index (step 4), or let `reindex-if-changed.sh` do it.
 
+## Moving the library to another disk (NTFS to ext4)
+
+Measured when the 2 TB library disk was moved from NTFS to ext4 (restore of ~180 GiB, 8 games). The server reads the disk through `/mnt/games`, so moving it means: new disk, same mount point.
+
+**Format (ext4).** Done from Windows through WSL ([tools/README.md](../tools/README.md)), with:
+
+```
+mkfs.ext4 -F -m 0 -i 131072 -E lazy_itable_init=0,lazy_journal_init=0 /dev/sdX1
+```
+
+`-m 0` (no reserved blocks: it is a data disk), `-i 131072` (one inode per 128 KiB: a game has tens of thousands of small files), and the two `lazy_*` options write the inode tables and the journal now, so the first big copy does not compete with background initialization. Make the top folder owned by uid 1000 (`chown 1000:1000`): the Samba user (`debian`) and the saves container both run as 1000.
+
+**Copy back from a backup that was an NTFS disk.** Run `rsync` as root inside WSL, with the backup mounted read-only:
+
+```
+rsync -rt --chown=1000:1000 --chmod=D755,F644 --info=progress2 --no-inc-recursive SRC/ DST/
+```
+
+- Do not use `-l -p -o -g`. Symlinks that `ntfs-3g` created (Proton prefixes have thousands) are not links to Windows: they are small files that start with `IntxLNK\x01` followed by the target in UTF-16LE. After the copy, replace each one with a real symlink (read the target, unlink, `symlink`). There were 7 147 in this library; `find -type l` on the server confirms the count, and no file starting with `IntxLNK` may remain.
+- `--chown`, because `rsync` runs as root and Samba and the saves container could not write otherwise.
+- `rsync` leaves `.name.XXXXXX` temporary files when interrupted; delete them before indexing.
+
+**USB 2.5" disk write speed.** The 2 TB Seagate Expansion (USB 3) accepted 2-3 GB at full speed and then fell to about 30 MB/s, with I/O retries (Windows event 153) on the PC. Capping `rsync` at `--bwlimit=25000` (KiB/s) kept it under that rate and the copy never stalled. A 1 TB disk of the same family took the whole restore (195 GB, 77 860 files) **unthrottled** in 81 minutes (average 40 MB/s: ~80 MB/s on large files, 40-50 MB/s on the many small ones), with no stall and no I/O retry. These are measurements of two disks, not a rule: if a copy stalls, lower the limit.
+
+After a restore, check it against the backup: file, symlink and empty-folder counts per game must equal the indexer's log lines, `rsync -rnc` (checksum, dry run) of the small folders (saves, templates, backups) must list no difference, and no `IntxLNK` file may remain. All matched here.
+
+**On the board.**
+
+- Keep the powered hub (section 1).
+- SMART does not work through the USB bridge of these disks, so there is no health check from the board. Check the disk on a PC before trusting it.
+- In `/etc/fstab` use the UUID and `nofail`, and mount before Docker so the containers never see the empty mount point:
+  `UUID=<uuid>  /mnt/games  ext4  rw,noatime,nofail,x-systemd.device-timeout=30s,x-systemd.before=docker.service  0  0`
+- Docker bind-mounts the folder: run `docker stop insertplay-saves insertplay-caddy` before unmounting, or the unmount fails ("target is busy").
+- After mounting: `docker start insertplay-saves insertplay-caddy`, `sudo systemctl restart smbd`, then `node scripts/deck.mjs --device server reindex`.
+
+**Re-indexing after the move.** The indexer keeps a hash cache keyed by (path, size, mtime). `rsync -t` preserves times, so a restored library reuses it and re-indexes in ~25 s (8 games). The cron (`reindex-if-changed.sh`, every 10 min) indexes once nothing has changed for `QUIET_MIN` (5 min), comparing against `.reindex.stamp`: files newer than the stamp trigger it by themselves. To verify contents against the backup, run the indexer with `--no-cache` (~100 min for this library).
+
 ## What the server answers
 
 | Request | Answer |
