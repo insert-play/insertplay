@@ -195,11 +195,12 @@ class Env:
         self.games_root = str(tmp_path / "home" / "Games" / "InsertPlay")
         self.data_dir = str(tmp_path / "data" / "library")
         self.config_path = str(tmp_path / "settings" / "remote_library.json")
-        self.logs, self.events = [], []
+        self.logs, self.events, self.forgotten = [], [], []
 
     def make(self, start=True):
         lib = rl.RemoteLibrary(self.games_root, self.data_dir, self.config_path,
-                               log=self.logs.append, on_change=self.events.append)
+                               log=self.logs.append, on_change=self.events.append,
+                               on_forget=self.forgotten.append)
         lib.backoff = (0.01, 0.01, 0.01)
         if start:
             lib.start()
@@ -524,6 +525,20 @@ def test_uninstall_deletes_only_the_game_folder(env, server):
         assert not os.path.exists(os.path.join(env.data_dir, "lists", f"{GID}.json"))
         assert lib.artwork_base64(GID, "capsule")  # still in the index: artwork stays
         assert lib.uninstall("../keep-me")["code"] == "unknown_game"
+    finally:
+        lib.stop()
+
+
+def test_install_and_uninstall_drop_the_save_sync_history(env, server):
+    # #88: the history outlived the install and made the card's own save look like progress
+    publish(server, game_files())
+    lib = ready(env, server)
+    try:
+        lib.install(GID)
+        assert wait_state(lib, ("installed", "error"))["state"] == "installed"
+        assert env.forgotten == [GID]  # clean install: stale history from an old uninstall goes
+        assert lib.uninstall(GID)["ok"]
+        assert env.forgotten == [GID, GID]
     finally:
         lib.stop()
 

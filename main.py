@@ -130,6 +130,7 @@ class Plugin:
             config_path=os.path.join(settings_dir, "remote_library.json"),
             log=self._remote_log,
             on_change=self._remote_emit,
+            on_forget=lambda gid: saves_sync.forget_state(self.saves_paths, gid),
         )
         self.saves_paths = saves_sync.Paths(os.path.join(_home(), ".local", "share", "insertplay"))
         self.saves_wrapper = None

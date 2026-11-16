@@ -133,6 +133,17 @@ def write_hints(paths: Paths, blocks: dict) -> None:
                 pass
 
 
+def forget_state(paths: Paths, key: str) -> None:
+    """Drops this device's sync history of a game (#88). Called when the game is installed or
+    uninstalled: the save is then gone or fresh from the card, and the old hashes would make
+    the install's save look like progress made since the last sync, uploaded over the server's."""
+    for path in (paths.state(key), paths.last(key)):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
 def last_result(paths: Paths, key: str):
     return _read_json(paths.last(key))
 
