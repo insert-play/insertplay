@@ -18,7 +18,9 @@
 //   rendering (`defaultQueryOptions`, `GetAchievements`, `GetSections`). A first test that
 //   did it froze the steamwebhelper of the Deck. Writes (query invalidation) happen only on
 //   timers, after a change of progress;
-// - `appDetailsStore.GetAchievements` still feeds the in-game overlay;
+// - `appDetailsStore.GetAchievements` still feeds the in-game overlay's achievement
+//   widgets; `GetAppDetails(...).achievements` decides whether the overlay menu includes
+//   the "Conquistas" action and supplies the page data;
 //   `details.achievements` itself is never written.
 
 import { Patch, afterPatch, callOriginal, findModuleExport, replacePatch } from "@decky/ui";
@@ -276,6 +278,8 @@ function queryFnFor(id: string, appid: number, kind: string, steamid: string): (
   return fn;
 }
 
+const appDetailsCache = new WeakMap<object, { details: object; result: object }>();
+
 /** Adds "achievements" to the sections (after "nonsteam"; the page lays them out in its own
  *  order, measured: first in "Suas coisas"). Kept per Steam Set: Steam memoizes the Set
  *  (`m_setSectionsMemo`), and a new one per call would change identity on every render. */
@@ -318,6 +322,24 @@ const PARTS: Record<string, () => Patch[]> = {
         const appid = Number(args[0]);
         viewed(appid);
         return shown.get(appid)?.details ?? callOriginal;
+      }),
+    ];
+  },
+  overlayDetails() {
+    if (typeof appDetailsStore?.GetAppDetails !== "function") throw new Error("appDetailsStore.GetAppDetails missing");
+    return [
+      // The in-game overlay's action list and content read `GetAppDetails`, whereas the
+      // achievements widgets still use `GetAchievements`. Return a stable, derived object:
+      // never write into Steam's observable details during a render.
+      afterPatch(appDetailsStore, "GetAppDetails", (args: any[], ret: any) => {
+        const appid = Number(args[0]);
+        const data = shown.get(appid)?.details;
+        if (!data || !ret || typeof ret !== "object") return ret;
+        const cached = appDetailsCache.get(ret);
+        if (cached?.details === data) return cached.result;
+        const result = { ...ret, achievements: data };
+        appDetailsCache.set(ret, { details: data, result });
+        return result;
       }),
     ];
   },
