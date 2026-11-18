@@ -241,6 +241,66 @@ Every `path` in a file list (and `games[].path`, which is a single segment) must
 
 The indexer refuses a game that breaks them; **the client enforces them again** on every list it reads and refuses the whole game (`bad_path`), never just the file. Paths are URL-encoded segment by segment when building a download URL: `urljoin(base, library) + quote(game path) + "/" + quote(file path, safe="/")`.
 
+## Packed games
+
+A game may be stored on the server as **tar parts** instead of loose files ([#61](https://github.com/insert-play/insertplay/issues/61)): a game with ~27 000 files installs in a fraction of the time, since the per-file cost (request, hash, `open`/`rename`) is paid once per part. Loose and packed games can live in the same library; a client that knows `pack` installs both, one that doesn't can't install a packed game (it has no `files`), so update the plugins before packing.
+
+Measured with Captain Claw (27 338 files, 2.33 GB) from a BeaglePlay to a Steam Deck: 356 s loose, 26 s packed (3 parts, zstd level 3, 782 MB).
+
+### Folder on the server
+
+[`server/indexer/pack_game.py`](../server/indexer/pack_game.py) builds it from a loose game folder, without touching the original:
+
+```
+captain-claw/
+├── steam-shortcut.json         loose copies, for the indexer (also inside the parts)
+├── shortcut-identity.json
+├── steam-artwork/…
+├── pack.json
+└── pack/000.tar.zst, 001.tar.zst, …
+```
+
+```json
+{ "schemaVersion": 1, "compression": "zstd", "extractedSize": 2333144456, "fileCount": 27338,
+  "parts": ["pack/000.tar.zst", "pack/001.tar.zst", "pack/002.tar.zst"] }
+```
+
+- Each part is an **independent** tar (`compression: "none"`) or one zstd frame holding a tar (`"zstd"`), of about 1 GiB (`--part-mb`). Split by files; a file larger than the target gets its own part. The empty directories and symlinks are in the first part.
+- Members have owner 0 and mode `0755` for ELF files and shebang scripts, `0644` otherwise (the [executable rule](#executable-files)); only regular files, directories and relative symlinks are allowed.
+- A folder with `pack.json` may hold only the two metadata files, `steam-artwork/`, `pack.json` and its parts; anything else is skipped by the indexer.
+- Artwork must be at `steam-artwork/<kind>.png` or at a path in the manifest inside `steam-artwork/`, since the indexer resolves it from the loose copies.
+
+### In the index
+
+A packed game has `pack` instead of `files` and `filesSha256`, and no `lists/<id>.json`:
+
+```json
+{ "id": "…", "version": "ec81f06a891de91b", "path": "captain-claw", "name": "Captain Claw",
+  "totalSize": 2333144456, "fileCount": 27338, "manifest": { … }, "artwork": { … },
+  "pack": { "compression": "zstd",
+            "parts": [ { "path": "pack/000.tar.zst", "size": 328562892, "sha256": "…" }, … ] } }
+```
+
+- `totalSize` and `fileCount` are what the **extracted** game has (regular files only), so the free-space check and the "installed" size are the same as for a loose game. The progress of an install counts the downloaded bytes (the sum of the parts' `size`).
+- `version` is the first 16 hex digits of the sha256 of `{"compression", "parts": [{path, size, sha256}]}` (sorted keys, no spaces). It changes when any part changes.
+- The client drops a game whose `pack` is malformed (unknown `compression`, a part with a bad path, size or sha256, repeated paths) like any other bad entry.
+
+### Install
+
+Instead of steps 1 to 4 of [Install](#install), for each part in order (`partsDone` in the state is the first unfinished one):
+
+1. Request `library/<path>/<part path>` (no `Range`; the answer must be `200` with the right `Content-Length`).
+2. Extract the tar into `.incoming/<id>/` **while it arrives** (for zstd, through the decompressor), hashing the downloaded bytes.
+3. At the end of the part, compare the sha256 with the index. A mismatch, a tar that doesn't parse or a damaged zstd frame downloads the part again, once; a second failure is `hash_mismatch`.
+4. Record `partsDone`, and go on.
+
+Then the client checks that every symlink resolves inside the folder (`bad_path` otherwise) and renames the folder, as for a loose game.
+
+- **Resume is per part.** A dropped connection, a pause, a suspend or a restart of the plugin restarts the part in progress from byte 0 (up to ~1 GiB lost); the finished parts stay, since a restarted extraction overwrites its own files. Network errors follow the same backoff as loose files.
+- **What is checked while extracting:** every member name follows the [path rules](#path-rules); only regular files, directories and symlinks (targets as in the [file list](#per-game-file-list)); files are created with `O_NOFOLLOW` and every parent is checked not to be a symlink; modes come from the executable bit only (`0755`/`0644`). Hard links, devices and anything else are `bad_path`. Not yet done (follow-up): rejecting a tar whose members add up to more than `totalSize`.
+- **zstd** needs Python 3.14 (`compression.zstd`), which Decky's bundled interpreter has; without it a zstd game fails with `io_error`. `compression: "none"` has no such need.
+- A partly installed packed game is not "verified" until the last part passes; the game is `installed` only after the final rename, as before.
+
 ## Client
 
 ### Folders on the device

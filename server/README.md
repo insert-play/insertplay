@@ -10,6 +10,7 @@ It runs on any Linux box or NAS with Docker and Docker Compose v2 (see [Without 
 | `Caddyfile` | Token check, the URL families of the contract, `404` for everything else. |
 | `saves/saves_server.py` | The save server (Python, standard library only). Caddy forwards `/saves/*` to it. |
 | `indexer/remote_library_index.py` | The indexer. Also runs without Docker: `python3 -I indexer/remote_library_index.py <library> <index folder>`. |
+| `indexer/pack_game.py` | Packs a loose game folder into tar parts ([Packed games](#packed-games)). |
 | `.env.example` | Template for `server/.env` (paths and port; no secrets). |
 
 ## 1. The library
@@ -114,6 +115,17 @@ node scripts/deck.mjs --device server reindex-status   # last result, skipped fo
 ```
 
 Measured on the BeaglePlay (2026-11-15, 8 games, 182 GB, 71 000 files): 153.5 s and 156.5 s for two runs back to back; a second request during a run was refused and only one indexer container ran.
+
+## Packed games
+
+A game with tens of thousands of files installs much faster as a few tar parts (contract: [Packed games](../docs/remote-library.md#packed-games)). `pack_game.py` writes a new folder from a loose one and never touches the original (Python 3.9+, and the `zstd` command for `zstd` parts):
+
+```sh
+python3 server/indexer/pack_game.py /mnt/games/InsertPlay/captain-claw /mnt/games/packed/captain-claw   # zstd -3, ~1 GiB parts
+python3 server/indexer/pack_game.py <game> <new folder> --compression none      # data that doesn't compress (Wii U, ISO)
+```
+
+Then replace the loose folder with the new one in the library (the indexer skips a folder that mixes loose game files with `pack.json`) and re-index. Measured on the BeaglePlay with Captain Claw (27 338 files, 2.3 GB, USB 2.0 disk): packing 262 s, indexing 19 s the first time (hashing the parts) against 191 s loose, and 0.7 s against 10 s when nothing changed. Update the plugins on the devices **before** the first packed game goes into the library.
 
 ## 5. Test with curl
 
