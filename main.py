@@ -314,6 +314,15 @@ class Plugin:
         except Exception as exc:
             decky.logger.warning("InsertPlay: icon cleanup skipped: %s", exc)
             return
+        try:
+            now = time.time()
+            keep |= {
+                os.path.join(icons_dir, name)
+                for name in os.listdir(icons_dir)
+                if now - os.path.getmtime(os.path.join(icons_dir, name)) < 300
+            }
+        except OSError:
+            pass
         removed = icons.prune(icons_dir, used | keep)
         if removed:
             self.log.add("icon", f"removed unused: {', '.join(removed)}")

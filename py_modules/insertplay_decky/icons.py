@@ -93,7 +93,8 @@ def target_path(current, source: str, guid: str, icons_dir: str, now=time.time) 
     if current and _ours(current, icons_dir):
         stem = os.path.splitext(os.path.basename(current))[0]
         if stem == f"{guid}-{digest}" or stem.startswith(f"{guid}-{digest}-"):
-            return current
+            if os.path.isfile(current):
+                return current
     ext = os.path.splitext(source)[1].lower() or ".png"
     generation = int(now() * 1000)
     while True:
@@ -106,10 +107,12 @@ def target_path(current, source: str, guid: str, icons_dir: str, now=time.time) 
 def plan(current, target: str, icons_dir: str) -> bool:
     """Apply `target`? `current` is the shortcut's icon; `None` = the shortcut is not
     in `shortcuts.vdf` yet (just created). Only replaces a missing icon or
-    one the plugin itself wrote: anything else was the user's choice."""
+    one the plugin itself wrote; anything else was the user's choice."""
     if current is None or current == "":
         return True
-    return current != target and _ours(current, icons_dir)
+    if not _ours(current, icons_dir):
+        return False
+    return current != target or not os.path.isfile(target)
 
 
 def stage(source: str, target: str) -> None:

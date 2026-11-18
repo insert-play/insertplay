@@ -144,6 +144,9 @@ async function ensureShortcut(src: ShortcutSource, update = true): Promise<{ app
   }
 
   let artworkApplied = Boolean(known?.artworkApplied) && !created && known?.appid === appid;
+  if (src.record?.artworkVersion) {
+    artworkApplied = artworkApplied && known?.artworkVersion === src.record.artworkVersion;
+  }
   if (!artworkApplied && src.artwork && Object.keys(src.artwork).length) {
     const failed = await applyArtwork(appid, src.artwork, src.toBase64);
     if (failed.length) await logAdd("error", `${spec.appName}: artwork failed: ${failed.join("; ")}`);
@@ -457,10 +460,10 @@ let tabsRead: Promise<void> | null = null;
 let tabsAgain = false;
 
 /** Which plugin shortcuts go in the library tabs (issue #52): every registry shortcut that
- *  exists in "Todos os jogos"; in "Instalados" also, when its card is inserted or its remote
- *  library game is installed. From the plugin's own state: `per_client_data.installed` is
- *  Steam's `true` for a remote game in "Instalar" until remote-steam.ts re-applies it.
- *  Never throws; one read at a time, plus one more when asked meanwhile. */
+ *  exists in "Todos os jogos"; in "Instalados" também, quando seu cartão é inserido ou seu remoto
+ *  jogo da biblioteca é instalado. Do estado do próprio plugin: `per_client_data.installed` é
+ *  `true` do Steam para um jogo remoto em "Instalar" até remote-steam.ts reaplicá-lo.
+ *  Nunca lança; uma leitura por vez, mais uma quando pedida enquanto isso. */
 export function refreshTabs(): Promise<void> {
   if (tabsRead) {
     tabsAgain = true;

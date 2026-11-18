@@ -241,7 +241,7 @@ def test_shortcut_icon_copies_to_ssd_and_respects_user_icons(main, tmp_path):
     assert changed["apply"] is True and changed["path"] != first["path"]
     assert steps["files_before_steam"] == sorted([name(first), name(changed)])
     assert steps["files_other_account"] == sorted([name(first), name(changed)])
-    assert steps["files_after"] == [name(changed)]
+    assert steps["files_after"] == sorted([name(first), name(changed)])  # recent staged copy waits for Steam to update VDF
     assert steps["user"]["apply"] is False and steps["user"]["current"] == "/grid/user_icon.png"
     assert steps["outside"] is None and steps["bad_guid"] is None
 
