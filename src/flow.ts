@@ -1,4 +1,5 @@
 import { toaster } from "@decky/api";
+import { ConfirmModal, showModal } from "@decky/ui";
 import { createElement } from "react";
 import {
   Card,
@@ -35,6 +36,7 @@ import {
   shortcutIcon,
 } from "./backend";
 import { RemoteDisplay, setRemoteDisplay } from "./remote-steam";
+import { applyRemoteGameResult, remoteUninstallableAppids } from "./remote-menu";
 import {
   ShortcutSpec,
   addShortcut,
@@ -902,7 +904,8 @@ function publishLibrary(): void {
     if (appid === undefined || libraryCardGuids.has(game.id)) continue;
     display.set(appid, displayOf(game));
   }
-  setRemoteDisplay(libraryApps.values(), display);
+  const uninstallable = remoteUninstallableAppids(libraryGames ?? [], libraryApps, libraryCardGuids);
+  setRemoteDisplay(libraryApps.values(), display, uninstallable);
   libraryListeners.forEach((callback) => callback());
 }
 
@@ -1151,11 +1154,42 @@ const nameOf = (guid: string) => libraryGames?.find((g) => g.id === guid)?.name 
 
 export type RemoteAction = "install" | "pause" | "resume" | "cancel" | "uninstall";
 
-/** Panel and Steam buttons. Each one re-reads the state afterwards. */
+function uninstallBlocked(game: RemoteGame, appid: number): string | null {
+  if (game.state !== "installed" || libraryCardGuids.has(game.id) || libraryApps.get(game.id) !== appid) {
+    return "este jogo não está instalado pela Biblioteca Remota";
+  }
+  const running = runningAppids();
+  if (!running) return "não deu para saber quais jogos estão abertos";
+  if (running.length) return "feche o jogo em execução antes de desinstalar";
+  return null;
+}
+
+/** Menu confirmation: uninstall deletes local saves inside the installation folder. */
+function confirmRemoteUninstall(appid: number): void {
+  const guid = guidOf(appid);
+  const game = libraryGames?.find((item) => item.id === guid);
+  if (!guid || !game) return;
+  const blocked = uninstallBlocked(game, appid);
+  if (blocked) {
+    toaster.toast({ title: TITLE, body: `${game.name}: ${blocked}`, duration: 10000 });
+    return;
+  }
+  showModal(
+    createElement(ConfirmModal, {
+      strTitle: `Desinstalar ${game.name}`,
+      strDescription: `Apaga ${game.name} deste aparelho, inclusive saves locais gravados dentro da pasta do jogo (memory cards e saves do Wine). O atalho continuará na biblioteca para uma futura instalação.`,
+      strOKButtonText: "Desinstalar",
+      strCancelButtonText: "Cancelar",
+      onOK: () => void remoteAction(game.id, "uninstall"),
+    }),
+  );
+}
+
+/** Shortcut for a remote library game: installs, uninstalls, pauses or resumes it. */
 export async function remoteAction(guid: string, action: RemoteAction): Promise<void> {
   const name = nameOf(guid);
   try {
-    let result: { ok: boolean; message?: string } | null;
+    let result: { ok: boolean; message?: string; game?: RemoteGame } | null;
     if (action === "install") {
       result = await remoteInstall(guid);
       if (result?.ok) toaster.toast({ title: TITLE, body: `Baixando ${name}…`, logo: gameLogo(libraryApps.get(guid)) });
@@ -1164,13 +1198,21 @@ export async function remoteAction(guid: string, action: RemoteAction): Promise<
     else if (action === "cancel") result = await remoteCancel(guid);
     else {
       const appid = libraryApps.get(guid);
-      const running = runningAppids();
-      if (!running || (appid !== undefined && running.includes(appid))) {
-        toaster.toast({ title: TITLE, body: `Feche ${name} antes de desinstalar` });
+      const game = libraryGames?.find((item) => item.id === guid);
+      if (appid === undefined || !game) return;
+      const blocked = uninstallBlocked(game, appid);
+      if (blocked) {
+        toaster.toast({ title: TITLE, body: `${game.name}: ${blocked}`, duration: 10000 });
         return;
       }
       result = await remoteUninstall(guid);
       if (result?.ok) toaster.toast({ title: TITLE, body: `${name} desinstalado` });
+    }
+    if (result?.ok && result.game && libraryGames) {
+      libraryGames = applyRemoteGameResult(libraryGames, { ok: true, game: result.game });
+      announceLibrary(libraryGames, false);
+      publishLibrary();
+      void refreshTabs();
     }
     if (!result?.ok) {
       const message = result?.message ?? "veja o log de eventos";
@@ -1184,7 +1226,7 @@ export async function remoteAction(guid: string, action: RemoteAction): Promise<
   }
 }
 
-/** Steam's own buttons on a library shortcut's page (remote-steam.ts). */
+/** Steam's own buttons and context menu on a library shortcut's page (remote-steam.ts). */
 export const remoteSteamHandlers = {
   install(appid: number) {
     const guid = guidOf(appid);
@@ -1199,5 +1241,8 @@ export const remoteSteamHandlers = {
   pause(appid: number) {
     const guid = guidOf(appid);
     if (guid) void remoteAction(guid, "pause");
+  },
+  uninstall(appid: number) {
+    confirmRemoteUninstall(appid);
   },
 };
