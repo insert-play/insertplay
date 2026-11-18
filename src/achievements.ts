@@ -316,7 +316,6 @@ const PARTS: Record<string, () => Patch[]> = {
   },
   details() {
     if (typeof appDetailsStore?.GetAchievements !== "function") throw new Error("appDetailsStore.GetAchievements missing");
-    if (typeof appDetailsStore?.GetAppDetails !== "function") throw new Error("appDetailsStore.GetAppDetails missing");
     // Only returns (and schedules): Steam calls this while rendering (see the header)
     return [
       replacePatch(appDetailsStore, "GetAchievements", (args: any[]) => {
@@ -324,6 +323,11 @@ const PARTS: Record<string, () => Patch[]> = {
         viewed(appid);
         return shown.get(appid)?.details ?? callOriginal;
       }),
+    ];
+  },
+  overlayDetails() {
+    if (typeof appDetailsStore?.GetAppDetails !== "function") throw new Error("appDetailsStore.GetAppDetails missing");
+    return [
       // The in-game overlay's action list and content read `GetAppDetails`, whereas the
       // achievements widgets still use `GetAchievements`. Return a stable, derived object:
       // never write into Steam's observable details during a render.
