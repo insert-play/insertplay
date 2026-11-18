@@ -19,14 +19,23 @@
 //   calls `SteamClient.Downloads.EnableAllDownloads(false, "0")` (no appid);
 // - `RegisterForAppOverviewChanges` returns nothing to unregister: it is registered once per
 //   Steam JS context (a plugin reload reuses it) and its handler goes to a no-op on unload;
-// - Steam has no "Desinstalar" for a non-Steam shortcut (Gerenciar shows only "Ocultar",
-//   "Remover jogo não Steam" and "Alterar arte"): uninstalling is the panel's job.
+// - Steam has no "Desinstalar" for a non-Steam shortcut: its "Remover jogo não Steam"
+//   localization and `SteamClient.Apps.RemoveShortcut(appid)` are scoped to installed remote
+//   shortcuts, then the plugin opens its own destructive confirmation.
 
 import { findModuleExport } from "@decky/ui";
+import {
+  interceptRemoteShortcutRemoval,
+  remoteMenuAppid,
+  remoteTileAppid,
+  remoteUninstallMenuLabel,
+} from "./remote-menu";
 
 declare const appStore: any;
 declare const downloadsStore: any;
 declare const SteamClient: any;
+declare const SteamUIStore: any;
+declare const LocalizationManager: any;
 
 /** What the game page should show for a library shortcut. */
 export interface RemoteDisplay {
@@ -44,6 +53,8 @@ export interface RemoteSteamHandlers {
   resume(appid: number): void;
   /** "Pausar" pressed while the page showed our download. */
   pause(appid: number): void;
+  /** "Desinstalar" selected for an installed library shortcut. */
+  uninstall(appid: number): void;
 }
 
 const READY_TO_LAUNCH = 11;
@@ -56,6 +67,8 @@ const OVERVIEWS = ["CurrentViewingDownloadOverview", "LocalDownloadOverview"] as
 let desired = new Map<number, RemoteDisplay>();
 /** Library appids (any state): their install/resume buttons are ours. */
 let ours = new Set<number>();
+/** Installed library appids without a physical card present: eligible for menu uninstall. */
+let uninstallable = new Set<number>();
 /** appids whose per_client_data we changed, to put back when they leave `desired`. */
 const touched = new Set<number>();
 let handlers: RemoteSteamHandlers | null = null;
@@ -152,6 +165,37 @@ function wrap(owner: any, name: string, make: (orig: (...args: any[]) => any) =>
   });
 }
 
+/** Appid from the Big Picture library route; `null` outside a game page. */
+function currentGameAppid(): number | null {
+  try {
+    const store = SteamUIStore?.m_WindowStore ?? SteamUIStore?.WindowStore;
+    const path = store?.SteamUIWindows?.[0]?.m_history?.location?.pathname;
+    const match = typeof path === "string" ? /^\/library\/app\/(\d+)/.exec(path) : null;
+    if (match) return Number(match[1]);
+    const elementAppid = (element: unknown) => {
+      if (!element || typeof element !== "object") return null;
+      const key = Object.keys(element).find((name) => name.startsWith("__reactFiber"));
+      let fiber = key ? (element as any)[key] : null;
+      for (let depth = 0; fiber && depth < 40; depth++, fiber = fiber.return) {
+        const appid = remoteTileAppid(fiber.memoizedProps);
+        if (appid !== null) return appid;
+      }
+      return null;
+    };
+    // The menu label is localised while Steam builds the popup, before its DOM exists.
+    // The still-selected library tile remains as the gamepad navigation focus node.
+    const context = SteamUIStore?.m_GamepadNavigationManager?.m_ActiveContext;
+    const trees = [context?.m_LastActiveFocusNavTree, ...(context?.m_rgGamepadNavigationTrees ?? [])];
+    for (const tree of trees) {
+      const appid = elementAppid(tree?.m_lastFocusNode?.m_element);
+      if (appid !== null) return appid;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /** One registration per Steam JS context (see the header). */
 interface OverviewHook {
   handler: () => void;
@@ -214,6 +258,17 @@ export function installRemoteSteam(h: RemoteSteamHandlers): string[] {
       return undefined;
     }),
   );
+  part("menuUninstall", () =>
+    wrap(SteamClient?.Apps, "RemoveShortcut", (orig) => (appid: any, ...rest: any[]) => {
+      if (interceptRemoteShortcutRemoval(Number(appid), uninstallable, handlers?.uninstall)) return undefined;
+      return orig(appid, ...rest);
+    }),
+  );
+  part("menuLabel", () =>
+    wrap(LocalizationManager, "LocalizeString", (orig) => (token: unknown, ...rest: any[]) => {
+      return remoteUninstallMenuLabel(token, currentGameAppid(), uninstallable) ?? orig(token, ...rest);
+    }),
+  );
   part("overview", () => {
     const store = downloadsStore;
     const proto = store && Object.getPrototypeOf(store);
@@ -237,8 +292,13 @@ export function installRemoteSteam(h: RemoteSteamHandlers): string[] {
 }
 
 /** New set of library shortcuts and what each one shows. */
-export function setRemoteDisplay(libraryApps: Iterable<number>, display: Map<number, RemoteDisplay>): void {
+export function setRemoteDisplay(
+  libraryApps: Iterable<number>,
+  display: Map<number, RemoteDisplay>,
+  uninstallableApps: Iterable<number> = [],
+): void {
   ours = new Set(libraryApps);
+  uninstallable = new Set(uninstallableApps);
   desired = new Map(display);
   apply();
   redraw();
@@ -250,6 +310,7 @@ export function stopRemoteSteam(): void {
   timer = null;
   desired = new Map();
   ours = new Set();
+  uninstallable = new Set();
   apply();
   for (const undo of restore.splice(0).reverse()) {
     try {

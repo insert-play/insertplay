@@ -27,6 +27,8 @@ export interface RegistryRecord {
   appid: number;
   appName: string;
   artworkApplied?: boolean;
+  /** Remote library version whose artwork was last applied to the shortcut. */
+  artworkVersion?: string;
   /** RetroAchievements GameID of the card, kept so the shortcut page still shows the
    *  achievements with the card out (and after a Steam restart). `null` = none. */
   raGameId?: number | null;

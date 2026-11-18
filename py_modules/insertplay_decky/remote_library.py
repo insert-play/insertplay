@@ -22,12 +22,18 @@ import shutil
 import socket
 import ssl
 import stat
+import tarfile
 import tempfile
 import threading
 import time
 import urllib.parse
 
 from .manifest import ARTWORK_KINDS, _get, read_game, resolve_placeholder
+
+try:  # Python 3.14+ (Decky's bundled interpreter has it)
+    from compression import zstd as _zstd
+except ImportError:
+    _zstd = None
 
 SCHEMA_VERSION = 1
 ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -39,6 +45,8 @@ TOKEN_RE = re.compile(r"^[\x21-\x7e]{1,4096}$")
 KINDS = ("icon", "capsule", "horizontal", "hero", "logo")
 ARTWORK_EXTS = ("png", "jpg", "jpeg")
 
+PACK_COMPRESSIONS = ("none", "zstd")
+MAX_PARTS = 100_000
 INDEX_LIMIT = 16 * 1024 * 1024
 LIST_LIMIT = 64 * 1024 * 1024
 SPACE_MARGIN = 256 * 1024 * 1024
@@ -100,8 +108,85 @@ class _Stop(Exception):
     """The active game was paused, cancelled or the engine is stopping."""
 
 
+class _BadPart(Exception):
+    """A part's bytes are not a valid tar (or zstd frame) or don't match the index's sha256."""
+
+
+class _PartStream:
+    """File-like view of one part's HTTP body: hashes it, never reads past `size`, reports progress."""
+
+    def __init__(self, client, resp, size: int, on_bytes):
+        self.client, self.resp, self.size, self.on_bytes = client, resp, size, on_bytes
+        self.got = 0
+        self.hash = hashlib.sha256()
+
+    def read(self, n: int = CHUNK) -> bytes:
+        n = min(n if n and n > 0 else CHUNK, self.size - self.got)
+        if n <= 0:
+            return b""
+        try:
+            # read1: what has arrived, so a pause or cancel is not stuck behind a full block
+            block = self.resp.read1(n)
+        except (OSError, http.client.HTTPException) as exc:
+            self.client.close()
+            raise _Net(type(exc).__name__, short=True) from None
+        if not block:
+            self.client.close()
+            raise _Net("body ended early", short=True)
+        self.hash.update(block)
+        self.got += len(block)
+        self.on_bytes(len(block))
+        return block
+
+
+class _ZstdStream:
+    """Decompresses a part, which is exactly one zstd frame; bytes after it are an error."""
+
+    def __init__(self, src):
+        self.src = src
+        self.dec = _zstd.ZstdDecompressor()
+        self.buf = bytearray()
+        self.done = False
+
+    def read(self, n: int = CHUNK) -> bytes:
+        n = n if n and n > 0 else CHUNK
+        while len(self.buf) < n and not self.done:
+            if self.dec.eof:
+                if self.dec.unused_data or self.src.read(1):
+                    raise _BadPart("data after the zstd frame")
+                self.done = True
+                break
+            chunk = b""
+            if self.dec.needs_input:
+                chunk = self.src.read(CHUNK)
+                if not chunk:
+                    raise _BadPart("truncated zstd frame")
+            try:
+                self.buf += self.dec.decompress(chunk, max_length=max(n, CHUNK))
+            except _zstd.ZstdError as exc:
+                raise _BadPart(f"zstd: {exc}") from None
+        out = bytes(self.buf[:n])
+        del self.buf[:n]
+        return out
+
+
 def _gb(n: int) -> str:
     return f"{n / 1e9:.1f} GB".replace(".", ",")
+
+
+def _check_links(folder: str) -> None:
+    """Refuses the game if any symlink in `folder` resolves outside it."""
+    real = os.path.realpath(folder)
+    stack = [folder]
+    while stack:
+        with os.scandir(stack.pop()) as it:
+            for e in it:
+                if e.is_symlink():
+                    resolved = os.path.realpath(e.path)
+                    if resolved != real and not resolved.startswith(real + os.sep):
+                        raise RemoteError("bad_path", f"link {e.name} resolves outside the game folder")
+                elif e.is_dir(follow_symlinks=False):
+                    stack.append(e.path)
 
 
 def free_bytes(path: str) -> int:
@@ -298,6 +383,29 @@ def _int(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+def _parse_pack(value):
+    """Validated `pack` block of an index entry, or None."""
+    if not isinstance(value, dict) or value.get("compression") not in PACK_COMPRESSIONS:
+        return None
+    parts = value.get("parts")
+    if not isinstance(parts, list) or not parts or len(parts) > MAX_PARTS:
+        return None
+    out, seen = [], set()
+    for part in parts:
+        if (
+            not isinstance(part, dict)
+            or not _path_ok(part.get("path"))
+            or part["path"] in seen
+            or not _int(part.get("size"))
+            or not isinstance(part.get("sha256"), str)
+            or not HEX64_RE.match(part["sha256"])
+        ):
+            return None
+        seen.add(part["path"])
+        out.append({"path": part["path"], "size": part["size"], "sha256": part["sha256"]})
+    return {"compression": value["compression"], "parts": out}
+
+
 def parse_index(raw: bytes, base: str, log=None) -> dict:
     """Validated `index.json`. Bad games are dropped (and logged), a bad URL or schema
     refuses the whole index (`bad_index`)."""
@@ -332,7 +440,11 @@ def parse_index(raw: bytes, base: str, log=None) -> dict:
             log(f"index: duplicate id {gid}, dropped")
             continue
         problem = None
-        if "files" not in game:
+        packed = "pack" in game
+        pack = _parse_pack(game["pack"]) if packed else None
+        if packed and pack is None:
+            problem = "pack"
+        elif not packed and "files" not in game:
             problem = "files"
         elif not _path_ok(game.get("path"), single=True):
             problem = "path"
@@ -340,7 +452,7 @@ def parse_index(raw: bytes, base: str, log=None) -> dict:
             problem = "version"
         elif not _int(game.get("totalSize")) or not _int(game.get("fileCount")):
             problem = "totalSize/fileCount"
-        elif not isinstance(game.get("filesSha256"), str) or not HEX64_RE.match(game["filesSha256"]):
+        elif not packed and (not isinstance(game.get("filesSha256"), str) or not HEX64_RE.match(game["filesSha256"])):
             problem = "filesSha256"
         elif not _manifest_ok(game.get("manifest")):
             problem = "manifest"
@@ -376,8 +488,9 @@ def parse_index(raw: bytes, base: str, log=None) -> dict:
                 "name": name,
                 "totalSize": game["totalSize"],
                 "fileCount": game["fileCount"],
-                "filesUrl": resolve_relative(base, game["files"]),
-                "filesSha256": game["filesSha256"],
+                "filesUrl": None if packed else resolve_relative(base, game["files"]),
+                "filesSha256": None if packed else game["filesSha256"],
+                "pack": pack,
                 "libraryUrl": library,
                 "manifest": manifest,
                 "artwork": artwork,
@@ -802,6 +915,8 @@ class RemoteLibrary:
         info = idx or entry or {}
         state = entry["state"] if entry else "not_installed"
         total = (entry or {}).get("totalSize", info.get("totalSize", 0)) or 0
+        if entry and entry.get("downloadSize") and state != "installed":
+            total = entry["downloadSize"]  # packed game: progress counts downloaded (compressed) bytes
         done = (entry or {}).get("bytesDone", 0) or 0
         files_done = (entry or {}).get("filesDone", 0) or 0
         if state == "installed":
@@ -1005,6 +1120,10 @@ class RemoteLibrary:
                     entry = {k: idx[k] for k in ("version", "path", "name", "totalSize", "fileCount", "filesUrl",
                                                   "filesSha256", "libraryUrl", "manifest")}
                     entry.update({"bytesDone": 0, "bytesVerified": 0, "filesDone": 0})
+                    if idx.get("pack"):  # pinned: a later index refresh can't change an install in progress
+                        entry["pack"] = idx["pack"]
+                        entry["downloadSize"] = sum(p["size"] for p in idx["pack"]["parts"])
+                        entry["partsDone"] = 0
                     # leftovers of an install the state no longer knows (state lost, a cancel
                     # that timed out, maybe another version): a final name there would count as
                     # verified, so the first scan hashes those files instead (.part files are
@@ -1263,6 +1382,9 @@ class RemoteLibrary:
         client = _Http(cfg["url"], cfg["token"], self.timeout)
         self._client = client
         try:
+            if entry.get("pack"):
+                self._install_packed(gid, entry, client, started)
+                return
             listing = self._file_list(client, gid, entry)
             target = self.install_path(gid)
             if os.path.lexists(target):
@@ -1324,29 +1446,171 @@ class RemoteLibrary:
                 self._ensure_dir(folder, d, known_dirs)
             self._make_links(folder, listing.get("links", []), known_dirs)
 
-            with self._lock:
-                self._check(gid, entry)
-                if os.path.lexists(target):
-                    raise RemoteError("io_error", f"{target} exists and was not installed by the plugin")
-                os.rename(folder, target)
-                entry.update(
-                    {
-                        "state": "installed",
-                        "installedVersion": entry["version"],
-                        "installedAt": int(time.time()),
-                        "bytesDone": entry["totalSize"],
-                        "filesDone": len(files),
-                        "error": None,
-                    }
-                )
-                self._save(force=True)
-            seconds = max(time.monotonic() - started, 0.001)
-            self.log(
-                f"{gid} ({entry.get('name')}): installed, {entry['totalSize'] / 1e6:.0f} MB in {seconds:.0f} s"
-            )
+            self._commit(gid, entry, folder, target, len(files), started)
         finally:
             self._client = None
             client.close()
+
+    def _commit(self, gid: str, entry: dict, folder: str, target: str, files_done: int, started: float) -> None:
+        """`.incoming/<id>/` becomes the install folder; only then is the game `installed`."""
+        with self._lock:
+            self._check(gid, entry)
+            if os.path.lexists(target):
+                raise RemoteError("io_error", f"{target} exists and was not installed by the plugin")
+            os.rename(folder, target)
+            entry.update(
+                {
+                    "state": "installed",
+                    "installedVersion": entry["version"],
+                    "installedAt": int(time.time()),
+                    "bytesDone": entry["totalSize"],
+                    "filesDone": files_done,
+                    "error": None,
+                }
+            )
+            self._save(force=True)
+        seconds = max(time.monotonic() - started, 0.001)
+        self.log(f"{gid} ({entry.get('name')}): installed, {entry['totalSize'] / 1e6:.0f} MB in {seconds:.0f} s")
+
+    # ---- packed games: tar parts, one at a time
+
+    def _install_packed(self, gid: str, entry: dict, client, started: float) -> None:
+        """Downloads each part and extracts it while it arrives; the sha256 of the part is checked
+        at its end. A part that was interrupted starts again from byte 0 (parts are ~1 GiB),
+        the ones finished (`partsDone`) are kept."""
+        parts = entry["pack"]["parts"]
+        target = self.install_path(gid)
+        if os.path.lexists(target):
+            raise RemoteError("io_error", f"{target} exists and was not installed by the plugin")
+        if entry.pop("rehash", None):  # a folder the state doesn't know: nothing in it can be trusted
+            _remove_dir(self.incoming_root, gid)
+            entry["partsDone"], entry["bytesVerified"], entry["filesDone"] = 0, 0, 0
+        folder = self._game_folder(gid)
+        done = entry.get("partsDone", 0)
+        if not isinstance(done, int) or not 0 <= done <= len(parts):
+            done = 0
+            entry["bytesVerified"], entry["filesDone"] = 0, 0
+        with self._lock:
+            self._check(gid, entry)
+            entry["partsDone"] = done
+            entry["bytesDone"] = sum(p["size"] for p in parts[:done])
+            self._save(force=True)
+        self._space_check(entry["totalSize"], entry.get("bytesVerified", 0))
+        self.log(f"{gid} ({entry.get('name')}): downloading {len(parts) - done} of {len(parts)} part(s)")
+
+        base_url = entry["libraryUrl"] + urllib.parse.quote(entry["path"], safe="") + "/"
+        for i in range(done, len(parts)):
+            part = parts[i]
+            base_done = sum(p["size"] for p in parts[:i])
+            for attempt in (1, 2):
+                try:
+                    count, extracted = self._install_part(client, base_url, folder, entry, part, base_done, gid)
+                except _BadPart as exc:
+                    self.log(f"{gid}: part {part['path']} is bad ({exc}), attempt {attempt}")
+                    continue
+                break
+            else:
+                raise RemoteError("hash_mismatch", part["path"])
+            with self._lock:
+                if self._games.get(gid) is entry:
+                    entry["partsDone"] = i + 1
+                    entry["bytesDone"] = base_done + part["size"]
+                    entry["bytesVerified"] = entry.get("bytesVerified", 0) + extracted
+                    entry["filesDone"] = entry.get("filesDone", 0) + count
+                    self._save(force=True)
+
+        self._check(gid, entry)
+        _check_links(folder)
+        self._commit(gid, entry, folder, target, entry.get("filesDone", 0), started)
+
+    def _install_part(self, client, base_url, folder, entry, part, base_done, gid):
+        """(files, bytes extracted) of one part; network errors are retried from the part's start."""
+        url = base_url + urllib.parse.quote(part["path"], safe="/")
+        attempt = 0
+        while True:
+            self._check(gid, entry)
+            with self._lock:
+                if self._games.get(gid) is entry:
+                    entry["bytesDone"] = base_done
+            try:
+                return self._stream_part(client, url, folder, entry, part, gid)
+            except _Net as exc:
+                if attempt >= len(self.backoff):
+                    raise RemoteError("server_changed" if exc.short else "unreachable", str(exc)) from None
+                self.log(f"{gid}: {exc} on {_url_name(url)}, restarting the part, retry {attempt + 1} in {self.backoff[attempt]} s")
+                self._sleep(self.backoff[attempt], gid, entry)
+                attempt += 1
+
+    def _stream_part(self, client, url, folder, entry, part, gid):
+        compression = entry["pack"]["compression"]
+        if compression == "zstd" and _zstd is None:
+            raise RemoteError("io_error", "this Python has no zstd support")
+        size = part["size"]
+        resp = client.open(url)
+        length = resp.getheader("Content-Length")
+        if resp.status != 200 or length is None or not length.strip().isdigit() or int(length) != size:
+            client.discard(resp)
+            raise RemoteError("server_changed", f"unexpected answer for {_url_name(url)}")
+
+        def on_bytes(n: int) -> None:
+            self._add_progress(gid, entry, n)
+            self._check(gid, entry)
+
+        stream = _PartStream(client, resp, size, on_bytes)
+        reader = stream if compression == "none" else _ZstdStream(stream)
+        try:
+            count, extracted = self._extract(folder, reader)
+            while reader.read(CHUNK):  # tar padding after the end marker; also ends the zstd frame
+                pass
+        except BaseException:
+            client.close()
+            raise
+        if not resp.isclosed():
+            client.close()
+        if stream.hash.hexdigest() != part["sha256"]:
+            raise _BadPart("sha256 mismatch")
+        return count, extracted
+
+    def _extract(self, folder: str, reader):
+        """Writes the tar members under `folder`: regular files, directories and relative symlinks
+        only, every path under the path rules, nothing written through a symlink."""
+        known, count, extracted = set(), 0, 0
+        try:
+            with tarfile.open(fileobj=reader, mode="r|") as tar:
+                for member in tar:
+                    name = member.name
+                    if not _path_ok(name):
+                        raise RemoteError("bad_path", f"tar member {name[:200]!r}")
+                    if member.isdir():
+                        self._ensure_dir(folder, name, known)
+                        continue
+                    self._ensure_dir(folder, posixpath.dirname(name), known)
+                    final = os.path.join(folder, name)
+                    if member.isreg():
+                        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+                        fd = os.open(final, flags, 0o644)
+                        with os.fdopen(fd, "wb") as out:
+                            shutil.copyfileobj(tar.extractfile(member), out, CHUNK)
+                            os.fchmod(fd, 0o755 if member.mode & 0o111 else 0o644)
+                        count += 1
+                        extracted += member.size
+                    elif member.issym():
+                        if not _target_ok(name, member.linkname):
+                            raise RemoteError("bad_path", f"link {name[:200]!r}")
+                        try:
+                            st = os.lstat(final)
+                        except FileNotFoundError:
+                            pass
+                        else:
+                            if not stat.S_ISLNK(st.st_mode):
+                                raise RemoteError("bad_path", f"{name} exists and is not a link")
+                            os.unlink(final)
+                        os.symlink(member.linkname, final)
+                    else:
+                        raise RemoteError("bad_path", f"tar member {name[:200]!r} is not a file, directory or symlink")
+        except tarfile.TarError as exc:
+            raise _BadPart(f"tar: {exc}") from None
+        return count, extracted
 
     def _make_links(self, folder: str, links: list, known_dirs: set) -> None:
         for link in links:

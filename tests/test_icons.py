@@ -45,16 +45,18 @@ def test_shortcut_icons_reads_appid_and_icon(tmp_path):
 def test_target_path_keeps_same_content_and_renames_new_content(tmp_path):
     src = tmp_path / "icon.PNG"
     src.write_bytes(b"one")
-    first = icons.target_path("", str(src), GUID, "/icons", now=lambda: 1.0)
-    assert os.path.dirname(first) == "/icons" and first.endswith(".png")
+    first = icons.target_path("", str(src), GUID, str(tmp_path), now=lambda: 1.0)
+    assert os.path.dirname(first) == str(tmp_path) and first.endswith(".png")
     assert os.path.basename(first).startswith(f"{GUID}-{icons.content_hash(str(src))}-")
+    open(first, "wb").close()
     # same content already applied: the current path, nothing to do
-    assert icons.target_path(first, str(src), GUID, "/icons", now=lambda: 2.0) == first
+    assert icons.target_path(first, str(src), GUID, str(tmp_path), now=lambda: 2.0) == first
     # an old-format copy (no generation) with the same content also counts
-    legacy = f"/icons/{GUID}-{icons.content_hash(str(src))}.png"
-    assert icons.target_path(legacy, str(src), GUID, "/icons") == legacy
+    legacy = f"{tmp_path}/{GUID}-{icons.content_hash(str(src))}.png"
+    open(legacy, "wb").close()
+    assert icons.target_path(legacy, str(src), GUID, str(tmp_path)) == legacy
     src.write_bytes(b"two")
-    second = icons.target_path(first, str(src), GUID, "/icons", now=lambda: 2.0)
+    second = icons.target_path(first, str(src), GUID, str(tmp_path), now=lambda: 2.0)
     assert second != first
 
 
@@ -84,13 +86,30 @@ def test_target_path_skips_an_existing_file(tmp_path):
         (None, True),  # shortcut just created, not in shortcuts.vdf yet
         ("", True),  # no icon
         ("/icons/old.png", True),  # old version written by the plugin
-        ("/icons/new.png", False),  # already applied
+        ("/icons/new.png", True),  # VDF points at an own file, but the copy is missing
         ("/home/deck/.local/share/Steam/userdata/1/config/grid/7_icon.png", False),  # the user's
         ("/run/media/deck/Card/icon.png", False),
     ],
 )
 def test_plan_only_replaces_missing_or_own_icons(current, expected):
     assert icons.plan(current, "/icons/new.png", "/icons") is expected
+
+
+def test_plan_repairs_a_referenced_icon_whose_file_is_missing(tmp_path):
+    target = tmp_path / "icons" / "new.png"
+    target.parent.mkdir()
+    assert icons.plan(str(target), str(target), str(target.parent)) is True
+    target.write_bytes(b"png")
+    assert icons.plan(str(target), str(target), str(target.parent)) is False
+
+
+def test_target_path_replaces_a_missing_referenced_copy(tmp_path):
+    source = tmp_path / "source.png"
+    source.write_bytes(b"A")
+    icons_dir = tmp_path / "icons"
+    icons_dir.mkdir()
+    current = str(icons_dir / f"{GUID}-ca978112ca1b-deadbeef.png")
+    assert icons.target_path(current, str(source), GUID, str(icons_dir), now=lambda: 1.0) != current
 
 
 def test_stage_copies_once(tmp_path):

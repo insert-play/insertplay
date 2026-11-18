@@ -38,6 +38,9 @@ MAX_SEGMENT_BYTES = 255
 MAX_PATH_BYTES = 4096
 MAX_LIST_BYTES = 64 * 1024 * 1024  # the client refuses bigger file lists
 MAX_INDEX_BYTES = 16 * 1024 * 1024
+PACK_NAME = "pack.json"
+PACK_COMPRESSIONS = ("none", "zstd")
+ARTWORK_DIR = "steam-artwork"
 CACHE_NAME = "hash-cache.json"
 STATUS_NAME = "status.json"
 CHUNK = 1024 * 1024
@@ -277,6 +280,56 @@ def compute_version(files: list, dirs: list, links: list) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+def _count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def index_packed_game(game_dir: str, name: str, guid: str, manifest: dict, files: list, dirs: list, links: list) -> dict:
+    """Index entry of a game stored as tar parts (`pack.json`); no file list. Raises SkipGame."""
+    data = _read_json_object(os.path.join(game_dir, PACK_NAME), PACK_NAME)
+    if data.get("schemaVersion") != SCHEMA_VERSION:
+        raise SkipGame(f"{PACK_NAME}: unsupported schemaVersion")
+    compression = data.get("compression")
+    if compression not in PACK_COMPRESSIONS:
+        raise SkipGame(f"{PACK_NAME}: compression must be one of {', '.join(PACK_COMPRESSIONS)}")
+    if not _count(data.get("extractedSize")) or not _count(data.get("fileCount")):
+        raise SkipGame(f"{PACK_NAME}: extractedSize and fileCount must be non-negative integers")
+    names = data.get("parts")
+    if not isinstance(names, list) or not names or len(set(names)) != len(names):
+        raise SkipGame(f"{PACK_NAME}: parts must be a non-empty list without repeats")
+    if dirs or links:
+        raise SkipGame("a packed game folder may only hold metadata, pack.json and its parts (found empty dirs or links)")
+    by_path = {f["path"]: f for f in files}
+    parts = []
+    for part in names:
+        problem = path_problem(part) if isinstance(part, str) else "not a string"
+        if problem:
+            raise SkipGame(f"{PACK_NAME}: part {part!r}: {problem}")
+        found = by_path.get(part)
+        if found is None:
+            raise SkipGame(f"{PACK_NAME}: part {part!r} is missing")
+        parts.append({"path": part, "size": found["size"], "sha256": found["sha256"]})
+    allowed = {MANIFEST_NAME, IDENTITY_NAME, PACK_NAME, *names}
+    for f in files:
+        if f["path"] not in allowed and not f["path"].startswith(ARTWORK_DIR + "/"):
+            raise SkipGame(f"{f['path']!r} is outside the packed layout (metadata, {ARTWORK_DIR}/, pack.json, parts)")
+    pack = {"compression": compression, "parts": parts}
+    payload = json.dumps(pack, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    version = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    entry = {
+        "id": guid,
+        "version": version,
+        "path": name,
+        "name": _get(_get(manifest, "shortcut"), "appName").strip(),
+        "totalSize": data["extractedSize"],
+        "fileCount": data["fileCount"],
+        "pack": pack,
+        "manifest": manifest,
+        "artwork": resolve_artwork(manifest, by_path),
+    }
+    return {"entry": entry, "list_bytes": None, "dirs": 0, "links": 0}
+
+
 def index_game(library: str, name: str, old_cache: dict, new_cache: dict) -> dict:
     """Index entry and file list of one game folder. Raises SkipGame."""
     problem = path_problem(name)
@@ -286,6 +339,8 @@ def index_game(library: str, name: str, old_cache: dict, new_cache: dict) -> dic
     manifest = read_manifest(game_dir)
     guid = read_guid(game_dir)
     files, dirs, links = walk_game(game_dir, name, old_cache, new_cache)
+    if any(f["path"] == PACK_NAME for f in files):
+        return index_packed_game(game_dir, name, guid, manifest, files, dirs, links)
     version = compute_version(files, dirs, links)
     file_list = {"schemaVersion": SCHEMA_VERSION, "id": guid, "version": version, "files": files}
     if dirs:
@@ -449,10 +504,11 @@ def build_index(library: str, output: str, use_cache: bool = True, now=None) -> 
 
     # File lists first, the index last: a client that reads the new index finds its lists.
     for r in games:
-        write_atomic(os.path.join(lists_dir, f"{r['entry']['id']}.json"), r["list_bytes"])
+        if r["list_bytes"] is not None:
+            write_atomic(os.path.join(lists_dir, f"{r['entry']['id']}.json"), r["list_bytes"])
     write_atomic(os.path.join(output, "index.json"), index_bytes)
 
-    keep = {f"{r['entry']['id']}.json" for r in games}
+    keep = {f"{r['entry']['id']}.json" for r in games if r["list_bytes"] is not None}
     for name in os.listdir(lists_dir):
         stale = name.endswith(".json") and GUID_RE.match(name[:-5]) and name not in keep
         if stale or ".json.tmp-" in name:
@@ -498,7 +554,8 @@ def main(argv=None) -> int:
         raise
     for r in result["games"]:
         e = r["entry"]
-        log(f"indexed {e['path']}: {e['name']!r} id={e['id']} version={e['version']} "
+        packed = f"packed ({len(e['pack']['parts'])} part(s)), " if "pack" in e else ""
+        log(f"indexed {e['path']}: {e['name']!r} id={e['id']} version={e['version']} {packed}"
             f"{e['fileCount']} files, {r['dirs']} empty dirs, {r['links']} links, "
             f"{e['totalSize']} bytes, artwork={','.join(e['artwork']) or '-'} ({r['seconds']:.1f} s)")
     for name, reason in result["skipped"]:
